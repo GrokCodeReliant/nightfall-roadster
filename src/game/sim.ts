@@ -1,15 +1,29 @@
-import { buildTrack, gapAhead, poseAt, queryTrack, wrapAngle, yawFromDir, type Track } from "./track";
+import {
+  ensureTrack,
+  gapAhead,
+  LANES,
+  nextPiece,
+  buildTrack,
+  poseAt,
+  queryTrack,
+  trimTrack,
+  wrapAngle,
+  yawFromDir,
+  type Track,
+} from "./road";
 
 export type Fx =
   | { t: "shot" }
+  | { t: "eshot" }
   | { t: "hit"; x: number; y: number; z: number; big: boolean }
   | { t: "boom"; x: number; y: number; z: number }
   | { t: "mine" }
   | { t: "land"; x: number; y: number; z: number; hard: boolean }
   | { t: "fall" }
   | { t: "scrape" }
-  | { t: "lap" }
-  | { t: "finish" }
+  | { t: "wave" }
+  | { t: "life" }
+  | { t: "over" }
   | { t: "down" };
 
 export type Shot = {
@@ -36,9 +50,17 @@ export type Mine = {
   arm: number;
 };
 
+export type Kind = "hero" | "rammer" | "gunner";
+
+export const ENEMY: Record<Exclude<Kind, "hero">, { hp: number; tier: number; ram: number }> = {
+  rammer: { hp: 40, tier: 1, ram: 18 },
+  gunner: { hp: 55, tier: 2, ram: 6 },
+};
+
 export type Car = {
   id: number;
   hero: boolean;
+  kind: Kind;
   x: number;
   y: number;
   z: number;
@@ -49,13 +71,9 @@ export type Car = {
   grounded: boolean;
   along: number;
   lastAlong: number;
-  lap: number;
-  nextCp: number;
-  lastCp: number;
   hp: number;
   maxHp: number;
   alive: boolean;
-  respawnIn: number;
   recover: number;
   spin: number;
   lane: number;
@@ -68,6 +86,13 @@ export type Car = {
   mineCd: number;
   fuel: number;
   maxFuel: number;
+  // v0.2 combat
+  invuln: number;
+  hold: number;
+  holdT: number;
+  burst: number;
+  burstCd: number;
+  ramCd: number;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -83,8 +108,7 @@ export type TouchState = {
 export type Result = {
   time: number;
   score: number;
-  position: number;
-  bestLap: number | null;
+  wave: number;
   takedowns: number;
   falls: number;
 };
@@ -99,8 +123,13 @@ export type Sim = {
   score: number;
   takedowns: number;
   falls: number;
-  lapClock: number;
-  bestLap: number | null;
+  lives: number;
+  wave: number;
+  queue: Exclude<Kind, "hero">[];
+  spawnCd: number;
+  spawnFlip: number;
+  lull: number;
+  waveHit: boolean;
   toast: string;
   toastT: number;
   hitstop: number;
@@ -113,9 +142,8 @@ export type Sim = {
   prevMine: boolean;
   autoGas: boolean;
   result: Result | null;
-  hintedRamp: boolean;
-  hintedVoid: boolean;
-  hintedPits: boolean;
+  hinted: number;
+  idleT: number;
   scrapeCd: number;
   trauma: number;
 };
@@ -123,6 +151,10 @@ export type Sim = {
 const GRAVITY = 27;
 const THRUST_ACCEL = 40;
 const MAX_FUEL = 100;
+export const LIVES = 3;
+export const ENEMY_SLOTS = 8;
+const MAX_ALIVE = 8;
+const START_S = 140;
 
 function clamp(v: number, a: number, b: number) {
   return Math.max(a, Math.min(b, v));
@@ -132,8 +164,9 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
   return {
     id,
     hero,
+    kind: hero ? "hero" : "rammer",
     x: 0,
-    y: 0,
+    y: hero ? 0 : -40,
     z: 0,
     yaw: 0,
     speed: 0,
@@ -142,13 +175,9 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     grounded: true,
     along: 0,
     lastAlong: 0,
-    lap: 0,
-    nextCp: 1,
-    lastCp: 0,
-    hp: hero ? 100 : 48,
-    maxHp: hero ? 100 : 48,
-    alive: true,
-    respawnIn: 0,
+    hp: hero ? 100 : 40,
+    maxHp: hero ? 100 : 40,
+    alive: hero,
     recover: 0,
     spin: 0,
     lane,
@@ -161,6 +190,12 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     mineCd: 0,
     fuel: MAX_FUEL,
     maxFuel: MAX_FUEL,
+    invuln: 0,
+    hold: 0,
+    holdT: 0,
+    burst: 0,
+    burstCd: 0,
+    ramCd: 0,
   };
 }
 
@@ -174,25 +209,25 @@ function emptyMine(): Mine {
 
 export function createSim(): Sim {
   const track = buildTrack();
-  const cars = [
-    makeCar(0, true, 0, 48),
-    makeCar(1, false, 2.3, 37),
-    makeCar(2, false, -2.1, 39),
-    makeCar(3, false, 1.4, 35),
-    makeCar(4, false, -2.6, 36.5),
-  ];
+  const cars = [makeCar(0, true, 0, 48)];
+  for (let i = 1; i <= ENEMY_SLOTS; i++) cars.push(makeCar(i, false, LANES[i % 4], 40));
   const sim: Sim = {
     track,
     cars,
-    shots: Array.from({ length: 48 }, emptyShot),
+    shots: Array.from({ length: 64 }, emptyShot),
     mines: Array.from({ length: 10 }, emptyMine),
     phase: "menu",
     time: 0,
     score: 0,
     takedowns: 0,
     falls: 0,
-    lapClock: 0,
-    bestLap: null,
+    lives: LIVES,
+    wave: 0,
+    queue: [],
+    spawnCd: 0,
+    spawnFlip: 0,
+    lull: 0,
+    waveHit: false,
     toast: "",
     toastT: 0,
     hitstop: 0,
@@ -205,21 +240,13 @@ export function createSim(): Sim {
     prevMine: false,
     autoGas: false,
     result: null,
-    hintedRamp: false,
-    hintedVoid: false,
-    hintedPits: false,
+    hinted: -1,
+    idleT: 0,
     scrapeCd: 0,
     trauma: 0,
   };
   park(sim);
   return sim;
-}
-
-function nextCheckpoint(track: Track, along: number) {
-  for (let i = 0; i < track.cps.length; i++) {
-    if (track.cps[i] > along + 2) return i;
-  }
-  return 0;
 }
 
 function place(sim: Sim, car: Car, along: number, speed: number) {
@@ -234,29 +261,27 @@ function place(sim: Sim, car: Car, along: number, speed: number) {
   car.grounded = !p.gap;
   car.along = p.s;
   car.lastAlong = p.s;
-  car.nextCp = nextCheckpoint(sim.track, p.s);
-  car.lastCp = (car.nextCp - 1 + sim.track.cps.length) % sim.track.cps.length;
   car.alive = true;
   car.spin = 0;
   car.thrust = 0;
 }
 
 function park(sim: Sim) {
-  const L = sim.track.length;
-  const start = L * 0.045;
-  place(sim, sim.cars[0], start, 0);
-  place(sim, sim.cars[1], start + 22, 0);
-  place(sim, sim.cars[2], start + 36, 0);
-  place(sim, sim.cars[3], start - 16, 0);
-  place(sim, sim.cars[4], start - 32, 0);
-  for (const c of sim.cars) {
-    c.lap = 0;
-    c.hp = c.maxHp;
-    c.recover = 0;
-    c.flash = 0;
-    c.fuel = MAX_FUEL;
-    c.rounds = c.hero ? 24 : 99;
-    c.mines = c.hero ? 4 : 0;
+  if (sim.track.first > 0 || sim.track.gen.i > 2000) sim.track = buildTrack();
+  const hero = sim.cars[0];
+  hero.lane = 0;
+  place(sim, hero, START_S, 0);
+  hero.hp = hero.maxHp;
+  hero.recover = 0;
+  hero.flash = 0;
+  hero.fuel = MAX_FUEL;
+  hero.rounds = 24;
+  hero.mines = 4;
+  hero.invuln = 0;
+  for (let i = 1; i < sim.cars.length; i++) {
+    const c = sim.cars[i];
+    c.alive = false;
+    c.y = -40;
   }
 }
 
@@ -270,16 +295,19 @@ export function begin(sim: Sim) {
   sim.score = 0;
   sim.takedowns = 0;
   sim.falls = 0;
-  sim.lapClock = 0;
-  sim.bestLap = null;
+  sim.lives = LIVES;
+  sim.wave = 0;
+  sim.queue = [];
+  sim.spawnCd = 0;
+  sim.lull = 2.2;
+  sim.waveHit = false;
   sim.hitstop = 0;
   sim.result = null;
-  sim.hintedRamp = false;
-  sim.hintedVoid = false;
-  sim.hintedPits = false;
+  sim.hinted = -1;
+  sim.idleT = 0;
   sim.prevMine = false;
   sim.events.length = 0;
-  toast(sim, "Three laps. Don't drop into the void.", true);
+  toast(sim, "Hunters inbound. Survive.", true);
 }
 
 function toast(sim: Sim, text: string, force = false) {
@@ -322,55 +350,93 @@ export function readInput(sim: Sim): Input {
   };
 }
 
-function passedForward(prev: number, curr: number, gate: number, L: number) {
-  let d = curr - prev;
-  if (d < -L * 0.5) d += L;
-  else if (d > L * 0.5) return false;
-  if (d <= 0.02) return false;
-  const g = gate < prev ? gate + L : gate;
-  return g > prev + 0.02 && g <= prev + d + 0.001;
-}
 
 function fxDir(yaw: number) {
   return { fx: -Math.sin(yaw), fz: -Math.cos(yaw), rx: Math.cos(yaw), rz: -Math.sin(yaw) };
 }
 
-function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
-  // Respawn on solid ground: if the checkpoint sits right before a gap (pitfalls at 0.625),
-  // back the spawn up so the car isn't dropped straight into the hole again (respawn loop).
-  const L = sim.track.length;
-  let s = sim.track.cps[car.lastCp] + 1;
-  if (car.lastCp !== 0) {
-    let back = 0;
-    while (back < 60 && (gapAhead(sim.track, s - back, 30) || poseAt(sim.track, s - back).gap)) back += 5;
-    s = Math.max(1, s - back);
-  }
-  place(sim, car, s % L, 22);
-  car.hp = car.maxHp;
-  car.recover = reason === "fall" ? 0.85 : 0.65;
-  car.flash = 0.4;
-  if (car.hero && reason === "fall") {
-    sim.falls += 1;
-    sim.score = Math.max(0, sim.score - 150);
-    sim.events.push({ t: "fall" });
-    toast(sim, "The void takes you", true);
-    sim.trauma = Math.min(1, sim.trauma + 0.55);
-  }
+
+function safeSpawnS(sim: Sim, s: number) {
+  // Respawn on solid ground: back up out of (and before) any gap.
+  let back = 0;
+  while (back < 120 && (gapAhead(sim.track, s - back, 30) || poseAt(sim.track, s - back).gap)) back += 5;
+  return Math.max(sim.track.first * 2 + 2, s - back);
 }
 
-function killAI(sim: Sim, car: Car) {
+function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
+  if (!car.hero) {
+    killAI(sim, car, true);
+    return;
+  }
+  if (reason === "fall") {
+    sim.falls += 1;
+    sim.events.push({ t: "fall" });
+    toast(sim, "The void takes you  −40 hull", true);
+    sim.trauma = Math.min(1, sim.trauma + 0.55);
+    car.invuln = 0;
+    car.hp -= 40;
+    sim.waveHit = true;
+    if (car.hp <= 0) {
+      loseLife(sim);
+      return;
+    }
+  }
+  const hp = car.hp;
+  car.lane = 0;
+  place(sim, car, safeSpawnS(sim, car.along), 22);
+  car.hp = hp;
+  car.recover = reason === "fall" ? 0.85 : 0.65;
+  car.flash = 0.4;
+  car.invuln = 1.5;
+}
+
+function loseLife(sim: Sim) {
+  const hero = sim.cars[0];
+  sim.lives -= 1;
+  sim.events.push({ t: "boom", x: hero.x, y: Math.max(0.6, hero.y), z: hero.z });
+  sim.events.push({ t: "life" });
+  sim.hitstop = 0.09;
+  sim.trauma = 1;
+  for (const s of sim.shots) if (s.owner !== 0) s.alive = false;
+  if (sim.lives <= 0) {
+    hero.hp = 0;
+    gameOver(sim);
+    return;
+  }
+  hero.lane = 0;
+  place(sim, hero, safeSpawnS(sim, hero.along), 22);
+  hero.hp = hero.maxHp;
+  hero.recover = 0.65;
+  hero.flash = 0.4;
+  hero.invuln = 1.5;
+  toast(sim, sim.lives === 1 ? "Wrecked — last life" : `Wrecked — ${sim.lives} lives left`, true);
+}
+
+function damageHero(sim: Sim, dmg: number) {
+  const hero = sim.cars[0];
+  if (hero.invuln > 0 || sim.phase !== "playing") return false;
+  hero.hp -= dmg;
+  hero.flash = 0.18;
+  sim.waveHit = true;
+  sim.trauma = Math.min(1, sim.trauma + 0.22);
+  if (hero.hp <= 0) loseLife(sim);
+  return true;
+}
+
+function killAI(sim: Sim, car: Car, fell = false) {
   const bx = car.x;
   const by = car.y;
   const bz = car.z;
   car.alive = false;
-  car.respawnIn = 2.1;
   car.speed = 0;
   car.y = -40;
+  const tier = car.kind === "hero" ? 1 : ENEMY[car.kind].tier;
+  const pts = fell ? 50 * tier : 100 * tier;
   sim.takedowns += 1;
-  sim.score += 500;
+  sim.score += pts;
   sim.events.push({ t: "boom", x: bx, y: Math.max(0.6, by), z: bz });
   sim.events.push({ t: "down" });
-  toast(sim, "Agent down  +500", true);
+  toast(sim, fell ? `Lost to the void  +${pts}` : `${car.kind === "gunner" ? "Gunner" : "Rammer"} down  +${pts}`, true);
   sim.hitstop = 0.07;
   sim.trauma = Math.min(1, sim.trauma + 0.45);
 }
@@ -404,12 +470,39 @@ function fireShot(sim: Sim, car: Car) {
   }
 }
 
+
+function enemyShot(sim: Sim, car: Car) {
+  const slot = sim.shots.find((s) => !s.alive);
+  if (!slot) return;
+  const hero = sim.cars[0];
+  const hf = fxDir(hero.yaw);
+  const lead = 0.25;
+  const dx = hero.x + hf.fx * hero.speed * lead - car.x;
+  const dz = hero.z + hf.fz * hero.speed * lead - car.z;
+  const aim = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * 0.12;
+  const { fx: dirx, fz: dirz } = fxDir(aim);
+  const cf = fxDir(car.yaw);
+  slot.alive = true;
+  slot.owner = car.id;
+  slot.x = car.x + dirx * 1.6;
+  slot.y = car.y + 1.05;
+  slot.z = car.z + dirz * 1.6;
+  slot.px = slot.x;
+  slot.py = slot.y;
+  slot.pz = slot.z;
+  slot.vx = dirx * 78 + cf.fx * car.speed;
+  slot.vy = (hero.y + 0.7 - slot.y) * 1.2;
+  slot.vz = dirz * 78 + cf.fz * car.speed;
+  slot.life = 0.9;
+  sim.events.push({ t: "eshot" });
+}
+
 function dropMine(sim: Sim, car: Car) {
   if (car.mines < 1 || car.mineCd > 0) return;
   const slot = sim.mines.find((m) => !m.alive);
   if (!slot) return;
   const { fx, fz } = fxDir(car.yaw);
-  const q = queryTrack(sim.track, car.x - fx * 4.3, car.z - fz * 4.3);
+  const q = queryTrack(sim.track, car.x - fx * 4.3, car.z - fz * 4.3, car.along);
   slot.alive = true;
   slot.x = car.x - fx * 4.3;
   slot.z = car.z - fz * 4.3;
@@ -420,6 +513,7 @@ function dropMine(sim: Sim, car: Car) {
   car.mineCd = 0.45;
   sim.events.push({ t: "mine" });
 }
+
 
 function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boolean) {
   if (car.recover > 0) {
@@ -479,7 +573,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   car.x += (fx * car.speed + rx * car.lat) * dt;
   car.z += (fz * car.speed + rz * car.lat) * dt;
 
-  let q = queryTrack(sim.track, car.x, car.z);
+  let q = queryTrack(sim.track, car.x, car.z, car.along);
   const limit = q.width * 0.5 - 1.15;
   if (Math.abs(q.lateral) > limit) {
     const sign = Math.sign(q.lateral);
@@ -494,7 +588,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
         sim.trauma = Math.min(1, sim.trauma + 0.08);
       }
     }
-    q = queryTrack(sim.track, car.x, car.z);
+    q = queryTrack(sim.track, car.x, car.z, car.along);
   }
 
   if (q.gap) {
@@ -526,47 +620,13 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     car.grounded = false;
   }
 
-  const prev = car.lastAlong;
-  car.along = q.s;
-  const L = sim.track.length;
-  const cps = sim.track.cps;
-  let hops = 0;
-  while (car.alive && hops < 8 && passedForward(prev, car.along, cps[car.nextCp], L)) {
-    hops += 1;
-    const hit = car.nextCp;
-    car.lastCp = hit;
-    car.nextCp = (hit + 1) % cps.length;
-    if (hit === 0) {
-      car.lap += 1;
-      if (car.hero) {
-        const lapTime = sim.lapClock;
-        sim.lapClock = 0;
-        if (lapTime > 1 && (sim.bestLap == null || lapTime < sim.bestLap)) sim.bestLap = lapTime;
-        sim.score += 250;
-        if (car.lap >= 3) {
-          finish(sim);
-          break;
-        }
-        sim.events.push({ t: "lap" });
-        toast(sim, `Lap ${car.lap + 1} of 3`, true);
-      }
-    }
-  }
-  car.lastAlong = car.along;
+  car.lastAlong = car.along = q.s;
 
   if (car.hero && car.alive) {
-    const u = car.along / L;
-    if (!sim.hintedRamp && u > 0.1 && u < 0.13) {
-      sim.hintedRamp = true;
-      toast(sim, "Ramp — thrust if you want more air");
-    }
-    if (!sim.hintedVoid && u > 0.36 && u < 0.4) {
-      sim.hintedVoid = true;
-      toast(sim, "Void ahead — hold thrust", true);
-    }
-    if (!sim.hintedPits && u > 0.59 && u < 0.62) {
-      sim.hintedPits = true;
-      toast(sim, "Pitfalls — tap thrust");
+    const p = nextPiece(sim.track, car.along);
+    if (p && sim.hinted !== p.s && car.along > p.signS && car.along < p.s) {
+      sim.hinted = p.s;
+      toast(sim, p.kind === "void" ? "Void ahead — hold thrust" : "Ramp — thrust if you want more air", true);
     }
   }
 
@@ -580,61 +640,197 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   if (car.hero && input.mine && !sim.prevMine && car.recover <= 0) dropMine(sim, car);
 }
 
-function finish(sim: Sim) {
+
+function gameOver(sim: Sim) {
   sim.phase = "finished";
-  const pos = rankOf(sim, sim.cars[0]);
-  sim.score += Math.max(0, 180 - sim.time) * 8 + (5 - pos) * 400;
   sim.result = {
     time: sim.time,
     score: Math.round(sim.score),
-    position: pos,
-    bestLap: sim.bestLap,
+    wave: sim.wave,
     takedowns: sim.takedowns,
     falls: sim.falls,
   };
-  sim.events.push({ t: "finish" });
-  toast(sim, pos === 1 ? "Clean getaway" : `Finished P${pos}`, true);
+  sim.events.push({ t: "over" });
+  toast(sim, "Wrecked for good", true);
 }
 
-export function progress(car: Car, L: number) {
-  return car.lap * L + car.along;
+export function waveRoster(n: number): Exclude<Kind, "hero">[] {
+  const count = 2 + n;
+  const gunners = Math.max(1, Math.floor(count / 3));
+  const out: Exclude<Kind, "hero">[] = [];
+  for (let i = 0; i < count; i++) out.push(i % 3 === 2 && out.filter((k) => k === "gunner").length < gunners ? "gunner" : "rammer");
+  while (out.filter((k) => k === "gunner").length < gunners) out[out.lastIndexOf("rammer")] = "gunner";
+  return out;
 }
 
-export function rankOf(sim: Sim, car: Car) {
-  const L = sim.track.length;
-  const p = progress(car, L);
-  let rank = 1;
-  for (const o of sim.cars) {
-    if (o !== car && o.alive && progress(o, L) > p) rank += 1;
+function startWave(sim: Sim, n: number) {
+  sim.wave = n;
+  sim.queue = waveRoster(n);
+  sim.spawnCd = 0.3;
+  sim.waveHit = false;
+  toast(sim, `Wave ${n}`, true);
+}
+
+function aliveEnemies(sim: Sim) {
+  let n = 0;
+  for (let i = 1; i < sim.cars.length; i++) if (sim.cars[i].alive) n += 1;
+  return n;
+}
+
+function spawnPointOk(sim: Sim, s: number) {
+  const p = poseAt(sim.track, s);
+  return !p.gap && !gapAhead(sim.track, s - 30, 60);
+}
+
+function spawnEnemy(sim: Sim, kind: Exclude<Kind, "hero">) {
+  const car = sim.cars.find((c, i) => i > 0 && !c.alive);
+  if (!car) return false;
+  const hero = sim.cars[0];
+  sim.spawnFlip += 1;
+  const order = sim.spawnFlip % 2 === 0 || hero.speed < 15 ? [-58, 95] : [95, -58];
+  let s = -1;
+  for (const off of order) {
+    if (hero.along + off >= sim.track.first * 2 + 4 && spawnPointOk(sim, hero.along + off)) {
+      s = hero.along + off;
+      break;
+    }
   }
-  return rank;
+  if (s < sim.track.first * 2 + 4) return false;
+  const st = ENEMY[kind];
+  car.kind = kind;
+  car.lane = LANES[Math.floor(Math.random() * LANES.length)];
+  place(sim, car, s, s > hero.along ? Math.max(18, hero.speed * 0.6) : Math.max(30, hero.speed + 6));
+  car.hp = car.maxHp = st.hp;
+  car.recover = 0.2;
+  car.flash = 0.3;
+  car.fireCd = 1.0;
+  car.burst = 0;
+  car.ramCd = 0.6;
+  car.hold = kind === "gunner" ? (s > hero.along ? 24 : -22) : s > hero.along ? 1 : -1;
+  car.holdT = 6 + Math.random() * 4;
+  return true;
+}
+
+function stepWaves(sim: Sim, dt: number) {
+  if (sim.lull > 0) {
+    sim.lull -= dt;
+    if (sim.lull <= 0) startWave(sim, sim.wave + 1);
+    return;
+  }
+  if (sim.queue.length > 0) {
+    sim.spawnCd -= dt;
+    if (sim.spawnCd <= 0 && aliveEnemies(sim) < MAX_ALIVE) {
+      if (spawnEnemy(sim, sim.queue[0])) {
+        sim.queue.shift();
+        sim.spawnCd = 1.15;
+      } else sim.spawnCd = 0.4;
+    }
+    return;
+  }
+  if (aliveEnemies(sim) === 0) {
+    const bonus = Math.round(500 * sim.wave * (sim.waveHit ? 1 : 1.5));
+    sim.score += bonus;
+    sim.events.push({ t: "wave" });
+    toast(sim, sim.waveHit ? `Wave ${sim.wave} cleared  +${bonus}` : `Clean wave ${sim.wave}  +${bonus}`, true);
+    sim.lull = 3;
+  }
+}
+
+function lateralOf(sim: Sim, car: Car) {
+  return queryTrack(sim.track, car.x, car.z, car.along).lateral;
 }
 
 function aiInput(sim: Sim, car: Car): Input {
-  const L = sim.track.length;
+  const hero = sim.cars[0];
+  const heroLat = lateralOf(sim, hero);
+  const dS = car.along - hero.along;
+  let wantLat = car.lane;
+  let hold = car.hold;
+  if (car.kind === "rammer") {
+    // line up in your lane 14-16 m out (in front: in your guns; behind: over your mines), then charge
+    const side = car.hold >= 0 && sim.idleT < 1.5 ? 1 : -1;
+    if (car.ramCd > 0) hold = side * 16;
+    else {
+      wantLat = heroLat;
+      const lined = Math.abs(lateralOf(sim, car) - heroLat) < 2.5 || (sim.idleT > 1.5 && dS <= 2);
+      hold = lined ? 0 : side * 14;
+    }
+  } else {
+    const side = heroLat + 6 <= 9.5 ? 1 : -1;
+    wantLat = clamp(heroLat + side * 6 * (car.id % 2 === 0 ? 1 : -1), -9.5, 9.5);
+    if (Math.abs(wantLat - heroLat) < 4) wantLat = clamp(heroLat - side * 6, -9.5, 9.5);
+  }
   const look = 9 + Math.min(20, Math.abs(car.speed) * 0.32);
   const ahead = poseAt(sim.track, car.along + look);
-  const tx = ahead.x + ahead.rx * car.lane;
-  const tz = ahead.z + ahead.rz * car.lane;
+  const tx = ahead.x + ahead.rx * wantLat;
+  const tz = ahead.z + ahead.rz * wantLat;
   const dx = tx - car.x;
   const dz = tz - car.z;
   const dist = Math.hypot(dx, dz) || 1;
   const desired = Math.atan2(-dx / dist, -dz / dist);
   const diff = wrapAngle(desired - car.yaw);
   const steer = clamp(diff / 0.42, -1, 1);
-  const hero = sim.cars[0];
-  const delta = progress(hero, L) - progress(car, L);
-  let target = car.baseSpeed;
-  if (delta > 50) target += 5;
-  if (delta < -40) target -= 3;
-  if (Math.abs(diff) > 0.55) target *= 0.7;
-  const q = queryTrack(sim.track, car.x, car.z);
+  const err = hero.along + hold - car.along;
+  let target = clamp(hero.speed + clamp(err * 0.7, -16, 16), 0, 48);
+  if (car.kind === "rammer" && car.ramCd <= 0 && hold === 0 && Math.abs(dS) < 20) target = Math.max(target, hero.speed + 9);
+  let throttle = 0.15;
+  if (car.speed < target - 1) throttle = 1;
+  else if (car.speed > target + 3) throttle = -0.5;
+  if (err < -8 && hero.speed < 6) throttle = car.speed > 0.5 ? -0.5 : 0; // player stopped behind us: pull up and wait
+  const q = queryTrack(sim.track, car.x, car.z, car.along);
   const thrust = gapAhead(sim.track, car.along, 26) || q.gap || (!car.grounded && car.y < q.y + 2);
-  let throttle = 1;
-  if (car.speed > target) throttle = 0.15;
-  const heroAhead = delta > 4 && delta < 42;
-  const fire = heroAhead && Math.abs(diff) < 0.35 && car.fireCd <= 0;
-  return { steer, throttle, fire, mine: false, thrust };
+  return { steer, throttle, fire: false, mine: false, thrust };
+}
+
+function stepEnemy(sim: Sim, car: Car, dt: number) {
+  const hero = sim.cars[0];
+  car.ramCd = Math.max(0, car.ramCd - dt);
+  drive(sim, car, aiInput(sim, car), dt, true);
+  if (!car.alive) return;
+  // Catch-up assist (enemies only; never applied to the player): drive() caps cars at
+  // 48 m/s, so an enemy behind its hold point gets a little extra forward travel.
+  const err = hero.along + car.hold - car.along;
+  if (err > 6 && car.recover <= 0 && car.spin <= 0) {
+    const { fx, fz } = fxDir(car.yaw);
+    const extra = Math.min(16, err * 0.5) * dt;
+    car.x += fx * extra;
+    car.z += fz * extra;
+  }
+  const dS = car.along - hero.along;
+  if (dS < -170 || dS > 320 || (sim.idleT > 4 && dS > 8)) {
+    // out of the fight (or the player parked behind it): bring it back in behind the player
+    for (const off of [-60, -80, -100, -45, -125]) {
+      const s = hero.along + off;
+      if (s > sim.track.first * 2 + 4 && spawnPointOk(sim, s)) {
+        place(sim, car, s, hero.speed + 6);
+        car.hold = -Math.abs(car.hold) || -1;
+        break;
+      }
+    }
+    return;
+  }
+  if (car.kind === "gunner") {
+    car.holdT -= dt;
+    if (car.holdT <= 0) {
+      car.hold = car.hold > 0 ? -22 : 24;
+      car.holdT = 6 + Math.random() * 4;
+    }
+    if (car.burst > 0) {
+      car.burstCd -= dt;
+      if (car.burstCd <= 0) {
+        enemyShot(sim, car);
+        car.burst -= 1;
+        car.burstCd = 0.12;
+        if (car.burst === 0) car.fireCd = 2.0;
+      }
+    } else if (car.fireCd <= 0 && hero.alive && car.recover <= 0) {
+      const dist = Math.hypot(hero.x - car.x, hero.z - car.z);
+      if (dist > 6 && dist < 42 && Math.abs(hero.y - car.y) < 4) {
+        car.burst = 3;
+        car.burstCd = 0;
+      }
+    }
+  }
 }
 
 function separate(sim: Sim) {
@@ -662,14 +858,57 @@ function separate(sim: Sim) {
         b.z += nz * push;
         if (a.speed > b.speed) b.speed *= 0.98;
         else a.speed *= 0.98;
+        if (a.hero && !b.hero && b.ramCd <= 0) ram(sim, a, b);
       }
     }
   }
 }
 
+function ram(sim: Sim, hero: Car, enemy: Car) {
+  if (enemy.kind === "hero") return;
+  enemy.ramCd = 2.6;
+  const { rx, rz } = fxDir(hero.yaw);
+  const side = Math.sign((hero.x - enemy.x) * rx + (hero.z - enemy.z) * rz) || 1;
+  const x = (hero.x + enemy.x) / 2;
+  const z = (hero.z + enemy.z) / 2;
+  sim.events.push({ t: "hit", x, y: hero.y + 0.6, z, big: true });
+  if (damageHero(sim, ENEMY[enemy.kind].ram)) hero.lat += side * 7;
+  enemy.hp -= 6;
+  enemy.flash = 0.2;
+  if (enemy.hp <= 0) killAI(sim, enemy);
+}
+
+/** Light aim assist: a fresh player shot bends toward an enemy inside a narrow cone ahead. */
+function aimAssist(sim: Sim, s: Shot) {
+  const sp = Math.hypot(s.vx, s.vz) || 1;
+  const fx = s.vx / sp;
+  const fz = s.vz / sp;
+  let best: Car | null = null;
+  let bestCos = Math.cos(0.11);
+  for (const c of sim.cars) {
+    if (c.hero || !c.alive || Math.abs(c.y - s.y + 0.7) > 2.5) continue;
+    const dx = c.x - s.x;
+    const dz = c.z - s.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 3 || d > 65) continue;
+    const cos = (dx * fx + dz * fz) / d;
+    if (cos > bestCos) {
+      bestCos = cos;
+      best = c;
+    }
+  }
+  if (!best) return;
+  const dx = best.x - s.x;
+  const dz = best.z - s.z;
+  const d = Math.hypot(dx, dz) || 1;
+  s.vx = (dx / d) * sp;
+  s.vz = (dz / d) * sp;
+}
+
 function stepShots(sim: Sim, dt: number) {
   for (const s of sim.shots) {
     if (!s.alive) continue;
+    if (s.owner === 0 && s.life === 0.72) aimAssist(sim, s);
     s.px = s.x;
     s.py = s.y;
     s.pz = s.z;
@@ -683,6 +922,7 @@ function stepShots(sim: Sim, dt: number) {
     }
     for (const car of sim.cars) {
       if (!car.alive || car.id === s.owner) continue;
+      if (s.owner !== 0 && !car.hero) continue; // no enemy friendly fire
       if (Math.abs(car.y + 0.6 - s.y) > 1.6) continue;
       const abx = s.x - s.px;
       const abz = s.z - s.pz;
@@ -695,16 +935,15 @@ function stepShots(sim: Sim, dt: number) {
       const dz = car.z - cz;
       if (dx * dx + dz * dz < 1.7 * 1.7) {
         s.alive = false;
-        const dmg = s.owner === 0 ? 16 : 9;
-        car.hp -= dmg;
-        car.flash = 0.18;
-        car.speed *= 0.86;
         sim.events.push({ t: "hit", x: cx, y: s.y, z: cz, big: false });
-        if (car.hero) sim.trauma = Math.min(1, sim.trauma + 0.22);
-        if (s.owner === 0) sim.score += 40;
-        if (car.hp <= 0) {
-          if (car.hero) respawn(sim, car, "wreck");
-          else killAI(sim, car);
+        if (car.hero) {
+          damageHero(sim, 6);
+        } else {
+          car.hp -= 16;
+          car.flash = 0.18;
+          car.speed *= 0.86;
+          sim.score += 10;
+          if (car.hp <= 0) killAI(sim, car);
         }
         break;
       }
@@ -728,43 +967,26 @@ function stepMines(sim: Sim, dt: number) {
       const dz = car.z - m.z;
       if (dx * dx + dz * dz < 2.55 * 2.55 && Math.abs(car.y - m.y) < 2.4) {
         m.alive = false;
-        car.hp -= 28;
-        car.speed *= 0.25;
-        car.spin = 0.7;
-        car.flash = 0.3;
         sim.events.push({ t: "hit", x: m.x, y: m.y, z: m.z, big: true });
         sim.trauma = Math.min(1, sim.trauma + (car.hero ? 0.4 : 0.2));
         if (car.hero) {
+          if (car.invuln > 0) break;
+          car.speed *= 0.25;
+          car.spin = 0.7;
           toast(sim, "Own mine");
+          damageHero(sim, 28);
         } else {
-          sim.score += 80;
-        }
-        if (car.hp <= 0) {
-          if (car.hero) respawn(sim, car, "wreck");
-          else killAI(sim, car);
+          car.hp -= 28;
+          car.speed *= 0.25;
+          car.spin = 0.7;
+          car.flash = 0.3;
+          sim.score += 30;
+          if (car.hp <= 0) killAI(sim, car);
         }
         break;
       }
     }
   }
-}
-
-function reviveAI(sim: Sim, car: Car) {
-  const hero = sim.cars[0];
-  let along = hero.along - 26 - car.id * 7;
-  let lap = hero.lap;
-  if (along < 0) {
-    along += sim.track.length;
-    lap -= 1;
-  }
-  if (lap < 0) {
-    lap = 0;
-    along = Math.max(2, hero.along * 0.45);
-  }
-  place(sim, car, along, 30);
-  car.lap = lap;
-  car.hp = car.maxHp;
-  car.recover = 0.35;
 }
 
 export function step(sim: Sim, dt: number) {
@@ -774,28 +996,29 @@ export function step(sim: Sim, dt: number) {
     return;
   }
   sim.time += dt;
-  sim.lapClock += dt;
   sim.toastT = Math.max(0, sim.toastT - dt);
   sim.scrapeCd = Math.max(0, sim.scrapeCd - dt);
   sim.trauma = Math.max(0, sim.trauma - dt * 1.5);
 
-  const input = readInput(sim);
   const hero = sim.cars[0];
+  ensureTrack(sim.track, hero.along + 800);
+  trimTrack(sim.track, hero.along - 260);
+
+  const input = readInput(sim);
+  hero.invuln = Math.max(0, hero.invuln - dt);
+  sim.idleT = Math.abs(hero.speed) < 6 ? sim.idleT + dt : 0;
   if (hero.alive) drive(sim, hero, input, dt, false);
   sim.prevMine = input.mine;
+  if (sim.phase !== "playing") return;
 
   for (let i = 1; i < sim.cars.length; i++) {
     const car = sim.cars[i];
-    if (!car.alive) {
-      car.respawnIn -= dt;
-      if (car.respawnIn <= 0) reviveAI(sim, car);
-      continue;
-    }
-    drive(sim, car, aiInput(sim, car), dt, true);
+    if (car.alive) stepEnemy(sim, car, dt);
   }
   separate(sim);
   stepShots(sim, dt);
   stepMines(sim, dt);
+  if (sim.phase === "playing") stepWaves(sim, dt);
 }
 
 export function formatTime(t: number) {

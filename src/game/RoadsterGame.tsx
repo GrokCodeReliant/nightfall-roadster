@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { begin, createSim, formatTime, rankOf, step, type Phase, type Result, type Sim } from "./sim";
+import { begin, createSim, formatTime, step, type Phase, type Result, type Sim } from "./sim";
+import { botKeys } from "./bot";
+import { poseAt } from "./road";
 import { createWorld } from "./world";
 
 declare global {
@@ -14,20 +16,20 @@ declare global {
   }
 }
 
-const SAVE_KEY = "nightfall-roadster-v1";
+const SAVE_KEY = "nightfall-roadster-v2";
 
-type Save = { bestTime: number | null; bestLap: number | null; bestScore: number };
+type Save = { bestScore: number; bestWave: number; bestTime: number };
 
 function loadSave(): Save {
-  const empty = { bestTime: null, bestLap: null, bestScore: 0 };
+  const empty = { bestScore: 0, bestWave: 0, bestTime: 0 };
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return empty;
     const p = JSON.parse(raw) as Partial<Save>;
     return {
-      bestTime: typeof p.bestTime === "number" ? p.bestTime : null,
-      bestLap: typeof p.bestLap === "number" ? p.bestLap : null,
       bestScore: typeof p.bestScore === "number" ? p.bestScore : 0,
+      bestWave: typeof p.bestWave === "number" ? p.bestWave : 0,
+      bestTime: typeof p.bestTime === "number" ? p.bestTime : 0,
     };
   } catch {
     return empty;
@@ -35,15 +37,8 @@ function loadSave(): Save {
 }
 
 function bestLine(save: Save) {
-  if (save.bestTime == null) return "No record yet — the circuit is open.";
-  return `Best ${formatTime(save.bestTime)} · lap ${save.bestLap == null ? "—" : formatTime(save.bestLap)} · ${save.bestScore} pts`;
-}
-
-function placeWord(n: number) {
-  if (n === 1) return "1st";
-  if (n === 2) return "2nd";
-  if (n === 3) return "3rd";
-  return `${n}th`;
+  if (save.bestScore <= 0) return "No record yet — the highway is open.";
+  return `Best ${save.bestScore} pts · wave ${save.bestWave} · survived ${formatTime(save.bestTime)}`;
 }
 
 export function RoadsterGame() {
@@ -62,12 +57,13 @@ export function RoadsterGame() {
   const hullRef = useRef<HTMLDivElement>(null);
   const roundsRef = useRef<HTMLElement>(null);
   const minesRef = useRef<HTMLElement>(null);
+  const livesRef = useRef<HTMLElement>(null);
   const knobRef = useRef<HTMLSpanElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
 
   const [phase, setPhase] = useState<Phase>("menu");
   const [result, setResult] = useState<Result | null>(null);
-  const [best, setBest] = useState("Circuit record loads with the night.");
+  const [best, setBest] = useState("Highway record loads with the night.");
   const [muted, setMuted] = useState(false);
   const [cruise, setCruise] = useState(false);
   const [glError, setGlError] = useState(false);
@@ -91,7 +87,18 @@ export function RoadsterGame() {
     setBest(bestLine(loadSave()));
 
     // Test hook only for harness runs (?debug); never exposed in normal play.
-    if (new URLSearchParams(window.location.search).has("debug")) (window as unknown as { __nf?: Sim }).__nf = sim;
+    if (new URLSearchParams(window.location.search).has("debug")) {
+      const w = window as unknown as { __nf?: Sim; __nfAdvance?: (secs: number, mode: "hunt" | "idle") => void };
+      w.__nf = sim;
+      // Fast-forward the real sim with an autopilot (test harness only).
+      w.__nfAdvance = (secs, mode) => {
+        for (let i = 0; i < secs * 60 && sim.phase === "playing"; i++) {
+          sim.keysOverride = new Set(mode === "hunt" ? botKeys(sim) : []);
+          sim.events.length = 0;
+          step(sim, 1 / 60);
+        }
+      };
+    }
     window.__controlsTest = {
       getYaw: () => sim.cars[0].yaw,
       getSpeed: () => sim.cars[0].speed,
@@ -191,8 +198,9 @@ export function RoadsterGame() {
         else if (e.t === "hit") audio.hit();
         else if (e.t === "land") audio.land(e.hard);
         else if (e.t === "fall") audio.fall();
-        else if (e.t === "lap") audio.lap();
-        else if (e.t === "finish") audio.finish();
+        else if (e.t === "wave") audio.lap();
+        else if (e.t === "life") audio.fall();
+        else if (e.t === "over") audio.finish();
       }
       if (sim.phase !== phaseRef.current) {
         phaseRef.current = sim.phase;
@@ -201,14 +209,9 @@ export function RoadsterGame() {
           setResult(sim.result);
           const prev = loadSave();
           const next: Save = {
-            bestTime: prev.bestTime == null ? sim.result.time : Math.min(prev.bestTime, sim.result.time),
-            bestLap:
-              sim.result.bestLap == null
-                ? prev.bestLap
-                : prev.bestLap == null
-                  ? sim.result.bestLap
-                  : Math.min(prev.bestLap, sim.result.bestLap),
             bestScore: Math.max(prev.bestScore, sim.result.score),
+            bestWave: Math.max(prev.bestWave, sim.result.wave),
+            bestTime: Math.max(prev.bestTime, sim.result.time),
           };
           localStorage.setItem(SAVE_KEY, JSON.stringify(next));
           setBest(bestLine(next));
@@ -242,8 +245,9 @@ export function RoadsterGame() {
   function paintHud(sim: Sim) {
     const hero = sim.cars[0];
     if (speedRef.current) speedRef.current.textContent = String(Math.round(Math.abs(hero.speed) * 3.6));
-    if (lapRef.current) lapRef.current.textContent = `${Math.min(3, hero.lap + 1)} / 3`;
-    if (posRef.current) posRef.current.textContent = placeWord(rankOf(sim, hero));
+    if (lapRef.current) lapRef.current.textContent = String(Math.max(1, sim.wave));
+    if (posRef.current) posRef.current.textContent = `Kills ${sim.takedowns}`;
+    if (livesRef.current) livesRef.current.textContent = `×${Math.max(0, sim.lives)}`;
     if (timeRef.current) timeRef.current.textContent = formatTime(sim.time);
     if (toastRef.current) toastRef.current.textContent = sim.toastT > 0 ? sim.toast : "";
     if (fuelRef.current) fuelRef.current.style.transform = `scaleX(${hero.fuel / hero.maxFuel})`;
@@ -326,7 +330,7 @@ export function RoadsterGame() {
 
   return (
     <div className="nf-root" ref={wrapRef}>
-      <canvas ref={canvasRef} className="nf-canvas" aria-label="Nightfall Roadster race" />
+      <canvas ref={canvasRef} className="nf-canvas" aria-label="Nightfall Roadster highway combat" />
       {showPlay && (
         <div className="nf-hud">
           <button type="button" className="nf-icon-btn left" onClick={togglePause} aria-label={phase === "paused" ? "Resume" : "Pause"}>
@@ -337,9 +341,9 @@ export function RoadsterGame() {
           </button>
           <div className="nf-top">
             <div className="nf-readout">
-              <p className="nf-kicker">Lap</p>
-              <p className="nf-stat" ref={lapRef}>1 / 3</p>
-              <p className="nf-sub" ref={posRef}>1st</p>
+              <p className="nf-kicker">Wave</p>
+              <p className="nf-stat" ref={lapRef}>1</p>
+              <p className="nf-sub" ref={posRef}>Kills 0</p>
             </div>
             <div className="nf-map-wrap">
               <canvas ref={mapRef} className="nf-map" width={160} height={160} />
@@ -364,7 +368,7 @@ export function RoadsterGame() {
               <p>Mines <strong ref={minesRef}>4</strong></p>
             </div>
             <div className="nf-meter">
-              <p>Hull</p>
+              <p>Hull <strong ref={livesRef}>×3</strong></p>
               <div className="nf-bar is-hot"><div ref={hullRef} /></div>
             </div>
           </div>
@@ -418,10 +422,10 @@ export function RoadsterGame() {
       {phase === "menu" && !glError && (
         <div className="nf-menu">
           <div className="nf-panel">
-            <p className="nf-kicker">Night run · Côte Noire</p>
+            <p className="nf-kicker">Night run · Côte Noire highway</p>
             <h1 className="nf-title">Nightfall <em>Roadster</em></h1>
             <p className="nf-lede">
-              Three laps. Guns forward, mines behind, cold-gas thrusters over the jumps and the void.
+              Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
             </p>
             <div className="nf-launch">
               <button type="button" className="nf-btn" onClick={startRace}>
@@ -457,12 +461,12 @@ export function RoadsterGame() {
       {phase === "finished" && result && (
         <div className="nf-overlay">
           <div className="nf-card">
-            <p className="nf-kicker">Côte Noire · {placeWord(result.position)}</p>
-            <h2 className="nf-title-sm">{result.position === 1 ? "Clean getaway" : "Pursuit closed"}</h2>
+            <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
+            <h2 className="nf-title-sm">Wrecked</h2>
             <div className="nf-rows">
-              <div><span>Time</span><strong>{formatTime(result.time)}</strong></div>
-              <div><span>Best lap</span><strong>{result.bestLap == null ? "—" : formatTime(result.bestLap)}</strong></div>
-              <div><span>Agents down</span><strong>{result.takedowns}</strong></div>
+              <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
+              <div><span>Wave reached</span><strong>{result.wave}</strong></div>
+              <div><span>Kills</span><strong>{result.takedowns}</strong></div>
               <div><span>Falls</span><strong>{result.falls}</strong></div>
               <div><span>Score</span><strong>{result.score}</strong></div>
             </div>
@@ -480,58 +484,44 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
   if (!ctx) return;
   const w = canvas.width;
   const h = canvas.height;
-  const samples = sim.track.samples;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const s of samples) {
-    if (s.x < minX) minX = s.x;
-    if (s.x > maxX) maxX = s.x;
-    if (s.z < minZ) minZ = s.z;
-    if (s.z > maxZ) maxZ = s.z;
-  }
-  const pad = 12;
-  const sx = (w - pad * 2) / (maxX - minX || 1);
-  const sy = (h - pad * 2) / (maxZ - minZ || 1);
-  const sc = Math.min(sx, sy);
-  const ox = (w - (maxX - minX) * sc) / 2;
-  const oy = (h - (maxZ - minZ) * sc) / 2;
-  const X = (x: number) => ox + (x - minX) * sc;
-  const Y = (z: number) => oy + (z - minZ) * sc;
+  const hero = sim.cars[0];
+  const sc = 0.55; // px per metre: ~70 m behind, ~220 m ahead
+  const cx = w / 2;
+  const cy = h * 0.74;
+  const fx = -Math.sin(hero.yaw);
+  const fz = -Math.cos(hero.yaw);
+  const rx = Math.cos(hero.yaw);
+  const rz = -Math.sin(hero.yaw);
+  const X = (x: number, z: number) => cx + ((x - hero.x) * rx + (z - hero.z) * rz) * sc;
+  const Y = (x: number, z: number) => cy - ((x - hero.x) * fx + (z - hero.z) * fz) * sc;
   ctx.clearRect(0, 0, w, h);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "#9c9488";
-  ctx.beginPath();
-  samples.forEach((s, i) => {
-    const x = X(s.x);
-    const y = Y(s.z);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.closePath();
-  ctx.stroke();
-  ctx.strokeStyle = "#e23b2f";
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  let pen = false;
-  for (const s of samples) {
-    if (!s.gap) {
-      pen = false;
-      continue;
-    }
-    if (!pen) {
-      ctx.moveTo(X(s.x), Y(s.z));
+  ctx.lineCap = "butt";
+  const from = hero.along - 70;
+  const to = hero.along + 230;
+  for (const pass of [0, 1]) {
+    ctx.lineWidth = pass === 0 ? sim.track.width * sc : 4;
+    ctx.strokeStyle = pass === 0 ? "rgba(156,148,136,0.55)" : "#e23b2f";
+    ctx.beginPath();
+    let pen = false;
+    for (let s = from; s <= to; s += 6) {
+      const p = poseAt(sim.track, s);
+      const draw = pass === 0 ? !p.gap : p.gap;
+      if (!draw) {
+        pen = false;
+        continue;
+      }
+      if (!pen) ctx.moveTo(X(p.x, p.z), Y(p.x, p.z));
+      else ctx.lineTo(X(p.x, p.z), Y(p.x, p.z));
       pen = true;
-    } else ctx.lineTo(X(s.x), Y(s.z));
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
   for (let i = sim.cars.length - 1; i >= 0; i--) {
     const c = sim.cars[i];
     if (!c.alive) continue;
-    ctx.fillStyle = c.hero ? "#c4161c" : "#f4efe6";
+    ctx.fillStyle = c.hero ? "#c4161c" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
     ctx.beginPath();
-    ctx.arc(X(c.x), Y(c.z), c.hero ? 4.5 : 3, 0, Math.PI * 2);
+    ctx.arc(X(c.x, c.z), Y(c.x, c.z), c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();
   }
 }

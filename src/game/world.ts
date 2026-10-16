@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { Sim } from "./sim";
-import { poseAt, type Track } from "./track";
+import type { Kind, Sim } from "./sim";
+import { ensureTrack, poseAt, sampleAt, STEP, type Piece } from "./road";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
 type CarView = {
@@ -12,7 +12,11 @@ type CarView = {
   shadow: THREE.Mesh;
   steer: number;
   spin: number;
+  kind: Kind;
+  turret: THREE.Group | null;
 };
+
+const KIND_COLOR: Record<Kind, number> = { hero: 0xc4161c, rammer: 0x4a3226, gunner: 0x2a303a };
 
 export type World = {
   sync: (sim: Sim, dt: number, attract: boolean) => void;
@@ -237,7 +241,24 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
   );
   shadow.rotation.x = -Math.PI / 2;
 
-  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0 };
+  let turret: THREE.Group | null = null;
+  if (!hero) {
+    turret = new THREE.Group();
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x15171b, metalness: 0.7, roughness: 0.35 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 0.16, 10), gunMat);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.9, 8), gunMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.06, 0.4);
+    const eye = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.05, 0.05),
+      new THREE.MeshBasicMaterial({ color: 0xff3a2a }),
+    );
+    eye.position.set(0, 0.06, 0.2);
+    turret.add(base, barrel, eye);
+    turret.position.set(0, 1.12, -0.35);
+    tilt.add(turret);
+  }
+  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0, kind: hero ? "hero" : "rammer", turret };
 }
 
 function signTexture(label: string) {
@@ -261,25 +282,21 @@ function signTexture(label: string) {
   return tex;
 }
 
-function addSign(scene: THREE.Scene, track: Track, u: number, label: string) {
-  const tex = signTexture(label);
-  if (!tex) return;
-  const p = poseAt(track, u * track.length);
-  const board = new THREE.Mesh(
-    new THREE.PlaneGeometry(8.2, 2.05),
-    new THREE.MeshBasicMaterial({ map: tex }),
-  );
-  board.position.set(p.x, p.y + 3.3, p.z);
-  board.lookAt(p.x + p.tx * 10, p.y + 3.1, p.z + p.tz * 10);
-  scene.add(board);
+type Sign = { group: THREE.Group; board: THREE.Mesh; label: string; at: number };
+
+function makeSign(): Sign {
+  const group = new THREE.Group();
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(8.2, 2.05), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  board.position.y = 3.3;
+  group.add(board);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x1a1c22, metalness: 0.4, roughness: 0.6 });
   for (const side of [-1, 1]) {
-    const post = new THREE.Mesh(
-      new THREE.BoxGeometry(0.18, 3.2, 0.18),
-      new THREE.MeshStandardMaterial({ color: 0x1a1c22, metalness: 0.4, roughness: 0.6 }),
-    );
-    post.position.set(p.x + p.rx * side * 3.6, p.y + 1.6, p.z + p.rz * side * 3.6);
-    scene.add(post);
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 3.2, 0.18), postMat);
+    post.position.set(side * 3.6, 1.6, 0);
+    group.add(post);
   }
+  group.visible = false;
+  return { group, board, label: "", at: -1 };
 }
 
 function hash(i: number) {
@@ -360,14 +377,26 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   const shotGeo = new THREE.BufferGeometry();
-  const shotPos = new Float32Array(48 * 2 * 3);
+  const shotPos = new Float32Array(64 * 2 * 3);
+  const shotCol = new Float32Array(64 * 2 * 3);
   shotGeo.setAttribute("position", new THREE.BufferAttribute(shotPos, 3));
+  shotGeo.setAttribute("color", new THREE.BufferAttribute(shotCol, 3));
   shotGeo.setDrawRange(0, 0);
   const shots = new THREE.LineSegments(
     shotGeo,
-    new THREE.LineBasicMaterial({ color: 0xffe2b0, transparent: true, opacity: 0.9 }),
+    new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }),
   );
   scene.add(shots);
+  // enemy rounds get a glowing head so incoming fire reads at a glance (lines are 1 px)
+  const boltMesh = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.2, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xff4a32, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+    64,
+  );
+  boltMesh.frustumCulled = false;
+  boltMesh.count = 0;
+  scene.add(boltMesh);
+  const boltDummy = new THREE.Object3D();
 
   const mineMeshes: THREE.Mesh[] = [];
   const mineGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.12, 10);
@@ -398,173 +427,185 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
   }
 
-  function buildTrackMeshes(sim: Sim) {
-    if (trackReady) return;
-    trackReady = true;
-    const track = sim.track;
-    const samples = track.samples;
-    const n = samples.length;
-    const half = track.width / 2;
-    const pos: number[] = [];
-    const idx: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const s = samples[i];
-      pos.push(s.x - s.rx * half, s.y + 0.05, s.z - s.rz * half);
-      pos.push(s.x + s.rx * half, s.y + 0.05, s.z + s.rz * half);
-    }
-    for (let i = 0; i < n; i++) {
-      const a = samples[i];
-      const b = samples[(i + 1) % n];
-      if (a.gap && b.gap) continue;
-      const i0 = i * 2;
-      const i1 = ((i + 1) % n) * 2;
-      idx.push(i0, i0 + 1, i1, i0 + 1, i1 + 1, i1);
-    }
-    const road = new THREE.BufferGeometry();
-    road.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    road.setIndex(idx);
-    road.computeVertexNormals();
-    scene.add(
-      new THREE.Mesh(
-        road,
-        new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.92, metalness: 0.05 }),
-      ),
-    );
-
-    const wallPos: number[] = [];
-    const wallIdx: number[] = [];
-    const pushWall = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, h: number) => {
-      const base = wallPos.length / 3;
-      wallPos.push(ax, ay, az, bx, by, bz, ax, ay + h, az, bx, by + h, bz);
-      wallIdx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+  // ---- v0.2 streamed road: 40 m chunks, pooled, rebuilt in place as the player advances ----
+  const SEG = 20; // samples per chunk (2 m each)
+  const CHUNK = SEG * STEP;
+  const BEHIND = 2;
+  const AHEAD = coarse ? 7 : 9;
+  const POOL = BEHIND + AHEAD + 1;
+  const BLD_PER = 4;
+  const roadMat = new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.92, metalness: 0.05 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 });
+  const markMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh };
+  const chunks: Chunk[] = [];
+  const buildings = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0x141820, roughness: 0.9, metalness: 0.08 }),
+    POOL * BLD_PER,
+  );
+  buildings.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(POOL * BLD_PER * 3), 3);
+  buildings.frustumCulled = false;
+  scene.add(buildings);
+  const dummy = new THREE.Object3D();
+  for (let k = 0; k < POOL; k++) {
+    const mk = (mat: THREE.Material) => {
+      const m = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+      m.visible = false;
+      scene.add(m);
+      return m;
     };
-    for (let i = 0; i < n; i++) {
-      const a = samples[i];
-      const b = samples[(i + 1) % n];
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat) });
+  }
+  const signs: Sign[] = [makeSign(), makeSign(), makeSign()];
+  for (const s of signs) scene.add(s.group);
+  const signTex = new Map<string, THREE.Texture | null>();
+
+  const GOLD = [0.78, 0.6, 0.36];
+  const WHITE = [0.85, 0.83, 0.8];
+  function quad(pos: number[], col: number[], idx: number[], ax: number, ay: number, az: number, bx: number, by: number, bz: number, rx: number, rz: number, w: number, c: number[]) {
+    const base = pos.length / 3;
+    const h = w / 2;
+    pos.push(ax - rx * h, ay, az - rz * h, ax + rx * h, ay, az + rz * h, bx - rx * h, by, bz - rz * h, bx + rx * h, by, bz + rz * h);
+    for (let i = 0; i < 4; i++) col.push(c[0], c[1], c[2]);
+    idx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+  }
+  function setGeo(mesh: THREE.Mesh, pos: number[], idx: number[], col?: number[]) {
+    const g = mesh.geometry as THREE.BufferGeometry;
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    if (col) g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    if (!col) g.computeVertexNormals();
+    g.computeBoundingSphere();
+  }
+
+  function buildChunk(slot: number, index: number, sim: Sim) {
+    const ch = chunks[slot];
+    ch.index = index;
+    const track = sim.track;
+    const i0 = index * SEG;
+    ensureTrack(track, (i0 + SEG + 2) * STEP);
+    const o = sampleAt(track, i0);
+    const ox = o.x;
+    const oz = o.z;
+    const half = track.width / 2;
+    const rp: number[] = [];
+    const ri: number[] = [];
+    const wp: number[] = [];
+    const wi: number[] = [];
+    const mp: number[] = [];
+    const mc: number[] = [];
+    const mi: number[] = [];
+    for (let k = 0; k <= SEG; k++) {
+      const s = sampleAt(track, i0 + k);
+      rp.push(s.x - s.rx * half - ox, s.y + 0.05, s.z - s.rz * half - oz, s.x + s.rx * half - ox, s.y + 0.05, s.z + s.rz * half - oz);
+    }
+    for (let k = 0; k < SEG; k++) {
+      const a = sampleAt(track, i0 + k);
+      const b = sampleAt(track, i0 + k + 1);
       if (a.gap && b.gap) continue;
-      const o = half + 0.35;
-      pushWall(a.x - a.rx * o, a.y, a.z - a.rz * o, b.x - b.rx * o, b.y, b.z - b.rz * o, 0.72);
-      pushWall(a.x + a.rx * o, a.y, a.z + a.rz * o, b.x + b.rx * o, b.y, b.z + b.rz * o, 0.72);
+      const i = k * 2;
+      ri.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
+      const wo = half + 0.35;
+      for (const side of [-1, 1]) {
+        const base = wp.length / 3;
+        const ax = a.x + a.rx * side * wo - ox;
+        const az = a.z + a.rz * side * wo - oz;
+        const bx = b.x + b.rx * side * wo - ox;
+        const bz = b.z + b.rz * side * wo - oz;
+        wp.push(ax, a.y, az, bx, b.y, bz, ax, a.y + 0.72, az, bx, b.y + 0.72, bz);
+        wi.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+      }
+      for (const side of [-1, 1]) {
+        const e = half - 0.28;
+        quad(mp, mc, mi, a.x + a.rx * side * e - ox, a.y + 0.11, a.z + a.rz * side * e - oz, b.x + b.rx * side * e - ox, b.y + 0.11, b.z + b.rz * side * e - oz, a.rx, a.rz, 0.22, GOLD);
+      }
+      if ((i0 + k) % 4 < 2) {
+        for (const lane of [-6, 0, 6]) {
+          quad(mp, mc, mi, a.x + a.rx * lane - ox, a.y + 0.1, a.z + a.rz * lane - oz, b.x + b.rx * lane - ox, b.y + 0.1, b.z + b.rz * lane - oz, a.rx, a.rz, 0.16, WHITE);
+        }
+      }
     }
-    const walls = new THREE.BufferGeometry();
-    walls.setAttribute("position", new THREE.Float32BufferAttribute(wallPos, 3));
-    walls.setIndex(wallIdx);
-    walls.computeVertexNormals();
-    scene.add(
-      new THREE.Mesh(
-        walls,
-        new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 }),
-      ),
-    );
-
-    const edgeCount = n * 2;
-    const edge = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.18, 0.06, 1),
-      new THREE.MeshStandardMaterial({ color: 0xc6a36a, emissive: 0x6a4a22, emissiveIntensity: 0.6, roughness: 0.45 }),
-      edgeCount,
-    );
-    const dummy = new THREE.Object3D();
-    let e = 0;
-    for (let i = 0; i < n; i++) {
-      const a = samples[i];
-      const b = samples[(i + 1) % n];
-      if (a.gap && b.gap) {
+    setGeo(ch.road, rp, ri);
+    setGeo(ch.walls, wp, wi);
+    setGeo(ch.marks, mp, mc.length ? mi : [], mc);
+    for (const m of [ch.road, ch.walls, ch.marks]) {
+      m.position.set(ox, 0, oz);
+      m.visible = true;
+    }
+    // skyline: a few slabs per chunk (the real CC0 scenery lands in M4)
+    const colors = buildings.instanceColor!.array as Float32Array;
+    for (let b = 0; b < BLD_PER; b++) {
+      const id = slot * BLD_PER + b;
+      const side = b % 2 === 0 ? -1 : 1;
+      const h1 = hash(index * 7 + b * 13 + 1);
+      const s = sampleAt(track, i0 + Math.floor((b / BLD_PER) * SEG));
+      if (h1 < 0.22) {
+        dummy.position.set(0, -50, 0);
         dummy.scale.set(0.001, 0.001, 0.001);
-        dummy.position.set(0, -20, 0);
-        dummy.updateMatrix();
-        edge.setMatrixAt(e++, dummy.matrix);
-        edge.setMatrixAt(e++, dummy.matrix);
-        continue;
-      }
-      const len = Math.hypot(b.x - a.x, b.z - a.z);
-      const yaw = Math.atan2(b.x - a.x, b.z - a.z);
-      for (const side of [-1, 1]) {
-        dummy.scale.set(1, 1, len);
-        dummy.position.set(
-          (a.x + b.x) / 2 + a.rx * side * (half - 0.28),
-          (a.y + b.y) / 2 + 0.1,
-          (a.z + b.z) / 2 + a.rz * side * (half - 0.28),
-        );
-        dummy.rotation.set(0, yaw, 0);
-        dummy.updateMatrix();
-        edge.setMatrixAt(e++, dummy.matrix);
-      }
-    }
-    edge.count = e;
-    scene.add(edge);
-
-    let dashes = 0;
-    for (let i = 0; i < n; i += 4) dashes += 1;
-    const dash = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.16, 0.05, 1.6),
-      new THREE.MeshStandardMaterial({ color: 0xf4efe6, emissive: 0x888074, emissiveIntensity: 0.25, roughness: 0.5 }),
-      dashes,
-    );
-    let di = 0;
-    for (let i = 0; i < n; i += 4) {
-      const a = samples[i];
-      if (a.gap) continue;
-      const b = samples[(i + 1) % n];
-      dummy.scale.set(1, 1, 1);
-      dummy.position.set(a.x, a.y + 0.1, a.z);
-      dummy.rotation.set(0, Math.atan2(b.x - a.x, b.z - a.z), 0);
-      dummy.updateMatrix();
-      dash.setMatrixAt(di++, dummy.matrix);
-    }
-    dash.count = di;
-    scene.add(dash);
-
-    const buildings = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x141820, roughness: 0.9, metalness: 0.08 }),
-      160,
-    );
-    const colors = new Float32Array(160 * 3);
-    let bi = 0;
-    for (let i = 0; i < n && bi < 160; i += 3) {
-      const s = samples[i];
-      for (const side of [-1, 1]) {
-        if (bi >= 160) break;
-        if (hash(i + side + 4) < 0.25) continue;
-        const dist = 28 + hash(i * 3 + side) * 46;
-        const h = 8 + hash(i + 9 + side) * 38;
-        const w = 6 + hash(i + 2) * 10;
-        const d = 6 + hash(i + 5) * 10;
+      } else {
+        const dist = 30 + hash(index * 3 + b) * 44;
+        const h = 8 + hash(index + 9 + b * 5) * 38;
         dummy.position.set(s.x + s.rx * side * dist, h * 0.5 - 1.5, s.z + s.rz * side * dist);
-        dummy.scale.set(w, h, d);
-        dummy.rotation.set(0, hash(i) * 0.4, 0);
-        dummy.updateMatrix();
-        buildings.setMatrixAt(bi, dummy.matrix);
-        const lit = hash(i + side * 13) > 0.55;
-        colors[bi * 3] = lit ? 0.45 : 0.07;
-        colors[bi * 3 + 1] = lit ? 0.28 : 0.08;
-        colors[bi * 3 + 2] = lit ? 0.16 : 0.1;
-        bi += 1;
+        dummy.scale.set(6 + hash(index + 2 + b) * 10, h, 6 + hash(index + 5 + b) * 10);
+        dummy.rotation.set(0, hash(index + b) * 0.4, 0);
       }
+      dummy.updateMatrix();
+      buildings.setMatrixAt(id, dummy.matrix);
+      const lit = hash(index * 11 + b) > 0.55;
+      colors[id * 3] = lit ? 0.45 : 0.07;
+      colors[id * 3 + 1] = lit ? 0.28 : 0.08;
+      colors[id * 3 + 2] = lit ? 0.16 : 0.1;
     }
-    buildings.count = bi;
-    buildings.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
-    scene.add(buildings);
+    buildings.instanceMatrix.needsUpdate = true;
+    buildings.instanceColor!.needsUpdate = true;
+  }
 
-    addSign(scene, track, 0.012, "NIGHTFALL");
-    addSign(scene, track, 0.118, "RAMP");
-    addSign(scene, track, 0.385, "VOID  —  THRUST");
-    addSign(scene, track, 0.6, "PITFALLS");
-
-    const start = poseAt(track, track.length * 0.012);
-    for (let k = 0; k < 10; k++) {
-      const stripe = new THREE.Mesh(
-        new THREE.BoxGeometry(track.width / 10 - 0.08, 0.04, 1.15),
-        new THREE.MeshStandardMaterial({ color: k % 2 === 0 ? 0xf4efe6 : 0x111111, roughness: 0.55 }),
-      );
-      const across = (k + 0.5) / 10 - 0.5;
-      stripe.position.set(start.x + start.rx * across * (track.width - 0.8), start.y + 0.1, start.z + start.rz * across * (track.width - 0.8));
-      stripe.rotation.y = Math.atan2(start.tx, start.tz);
-      scene.add(stripe);
+  function streamRoad(sim: Sim, along: number) {
+    const c = Math.floor(along / CHUNK);
+    const lo = Math.max(0, c - BEHIND);
+    const hi = c + AHEAD;
+    const have = new Set<number>();
+    for (const ch of chunks) {
+      if (ch.index >= lo && ch.index <= hi) have.add(ch.index);
+      else ch.index = -1;
     }
+    for (let i = lo; i <= hi; i++) {
+      if (have.has(i)) continue;
+      const slot = chunks.findIndex((ch) => ch.index === -1);
+      if (slot < 0) break;
+      buildChunk(slot, i, sim);
+    }
+    for (const ch of chunks) {
+      if (ch.index !== -1) continue;
+      ch.road.visible = ch.walls.visible = ch.marks.visible = false;
+    }
+    // set-piece warning boards
+    const near: Piece[] = sim.track.pieces.filter((p) => p.signS > along - 40 && p.signS < along + AHEAD * CHUNK);
+    signs.forEach((sg, k) => {
+      const p = near[k];
+      if (!p) {
+        sg.group.visible = false;
+        return;
+      }
+      if (sg.at !== p.signS) {
+        sg.at = p.signS;
+        if (!signTex.has(p.label)) signTex.set(p.label, signTexture(p.label));
+        const mat = sg.board.material as THREE.MeshBasicMaterial;
+        mat.map = signTex.get(p.label) ?? null;
+        mat.needsUpdate = true;
+        const q = poseAt(sim.track, p.signS);
+        sg.group.position.set(q.x, q.y, q.z);
+        sg.group.rotation.set(0, Math.atan2(-q.tx, -q.tz), 0); // face the oncoming player
+        sg.board.rotation.y = 0;
+      }
+      sg.group.visible = true;
+    });
+  }
 
-    for (let i = 0; i < 5; i++) {
-      const view = buildCar(i === 0, hull);
+  function ensureViews(sim: Sim) {
+    while (views.length < sim.cars.length) {
+      const view = buildCar(views.length === 0, hull);
       scene.add(view.root);
       scene.add(view.shadow);
       views.push(view);
@@ -579,14 +620,22 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   function sync(sim: Sim, dt: number, attractMode: boolean) {
-    buildTrackMeshes(sim);
+    ensureViews(sim);
     const hero = sim.cars[0];
+    streamRoad(sim, hero.along);
+    sea.position.set(hero.x, -1.6, hero.z);
     const k = 1 - Math.exp(-4.2 * Math.max(0.0001, dt));
 
     for (let i = 0; i < views.length; i++) {
       const car = sim.cars[i];
       const view = views[i];
-      view.root.visible = car.alive && car.y > -5;
+      if (car.kind !== view.kind) {
+        view.kind = car.kind;
+        view.body.color.setHex(KIND_COLOR[car.kind]);
+        if (view.turret) view.turret.visible = car.kind === "gunner";
+      }
+      const blink = car.hero && car.invuln > 0 && Math.floor(performance.now() / 90) % 2 === 0;
+      view.root.visible = car.alive && car.y > -5 && !blink;
       view.shadow.visible = view.root.visible;
       if (!view.root.visible) continue;
       view.root.position.set(car.x, car.y, car.z);
@@ -629,10 +678,30 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       arr[o + 3] = s.x;
       arr[o + 4] = s.y;
       arr[o + 5] = s.z;
+      const enemy = s.owner !== 0;
+      for (let v = 0; v < 2; v++) {
+        shotCol[o + v * 3] = enemy ? 1 : 1;
+        shotCol[o + v * 3 + 1] = enemy ? 0.25 : 0.89;
+        shotCol[o + v * 3 + 2] = enemy ? 0.18 : 0.69;
+      }
       count += 1;
     }
+    let bolts = 0;
+    for (const s of sim.shots) {
+      if (!s.alive || s.owner === 0) continue;
+      const vx = s.x - s.px;
+      const vz = s.z - s.pz;
+      boltDummy.position.set(s.x, s.y, s.z);
+      boltDummy.rotation.set(0, Math.atan2(vx, vz), 0);
+      boltDummy.scale.set(1, 1, 3.2);
+      boltDummy.updateMatrix();
+      boltMesh.setMatrixAt(bolts++, boltDummy.matrix);
+    }
+    boltMesh.count = bolts;
+    boltMesh.instanceMatrix.needsUpdate = true;
     shotGeo.setDrawRange(0, count * 2);
     attr.needsUpdate = true;
+    (shotGeo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
 
     for (let i = 0; i < mineMeshes.length; i++) {
       const m = sim.mines[i];

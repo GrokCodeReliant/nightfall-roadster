@@ -1,0 +1,13 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
+p.on("console", m => console.log("console", m.type(), m.text()));
+await p.goto("file:///workspace/studio/nightfall_roadster/v02_m2/nightfall-roadster-v02-m2.html?debug");
+await p.waitForTimeout(1500);
+await p.screenshot({ path: "/tmp/p0.png" });
+await p.click(".nf-btn");
+await p.keyboard.down("KeyW");
+await p.waitForTimeout(6000);
+await p.screenshot({ path: "/tmp/p1.png" });
+console.log(await p.evaluate(() => { const h = window.__nf.cars[0]; return JSON.stringify({ x: h.x, y: h.y, z: h.z, s: h.along, first: window.__nf.track.first, n: window.__nf.track.samples.length }); }));
+await b.close();
