@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { Kind, Sim } from "./sim";
+import type { Kind, PickupKind, Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, type Piece } from "./road";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -14,14 +14,111 @@ type CarView = {
   spin: number;
   kind: Kind;
   turret: THREE.Group | null;
+  chassis: THREE.Group;
+  parts: Partial<Record<Kind, THREE.Group>>;
+  mats: THREE.Material[];
+  fade: number;
 };
 
-const KIND_COLOR: Record<Kind, number> = { hero: 0xc4161c, rammer: 0x4a3226, gunner: 0x2a303a };
+const KIND_COLOR: Record<Kind, number> = {
+  hero: 0xc4161c,
+  rammer: 0x4a3226,
+  gunner: 0x2a303a,
+  mine: 0x3a3f2a,
+  spiker: 0x5a4a1e,
+  drone: 0x22262e,
+  boss: 0x1c1f24,
+};
+const KIND_SCALE: Partial<Record<Kind, [number, number, number]>> = { boss: [1.55, 1.3, 1.9] };
+
+const PICKUP_COLOR: Record<PickupKind, number> = {
+  repair: 0x3ad06a,
+  armor: 0xb8c6d4,
+  gun: 0xe0b060,
+  rockets: 0xff7a2a,
+  minepack: 0xe23b2f,
+  oil: 0x7a5cff,
+  nitro: 0x38d6ff,
+  shield: 0x4a8cff,
+  magnet: 0xff4ad0,
+};
+
+function enemyParts(tilt: THREE.Group) {
+  const parts: Partial<Record<Kind, THREE.Group>> = {};
+  const dark = new THREE.MeshStandardMaterial({ color: 0x15171b, metalness: 0.6, roughness: 0.45 });
+  const red = new THREE.MeshBasicMaterial({ color: 0xff3a2a });
+  // Mine Layer: boxy van body with a rear chute
+  const van = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.9, 2.6), new THREE.MeshStandardMaterial({ color: 0x3a3f2a, roughness: 0.7, metalness: 0.2 }));
+  box.position.set(0, 1.05, -0.5);
+  const chute = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.25, 0.5), dark);
+  chute.position.set(0, 0.55, -2.15);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.08, 2.62), new THREE.MeshBasicMaterial({ color: 0xc6a36a }));
+  stripe.position.set(0, 1.2, -0.5);
+  van.add(box, chute, stripe);
+  parts.mine = van;
+  // Spiker: flatbed rails + side blades
+  const spk = new THREE.Group();
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 2.2), dark);
+    rail.position.set(side * 0.95, 0.8, -0.9);
+    spk.add(rail);
+    for (let k = 0; k < 4; k++) {
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.75, 6), new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.95, roughness: 0.2 }));
+      blade.rotation.z = side * -Math.PI / 2;
+      blade.position.set(side * 1.3, 0.42, 1.0 - k * 0.8);
+      spk.add(blade);
+    }
+  }
+  parts.spiker = spk;
+  // Drone: body, 4 rotors, red eye (no chassis)
+  const drone = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.45, 12, 8), new THREE.MeshStandardMaterial({ color: 0x22262e, metalness: 0.7, roughness: 0.3 }));
+  core.scale.set(1.2, 0.55, 1.2);
+  drone.add(core);
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 1.0), dark);
+    arm.position.set(x * 0.45, 0, z * 0.45);
+    arm.rotation.y = Math.atan2(x, z);
+    const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.03, 14), new THREE.MeshBasicMaterial({ color: 0x9aa4b0, transparent: true, opacity: 0.35 }));
+    rotor.position.set(x * 0.8, 0.08, z * 0.8);
+    rotor.userData.rotor = true;
+    drone.add(arm, rotor);
+  }
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), red);
+  eye.position.set(0, -0.12, 0.5);
+  drone.add(eye);
+  drone.position.y = 0.6;
+  parts.drone = drone;
+  // Boss: armored cargo box + rear turret + glowing rear weak point
+  const boss = new THREE.Group();
+  const cargo = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 3.0), new THREE.MeshStandardMaterial({ color: 0x24282e, metalness: 0.75, roughness: 0.35 }));
+  cargo.position.set(0, 1.15, -0.7);
+  const weak = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 0.06), new THREE.MeshBasicMaterial({ color: 0xffa43a }));
+  weak.position.set(0, 1.05, -2.23);
+  const tur = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 0.22, 10), dark);
+  const b1 = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 8), dark);
+  b1.rotation.x = Math.PI / 2;
+  b1.position.set(0.12, 0.08, -0.5);
+  const b2 = b1.clone();
+  b2.position.x = -0.12;
+  tur.add(base, b1, b2);
+  tur.position.set(0, 1.82, -1.4);
+  boss.add(cargo, weak, tur);
+  parts.boss = boss;
+  for (const g of Object.values(parts)) {
+    g!.visible = false;
+    tilt.add(g!);
+  }
+  return parts;
+}
 
 export type World = {
   sync: (sim: Sim, dt: number, attract: boolean) => void;
   resize: (w: number, h: number, dpr: number) => void;
   dispose: () => void;
+  debugFade: () => number[];
 };
 
 const reduceMotion =
@@ -258,7 +355,19 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     turret.position.set(0, 1.12, -0.35);
     tilt.add(turret);
   }
-  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0, kind: hero ? "hero" : "rammer", turret };
+  // everything built so far is the car chassis; drones hide it
+  const chassis = new THREE.Group();
+  for (const c of [...tilt.children]) chassis.add(c);
+  tilt.add(chassis);
+  const parts = hero ? {} : enemyParts(tilt);
+  const mats: THREE.Material[] = [];
+  if (!hero) {
+    root.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (m && !mats.includes(m)) mats.push(m);
+    });
+  }
+  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0, kind: hero ? "hero" : "rammer", turret, chassis, parts, mats, fade: 1 };
 }
 
 function signTexture(label: string) {
@@ -377,8 +486,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   const shotGeo = new THREE.BufferGeometry();
-  const shotPos = new Float32Array(64 * 2 * 3);
-  const shotCol = new Float32Array(64 * 2 * 3);
+  const shotPos = new Float32Array(96 * 2 * 3);
+  const shotCol = new Float32Array(96 * 2 * 3);
   shotGeo.setAttribute("position", new THREE.BufferAttribute(shotPos, 3));
   shotGeo.setAttribute("color", new THREE.BufferAttribute(shotCol, 3));
   shotGeo.setDrawRange(0, 0);
@@ -391,8 +500,40 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const boltMesh = new THREE.InstancedMesh(
     new THREE.SphereGeometry(0.2, 8, 6),
     new THREE.MeshBasicMaterial({ color: 0xff4a32, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
-    64,
+    96,
   );
+  const rocketMesh = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.11, 0.11, 0.9, 8).rotateX(Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffb15a }),
+    24,
+  );
+  rocketMesh.frustumCulled = false;
+  rocketMesh.count = 0;
+  scene.add(rocketMesh);
+  // pickups: glowing gem + halo; crates are boxes you shoot open
+  const gemGeo = new THREE.OctahedronGeometry(0.55, 0);
+  const haloGeo = new THREE.TorusGeometry(0.85, 0.06, 6, 24);
+  const crateGeo = new THREE.BoxGeometry(1.3, 1.1, 1.3);
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.8, metalness: 0.1, emissive: 0x2a1a0a, emissiveIntensity: 0.6 });
+  const pickupViews: { group: THREE.Group; gem: THREE.Mesh; halo: THREE.Mesh; crate: THREE.Mesh }[] = [];
+  for (let i = 0; i < 16; i++) {
+    const group = new THREE.Group();
+    const gem = new THREE.Mesh(gemGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
+    halo.rotation.x = Math.PI / 2;
+    const crate = new THREE.Mesh(crateGeo, crateMat);
+    group.add(gem, halo, crate);
+    group.visible = false;
+    scene.add(group);
+    pickupViews.push({ group, gem, halo, crate });
+  }
+  const shield = new THREE.Mesh(
+    new THREE.SphereGeometry(2.6, 20, 14),
+    new THREE.MeshBasicMaterial({ color: 0x4a8cff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  shield.scale.set(1, 0.6, 1.25);
+  shield.visible = false;
+  scene.add(shield);
   boltMesh.frustumCulled = false;
   boltMesh.count = 0;
   scene.add(boltMesh);
@@ -400,7 +541,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   const mineMeshes: THREE.Mesh[] = [];
   const mineGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.12, 10);
-  for (let i = 0; i < 10; i++) {
+  const oilGeo = new THREE.CircleGeometry(2.6, 18);
+  const oilMat = new THREE.MeshStandardMaterial({ color: 0x050508, roughness: 0.05, metalness: 0.9, emissive: 0x1a0f3a, emissiveIntensity: 0.6 });
+  const oilMeshes: THREE.Mesh[] = [];
+  for (let i = 0; i < 24; i++) {
+    const o = new THREE.Mesh(oilGeo, oilMat);
+    o.rotation.x = -Math.PI / 2;
+    o.visible = false;
+    scene.add(o);
+    oilMeshes.push(o);
+  }
+  for (let i = 0; i < 24; i++) {
     const m = new THREE.Mesh(
       mineGeo,
       new THREE.MeshStandardMaterial({ color: 0x1a100e, emissive: 0xe23b2f, emissiveIntensity: 0.8, roughness: 0.5 }),
@@ -633,6 +784,35 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         view.kind = car.kind;
         view.body.color.setHex(KIND_COLOR[car.kind]);
         if (view.turret) view.turret.visible = car.kind === "gunner";
+        view.chassis.visible = car.kind !== "drone";
+        for (const [k, g] of Object.entries(view.parts)) g!.visible = k === car.kind;
+        const sc = KIND_SCALE[car.kind] ?? [1, 1, 1];
+        view.root.scale.set(sc[0], sc[1], sc[2]);
+      }
+      if (car.kind === "drone") {
+        view.parts.drone?.children.forEach((c) => {
+          if (c.userData.rotor) c.rotation.y += dt * 40;
+        });
+      }
+      // M2 issue fix: an enemy between the chase camera and the player fades out instead of blocking the view
+      if (!car.hero) {
+        const dCam = Math.hypot(car.x - camera.position.x, car.y - camera.position.y, car.z - camera.position.z);
+        const dHero = Math.hypot(car.x - hero.x, car.z - hero.z);
+        const camHero = Math.hypot(hero.x - camera.position.x, hero.z - camera.position.z);
+        const between = dCam < camHero + 1.5 && dHero < camHero + 1;
+        const target = between ? Math.max(0.15, Math.min(0.35, (dCam - 3) / 8)) : 1;
+        view.fade += (target - view.fade) * Math.min(1, dt * 10);
+        const op = view.fade > 0.98 ? 1 : view.fade;
+        for (const m of view.mats) {
+          const tr = op < 1 || (m as THREE.MeshBasicMaterial).userData.wasTransparent === true;
+          if (m.userData.wasTransparent === undefined) m.userData.wasTransparent = m.transparent;
+          if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity;
+          if (m.transparent !== tr) {
+            m.transparent = tr;
+            m.needsUpdate = true;
+          }
+          m.opacity = m.userData.baseOpacity * op;
+        }
       }
       const blink = car.hero && car.invuln > 0 && Math.floor(performance.now() / 90) % 2 === 0;
       view.root.visible = car.alive && car.y > -5 && !blink;
@@ -686,6 +866,41 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
       count += 1;
     }
+    let rockets = 0;
+    for (const s of sim.shots) {
+      if (!s.alive || !s.rocket || rockets >= 24) continue;
+      boltDummy.position.set(s.x, s.y, s.z);
+      boltDummy.lookAt(s.x + s.vx, s.y + s.vy, s.z + s.vz);
+      boltDummy.scale.set(1, 1, 1);
+      boltDummy.updateMatrix();
+      rocketMesh.setMatrixAt(rockets++, boltDummy.matrix);
+      if (Math.random() < 0.5) burst(s.x - s.vx * 0.02, s.y, s.z - s.vz * 0.02, 1, 1.5, 0xffb15a);
+    }
+    rocketMesh.count = rockets;
+    rocketMesh.instanceMatrix.needsUpdate = true;
+    const now = performance.now() * 0.001;
+    sim.pickups.forEach((p, i) => {
+      const v = pickupViews[i];
+      if (!v) return;
+      v.group.visible = p.alive;
+      if (!p.alive) return;
+      v.group.position.set(p.x, p.y + (p.crate ? 0 : Math.sin(now * 3 + i) * 0.15), p.z);
+      v.crate.visible = p.crate;
+      v.gem.visible = v.halo.visible = !p.crate;
+      if (!p.crate) {
+        const c = PICKUP_COLOR[p.kind];
+        (v.gem.material as THREE.MeshBasicMaterial).color.setHex(c);
+        (v.halo.material as THREE.MeshBasicMaterial).color.setHex(c);
+        v.gem.rotation.y = now * 2.2;
+        v.halo.rotation.z = now;
+      } else v.crate.rotation.y = i;
+    });
+    shield.visible = sim.up.shieldT > 0 && hero.alive;
+    if (shield.visible) {
+      shield.position.set(hero.x, hero.y + 0.7, hero.z);
+      shield.rotation.y = hero.yaw;
+      (shield.material as THREE.MeshBasicMaterial).opacity = 0.14 + Math.sin(now * 8) * 0.05 + (sim.up.shieldT < 1.5 ? Math.sin(now * 30) * 0.08 : 0);
+    }
     let bolts = 0;
     for (const s of sim.shots) {
       if (!s.alive || s.owner === 0) continue;
@@ -706,8 +921,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     for (let i = 0; i < mineMeshes.length; i++) {
       const m = sim.mines[i];
       const mesh = mineMeshes[i];
-      mesh.visible = !!m?.alive;
-      if (!m?.alive) continue;
+      const oil = oilMeshes[i];
+      mesh.visible = !!m?.alive && !m.oil;
+      oil.visible = !!m?.alive && m.oil;
+      if (oil.visible) oil.position.set(m.x, m.y + 0.06, m.z);
+      if (!mesh.visible) continue;
       mesh.position.set(m.x, m.y + 0.08, m.z);
       const mat = mesh.material as THREE.MeshStandardMaterial;
       mat.emissiveIntensity = m.arm > 0 ? 0.15 : 0.45 + Math.sin(performance.now() * 0.012) * 0.45;
@@ -769,7 +987,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     hull.dispose();
   }
 
-  return { sync, resize, dispose };
+  return { sync, resize, dispose, debugFade: () => views.map((v) => v.fade) };
 }
 
 function clamp01(v: number) {

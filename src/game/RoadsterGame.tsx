@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { begin, createSim, formatTime, step, type Phase, type Result, type Sim } from "./sim";
+import { begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
-import { poseAt } from "./road";
+import { nextPiece, poseAt, queryTrack } from "./road";
 import { createWorld } from "./world";
 
 declare global {
@@ -58,6 +58,9 @@ export function RoadsterGame() {
   const roundsRef = useRef<HTMLElement>(null);
   const minesRef = useRef<HTMLElement>(null);
   const livesRef = useRef<HTMLElement>(null);
+  const gunLabelRef = useRef<HTMLSpanElement>(null);
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const chipKey = useRef("");
   const knobRef = useRef<HTMLSpanElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
 
@@ -88,16 +91,54 @@ export function RoadsterGame() {
 
     // Test hook only for harness runs (?debug); never exposed in normal play.
     if (new URLSearchParams(window.location.search).has("debug")) {
-      const w = window as unknown as { __nf?: Sim; __nfAdvance?: (secs: number, mode: "hunt" | "idle") => void };
+      const w = window as unknown as { __nf?: Sim; __nfAdvance?: (secs: number, mode: "hunt" | "idle" | "cruise" | string[]) => void };
       w.__nf = sim;
+      Object.assign(w, {
+        __nfStage: {
+          debugSpawn,
+          debugStartWave,
+          spawnPickup,
+          // true when the next set piece (ramp/void) is far enough ahead and none is underway
+          flat: (len: number) => {
+            const h = sim.cars[0];
+            const p = nextPiece(sim.track, h.along - 40);
+            return !p || p.s - h.along > len;
+          },
+          lat: () => {
+            const h = sim.cars[0];
+            return queryTrack(sim.track, h.x, h.z, h.along).lateral;
+          },
+          alt: (id: number) => sim.cars[id].y - poseAt(sim.track, sim.cars[id].along).y,
+        },
+      });
       // Fast-forward the real sim with an autopilot (test harness only).
       w.__nfAdvance = (secs, mode) => {
         for (let i = 0; i < secs * 60 && sim.phase === "playing"; i++) {
-          sim.keysOverride = new Set(mode === "hunt" ? botKeys(sim) : []);
+          sim.keysOverride = new Set(
+            mode === "hunt"
+              ? botKeys(sim)
+              : mode === "idle"
+                ? []
+                : mode === "cruise"
+                  ? botKeys(sim, true).filter((k) => k === "KeyW" || k === "KeyA" || k === "KeyD" || k === "Space")
+                  : (mode as unknown as string[]),
+          );
           sim.events.length = 0;
           step(sim, 1 / 60);
         }
       };
+      Object.assign(w, {
+        __nfFade: () => world.debugFade(),
+        __nfBehind: (off: number) => {
+          const h = sim.cars[0];
+          const lat = queryTrack(sim.track, h.x, h.z, h.along).lateral;
+          const c = debugSpawn(sim, "rammer", off, lat);
+          if (!c) return -1;
+          c.ramCd = 99;
+          c.hold = off;
+          return c.id;
+        },
+      });
     }
     window.__controlsTest = {
       getYaw: () => sim.cars[0].yaw,
@@ -198,7 +239,8 @@ export function RoadsterGame() {
         else if (e.t === "hit") audio.hit();
         else if (e.t === "land") audio.land(e.hard);
         else if (e.t === "fall") audio.fall();
-        else if (e.t === "wave") audio.lap();
+        else if (e.t === "wave" || e.t === "pickup") audio.lap();
+        else if (e.t === "rocket") audio.gun();
         else if (e.t === "life") audio.fall();
         else if (e.t === "over") audio.finish();
       }
@@ -253,7 +295,29 @@ export function RoadsterGame() {
     if (fuelRef.current) fuelRef.current.style.transform = `scaleX(${hero.fuel / hero.maxFuel})`;
     if (hullRef.current) hullRef.current.style.transform = `scaleX(${Math.max(0, hero.hp) / hero.maxHp})`;
     if (roundsRef.current) roundsRef.current.textContent = String(Math.floor(hero.rounds));
-    if (minesRef.current) minesRef.current.textContent = String(Math.floor(hero.mines));
+    if (minesRef.current) minesRef.current.textContent = String(Math.floor(hero.mines) + sim.up.reserve);
+    if (gunLabelRef.current) gunLabelRef.current.textContent = sim.up.gun === 0 ? "Guns" : GUN_NAMES[sim.up.gun].replace(" MG", "").replace(" gun", "");
+    const u = sim.up;
+    const chips: [string, string][] = [];
+    if (u.rockets > 0) chips.push([`Rockets ${u.rockets}`, "#ff7a2a"]);
+    if (u.armor > 0) chips.push([`Armor +${u.armor}`, "#b8c6d4"]);
+    if (u.shieldT > 0) chips.push([`Shield ${Math.ceil(u.shieldT)}s`, "#4a8cff"]);
+    if (u.oilT > 0) chips.push([`Oil ${Math.ceil(u.oilT)}s`, "#7a5cff"]);
+    if (u.magnetT > 0) chips.push([`Magnet ${Math.ceil(u.magnetT)}s`, "#ff4ad0"]);
+    if (u.cluster) chips.push(["Cluster mines", "#e23b2f"]);
+    if (hero.maxFuel > 100) chips.push([`Nitro +${hero.maxFuel - 100}`, "#38d6ff"]);
+    const key = chips.map((c) => c[0]).join("|");
+    if (chipsRef.current && key !== chipKey.current) {
+      chipKey.current = key;
+      chipsRef.current.innerHTML = "";
+      for (const [label, color] of chips) {
+        const el = document.createElement("span");
+        el.className = "nf-chip";
+        el.style.setProperty("--chip", color);
+        el.textContent = label;
+        chipsRef.current.appendChild(el);
+      }
+    }
     const map = mapRef.current;
     if (map) drawMap(map, sim);
   }
@@ -364,13 +428,14 @@ export function RoadsterGame() {
               <div className="nf-bar is-fuel"><div ref={fuelRef} /></div>
             </div>
             <div className="nf-meter">
-              <p>Guns <strong ref={roundsRef}>24</strong></p>
+              <p><span ref={gunLabelRef}>Guns</span> <strong ref={roundsRef}>24</strong></p>
               <p>Mines <strong ref={minesRef}>4</strong></p>
             </div>
             <div className="nf-meter">
               <p>Hull <strong ref={livesRef}>×3</strong></p>
               <div className="nf-bar is-hot"><div ref={hullRef} /></div>
             </div>
+            <div className="nf-chips" ref={chipsRef} />
           </div>
           <div className={`nf-touch${phase === "playing" ? " is-live" : ""}`}>
             <div

@@ -24,6 +24,10 @@ export type Fx =
   | { t: "wave" }
   | { t: "life" }
   | { t: "over" }
+  | { t: "boss" }
+  | { t: "rocket" }
+  | { t: "emine" }
+  | { t: "pickup"; kind: PickupKind }
   | { t: "down" };
 
 export type Shot = {
@@ -39,6 +43,9 @@ export type Shot = {
   vz: number;
   life: number;
   owner: number;
+  dmg: number;
+  rocket: boolean;
+  target: number;
 };
 
 export type Mine = {
@@ -48,14 +55,47 @@ export type Mine = {
   z: number;
   life: number;
   arm: number;
+  owner: number;
+  oil: boolean;
 };
 
-export type Kind = "hero" | "rammer" | "gunner";
+export type PickupKind = "repair" | "armor" | "gun" | "rockets" | "minepack" | "oil" | "nitro" | "shield" | "magnet";
 
-export const ENEMY: Record<Exclude<Kind, "hero">, { hp: number; tier: number; ram: number }> = {
-  rammer: { hp: 40, tier: 1, ram: 18 },
-  gunner: { hp: 55, tier: 2, ram: 6 },
+export type Pickup = {
+  alive: boolean;
+  kind: PickupKind;
+  crate: boolean;
+  x: number;
+  y: number;
+  z: number;
+  along: number;
+  life: number;
 };
+
+export type Upgrades = {
+  gun: number;
+  armor: number;
+  rockets: number;
+  rocketCd: number;
+  reserve: number;
+  cluster: boolean;
+  oilT: number;
+  shieldT: number;
+  magnetT: number;
+};
+
+export type Kind = "hero" | "rammer" | "gunner" | "mine" | "spiker" | "drone" | "boss";
+
+export const ENEMY: Record<Exclude<Kind, "hero">, { hp: number; tier: number; ram: number; name: string }> = {
+  rammer: { hp: 40, tier: 1, ram: 18, name: "Rammer" },
+  gunner: { hp: 55, tier: 2, ram: 6, name: "Gunner" },
+  mine: { hp: 80, tier: 2, ram: 8, name: "Mine Layer" },
+  spiker: { hp: 60, tier: 2, ram: 10, name: "Spiker" },
+  drone: { hp: 30, tier: 3, ram: 0, name: "Drone" },
+  boss: { hp: 600, tier: 10, ram: 30, name: "Armored Hauler" },
+};
+export const DRONE_ALT = 6;
+const OUT_OF_VIEW = 175;
 
 export type Car = {
   id: number;
@@ -93,6 +133,10 @@ export type Car = {
   burst: number;
   burstCd: number;
   ramCd: number;
+  dropCd: number;
+  spikeT: number;
+  weaveT: number;
+  leaving: boolean;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -126,6 +170,10 @@ export type Sim = {
   lives: number;
   wave: number;
   queue: Exclude<Kind, "hero">[];
+  pickups: Pickup[];
+  up: Upgrades;
+  nextCrate: number;
+  recycled: number;
   spawnCd: number;
   spawnFlip: number;
   lull: number;
@@ -196,15 +244,27 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     burst: 0,
     burstCd: 0,
     ramCd: 0,
+    dropCd: 0,
+    spikeT: 0,
+    weaveT: 0,
+    leaving: false,
   };
 }
 
 function emptyShot(): Shot {
-  return { alive: false, x: 0, y: 0, z: 0, px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, life: 0, owner: -1 };
+  return { alive: false, x: 0, y: 0, z: 0, px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, life: 0, owner: -1, dmg: 16, rocket: false, target: -1 };
 }
 
 function emptyMine(): Mine {
-  return { alive: false, x: 0, y: 0, z: 0, life: 0, arm: 0 };
+  return { alive: false, x: 0, y: 0, z: 0, life: 0, arm: 0, owner: -1, oil: false };
+}
+
+function emptyPickup(): Pickup {
+  return { alive: false, kind: "repair", crate: false, x: 0, y: 0, z: 0, along: 0, life: 0 };
+}
+
+function freshUpgrades(): Upgrades {
+  return { gun: 0, armor: 0, rockets: 0, rocketCd: 0, reserve: 0, cluster: false, oilT: 0, shieldT: 0, magnetT: 0 };
 }
 
 export function createSim(): Sim {
@@ -214,8 +274,12 @@ export function createSim(): Sim {
   const sim: Sim = {
     track,
     cars,
-    shots: Array.from({ length: 64 }, emptyShot),
-    mines: Array.from({ length: 10 }, emptyMine),
+    shots: Array.from({ length: 96 }, emptyShot),
+    mines: Array.from({ length: 24 }, emptyMine),
+    pickups: Array.from({ length: 16 }, emptyPickup),
+    up: freshUpgrades(),
+    nextCrate: 420,
+    recycled: 0,
     phase: "menu",
     time: 0,
     score: 0,
@@ -271,6 +335,8 @@ function park(sim: Sim) {
   const hero = sim.cars[0];
   hero.lane = 0;
   place(sim, hero, START_S, 0);
+  hero.maxHp = 100;
+  hero.maxFuel = MAX_FUEL;
   hero.hp = hero.maxHp;
   hero.recover = 0;
   hero.flash = 0;
@@ -288,6 +354,10 @@ function park(sim: Sim) {
 export function begin(sim: Sim) {
   for (const s of sim.shots) s.alive = false;
   for (const m of sim.mines) m.alive = false;
+  for (const p of sim.pickups) p.alive = false;
+  sim.up = freshUpgrades();
+  sim.nextCrate = START_S + 280;
+  sim.recycled = 0;
   park(sim);
   sim.cars[0].speed = 0;
   sim.phase = "playing";
@@ -405,22 +475,53 @@ function loseLife(sim: Sim) {
   }
   hero.lane = 0;
   place(sim, hero, safeSpawnS(sim, hero.along), 22);
+  const lost = dropTier(sim);
   hero.hp = hero.maxHp;
   hero.recover = 0.65;
   hero.flash = 0.4;
   hero.invuln = 1.5;
-  toast(sim, sim.lives === 1 ? "Wrecked — last life" : `Wrecked — ${sim.lives} lives left`, true);
+  toast(sim, `${sim.lives === 1 ? "Wrecked — last life" : `Wrecked — ${sim.lives} lives left`}${lost ? "  · −1 tier" : ""}`, true);
+}
+
+/** Losing a life costs one upgrade tier: a gun tier, an armor plate and a nitro cell; timed boosts and ammo packs are lost. */
+export function dropTier(sim: Sim) {
+  const u = sim.up;
+  const hero = sim.cars[0];
+  const had = u.gun > 0 || u.armor > 0 || hero.maxFuel > MAX_FUEL || u.rockets > 0 || u.reserve > 0 || u.cluster;
+  u.gun = Math.max(0, u.gun - 1);
+  u.armor = Math.max(0, u.armor - 25);
+  hero.maxHp = 100 + u.armor;
+  hero.maxFuel = Math.max(MAX_FUEL, hero.maxFuel - 20);
+  hero.fuel = Math.min(hero.fuel, hero.maxFuel);
+  u.rockets = 0;
+  u.reserve = 0;
+  u.cluster = false;
+  u.oilT = 0;
+  u.shieldT = 0;
+  u.magnetT = 0;
+  return had;
 }
 
 function damageHero(sim: Sim, dmg: number) {
   const hero = sim.cars[0];
-  if (hero.invuln > 0 || sim.phase !== "playing") return false;
+  if (hero.invuln > 0 || sim.up.shieldT > 0 || sim.phase !== "playing") return false;
   hero.hp -= dmg;
   hero.flash = 0.18;
   sim.waveHit = true;
   sim.trauma = Math.min(1, sim.trauma + 0.22);
   if (hero.hp <= 0) loseLife(sim);
   return true;
+}
+
+/** Continuous chip damage (spikes): no shake spam. */
+function chipHero(sim: Sim, dmg: number) {
+  const hero = sim.cars[0];
+  if (hero.invuln > 0 || sim.up.shieldT > 0 || sim.phase !== "playing") return;
+  hero.hp -= dmg;
+  hero.flash = 0.12;
+  sim.waveHit = true;
+  sim.trauma = Math.min(0.5, sim.trauma + dmg * 0.02);
+  if (hero.hp <= 0) loseLife(sim);
 }
 
 function killAI(sim: Sim, car: Car, fell = false) {
@@ -436,9 +537,16 @@ function killAI(sim: Sim, car: Car, fell = false) {
   sim.score += pts;
   sim.events.push({ t: "boom", x: bx, y: Math.max(0.6, by), z: bz });
   sim.events.push({ t: "down" });
-  toast(sim, fell ? `Lost to the void  +${pts}` : `${car.kind === "gunner" ? "Gunner" : "Rammer"} down  +${pts}`, true);
-  sim.hitstop = 0.07;
-  sim.trauma = Math.min(1, sim.trauma + 0.45);
+  const name = car.kind === "hero" ? "" : ENEMY[car.kind].name;
+  toast(sim, fell ? `Lost to the void  +${pts}` : `${name} down  +${pts}`, true);
+  sim.hitstop = car.kind === "boss" ? 0.25 : 0.07;
+  sim.trauma = Math.min(1, sim.trauma + (car.kind === "boss" ? 1 : 0.45));
+  if (!fell && car.kind === "boss") {
+    for (const [k, off] of [["gun", -3], ["armor", 0], ["rockets", 3]] as [PickupKind, number][]) {
+      const { rx, rz } = fxDir(car.yaw);
+      dropAt(sim, bx + rx * off, by, bz + rz * off, car.along, k);
+    }
+  } else if (!fell && Math.random() < 0.25) dropAt(sim, bx, by, bz, car.along, null);
 }
 
 function fireShot(sim: Sim, car: Car) {
@@ -471,7 +579,7 @@ function fireShot(sim: Sim, car: Car) {
 }
 
 
-function enemyShot(sim: Sim, car: Car) {
+function enemyShot(sim: Sim, car: Car, fan = 0) {
   const slot = sim.shots.find((s) => !s.alive);
   if (!slot) return;
   const hero = sim.cars[0];
@@ -479,21 +587,24 @@ function enemyShot(sim: Sim, car: Car) {
   const lead = 0.25;
   const dx = hero.x + hf.fx * hero.speed * lead - car.x;
   const dz = hero.z + hf.fz * hero.speed * lead - car.z;
-  const aim = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * 0.12;
+  const aim = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * 0.12 + fan;
   const { fx: dirx, fz: dirz } = fxDir(aim);
   const cf = fxDir(car.yaw);
   slot.alive = true;
   slot.owner = car.id;
   slot.x = car.x + dirx * 1.6;
-  slot.y = car.y + 1.05;
+  slot.y = car.y + (car.kind === "boss" ? 2.2 : car.kind === "drone" ? -0.2 : 1.05);
   slot.z = car.z + dirz * 1.6;
   slot.px = slot.x;
   slot.py = slot.y;
   slot.pz = slot.z;
   slot.vx = dirx * 78 + cf.fx * car.speed;
-  slot.vy = (hero.y + 0.7 - slot.y) * 1.2;
+  slot.vy = (hero.y + 0.7 - slot.y) / Math.max(0.15, Math.hypot(dx, dz) / 78);
   slot.vz = dirz * 78 + cf.fz * car.speed;
   slot.life = 0.9;
+  slot.dmg = 6;
+  slot.rocket = false;
+  slot.target = -1;
   sim.events.push({ t: "eshot" });
 }
 
@@ -654,12 +765,35 @@ function gameOver(sim: Sim) {
   toast(sim, "Wrecked for good", true);
 }
 
-export function waveRoster(n: number): Exclude<Kind, "hero">[] {
-  const count = 2 + n;
-  const gunners = Math.max(1, Math.floor(count / 3));
-  const out: Exclude<Kind, "hero">[] = [];
-  for (let i = 0; i < count; i++) out.push(i % 3 === 2 && out.filter((k) => k === "gunner").length < gunners ? "gunner" : "rammer");
-  while (out.filter((k) => k === "gunner").length < gunners) out[out.lastIndexOf("rammer")] = "gunner";
+// ---------------------------------------------------------------- waves
+
+type EnemyKind = Exclude<Kind, "hero">;
+
+export function waveRoster(n: number): EnemyKind[] {
+  if (n % 5 === 0) {
+    const r: EnemyKind[] = ["boss", "rammer", "rammer"];
+    if (n >= 10) r.push("drone", "gunner");
+    return r;
+  }
+  const specials: EnemyKind[] = [];
+  const count0 = 2 + n;
+  const gunners = Math.max(1, Math.floor(count0 / 3));
+  const layers = n >= 2 ? 1 + Math.floor((n - 2) / 4) : 0;
+  const spikers = n >= 3 ? 1 + Math.floor((n - 3) / 4) : 0;
+  const drones = n >= 6 ? 1 + Math.floor((n - 6) / 3) : 0;
+  for (let i = 0; i < gunners; i++) specials.push("gunner");
+  for (let i = 0; i < layers; i++) specials.push("mine");
+  for (let i = 0; i < spikers; i++) specials.push("spiker");
+  for (let i = 0; i < drones; i++) specials.push("drone");
+  const count = Math.max(count0, specials.length + 1);
+  const out: EnemyKind[] = [];
+  let si = 0;
+  for (let i = 0; i < count; i++) {
+    const rammersLeft = count - specials.length - out.filter((k) => k === "rammer").length;
+    const wantSpecial = si < specials.length && (i % 2 === 1 || rammersLeft <= 0);
+    out.push(wantSpecial ? specials[si++] : "rammer");
+  }
+  while (si < specials.length) out.push(specials[si++]);
   return out;
 }
 
@@ -668,7 +802,10 @@ function startWave(sim: Sim, n: number) {
   sim.queue = waveRoster(n);
   sim.spawnCd = 0.3;
   sim.waveHit = false;
-  toast(sim, `Wave ${n}`, true);
+  if (n % 5 === 0) {
+    toast(sim, `Wave ${n} — Armored Hauler`, true);
+    sim.events.push({ t: "boss" });
+  } else toast(sim, `Wave ${n}`, true);
 }
 
 function aliveEnemies(sim: Sim) {
@@ -682,33 +819,46 @@ function spawnPointOk(sim: Sim, s: number) {
   return !p.gap && !gapAhead(sim.track, s - 30, 60);
 }
 
-function spawnEnemy(sim: Sim, kind: Exclude<Kind, "hero">) {
+function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
   const car = sim.cars.find((c, i) => i > 0 && !c.alive);
-  if (!car) return false;
+  if (!car) return null;
   const hero = sim.cars[0];
   sim.spawnFlip += 1;
-  const order = sim.spawnFlip % 2 === 0 || hero.speed < 15 ? [-58, 95] : [95, -58];
   let s = -1;
-  for (const off of order) {
-    if (hero.along + off >= sim.track.first * 2 + 4 && spawnPointOk(sim, hero.along + off)) {
-      s = hero.along + off;
-      break;
+  if (at != null) s = hero.along + at;
+  else {
+    const ahead = kind === "boss" || kind === "mine";
+    const order = ahead && hero.speed > 15 ? [95, -58] : sim.spawnFlip % 2 === 0 || hero.speed < 15 ? [-58, 95] : [95, -58];
+    for (const off of order) {
+      if (hero.along + off >= sim.track.first * 2 + 4 && spawnPointOk(sim, hero.along + off)) {
+        s = hero.along + off;
+        break;
+      }
     }
   }
-  if (s < sim.track.first * 2 + 4) return false;
+  if (s < sim.track.first * 2 + 4) return null;
   const st = ENEMY[kind];
   car.kind = kind;
-  car.lane = LANES[Math.floor(Math.random() * LANES.length)];
+  car.lane = lane ?? (kind === "boss" ? 0 : LANES[Math.floor(Math.random() * LANES.length)]);
   place(sim, car, s, s > hero.along ? Math.max(18, hero.speed * 0.6) : Math.max(30, hero.speed + 6));
-  car.hp = car.maxHp = st.hp;
+  car.hp = car.maxHp = st.hp + (kind === "boss" ? 150 * (Math.max(1, Math.floor(sim.wave / 5)) - 1) : 0);
   car.recover = 0.2;
   car.flash = 0.3;
   car.fireCd = 1.0;
   car.burst = 0;
   car.ramCd = 0.6;
-  car.hold = kind === "gunner" ? (s > hero.along ? 24 : -22) : s > hero.along ? 1 : -1;
+  car.dropCd = 1.5;
+  car.spikeT = 0;
+  car.weaveT = kind === "spiker" ? 0 : 3;
+  car.baseSpeed = hero.speed;
+  car.leaving = false;
+  car.hold = kind === "gunner" ? (s > hero.along ? 24 : -22) : kind === "drone" ? 18 : kind === "boss" ? 28 : kind === "mine" ? 30 : s > hero.along ? 1 : -1;
   car.holdT = 6 + Math.random() * 4;
-  return true;
+  if (kind === "drone") {
+    car.y += DRONE_ALT;
+    car.grounded = false;
+  }
+  return car;
 }
 
 function stepWaves(sim: Sim, dt: number) {
@@ -732,9 +882,265 @@ function stepWaves(sim: Sim, dt: number) {
     sim.score += bonus;
     sim.events.push({ t: "wave" });
     toast(sim, sim.waveHit ? `Wave ${sim.wave} cleared  +${bonus}` : `Clean wave ${sim.wave}  +${bonus}`, true);
+    const hero = sim.cars[0];
+    spawnPickup(sim, null, hero.along + 70, LANES[Math.floor(Math.random() * 4)], false);
     sim.lull = 3;
   }
 }
+
+// ---------------------------------------------------------------- pickups
+
+export const PICKUP_LABEL: Record<PickupKind, string> = {
+  repair: "Repair +35",
+  armor: "Armor plate +25",
+  gun: "Gun upgrade",
+  rockets: "Homing rockets ×6",
+  minepack: "Mine pack",
+  oil: "Oil slick",
+  nitro: "Nitro cell",
+  shield: "Shield",
+  magnet: "Magnet",
+};
+
+const PICKUP_WEIGHT: [PickupKind, number][] = [
+  ["repair", 22],
+  ["armor", 12],
+  ["gun", 14],
+  ["rockets", 12],
+  ["minepack", 8],
+  ["oil", 8],
+  ["nitro", 10],
+  ["shield", 8],
+  ["magnet", 6],
+];
+
+function rollPickup(sim: Sim): PickupKind {
+  const pool = PICKUP_WEIGHT.filter(([k]) => !(k === "gun" && sim.up.gun >= 3) && !(k === "armor" && sim.up.armor >= 100));
+  let total = 0;
+  for (const [, w] of pool) total += w;
+  let r = Math.random() * total;
+  for (const [k, w] of pool) {
+    r -= w;
+    if (r <= 0) return k;
+  }
+  return "repair";
+}
+
+export function spawnPickup(sim: Sim, kind: PickupKind | null, along: number, lat: number, crate: boolean) {
+  const slot = sim.pickups.find((p) => !p.alive);
+  if (!slot) return null;
+  const p = poseAt(sim.track, along);
+  if (p.gap) return null;
+  slot.alive = true;
+  slot.kind = kind ?? rollPickup(sim);
+  slot.crate = crate;
+  slot.x = p.x + p.rx * lat;
+  slot.z = p.z + p.rz * lat;
+  slot.y = p.y + (crate ? 0.55 : 0.9);
+  slot.along = p.s;
+  slot.life = crate ? 60 : 22;
+  return slot;
+}
+
+function dropAt(sim: Sim, x: number, y: number, z: number, along: number, kind: PickupKind | null) {
+  const slot = sim.pickups.find((p) => !p.alive);
+  if (!slot) return;
+  const q = queryTrack(sim.track, x, z, along);
+  if (q.gap) return;
+  slot.alive = true;
+  slot.kind = kind ?? rollPickup(sim);
+  slot.crate = false;
+  slot.x = x;
+  slot.z = z;
+  slot.y = Math.max(q.y + 0.9, Math.min(y, q.y + 0.9));
+  slot.along = q.s;
+  slot.life = 22;
+}
+
+export function applyPickup(sim: Sim, kind: PickupKind) {
+  const hero = sim.cars[0];
+  const u = sim.up;
+  if (kind === "repair") hero.hp = Math.min(hero.maxHp, hero.hp + 35);
+  else if (kind === "armor") {
+    if (u.armor < 100) {
+      u.armor += 25;
+      hero.maxHp = 100 + u.armor;
+      hero.hp += 25;
+    } else hero.hp = Math.min(hero.maxHp, hero.hp + 25);
+  } else if (kind === "gun") {
+    if (u.gun < 3) u.gun += 1;
+    else sim.score += 200;
+  } else if (kind === "rockets") u.rockets = Math.min(12, u.rockets + 6);
+  else if (kind === "minepack") {
+    u.reserve = 4;
+    u.cluster = true;
+    hero.mines = 4;
+  } else if (kind === "oil") u.oilT = 20;
+  else if (kind === "nitro") {
+    hero.maxFuel = Math.min(160, hero.maxFuel + 20);
+    hero.fuel = hero.maxFuel;
+  } else if (kind === "shield") u.shieldT = 6;
+  else if (kind === "magnet") u.magnetT = 15;
+  sim.score += 25;
+  sim.events.push({ t: "pickup", kind });
+  const label = kind === "gun" ? GUN_NAMES[u.gun] : PICKUP_LABEL[kind];
+  toast(sim, label, true);
+}
+
+export const GUN_NAMES = ["Machine gun", "Twin MG", "Heavy MG", "Spread gun"];
+
+function openCrate(sim: Sim, p: Pickup) {
+  p.crate = false;
+  p.y += 0.35;
+  p.life = 22;
+  sim.events.push({ t: "hit", x: p.x, y: p.y, z: p.z, big: true });
+  sim.score += 20;
+}
+
+function stepPickups(sim: Sim, dt: number) {
+  const hero = sim.cars[0];
+  if (hero.along + 160 > sim.nextCrate) {
+    const s = sim.nextCrate;
+    sim.nextCrate += 380 + Math.random() * 260;
+    if (spawnPointOk(sim, s)) spawnPickup(sim, null, s, LANES[Math.floor(Math.random() * 4)], true);
+  }
+  for (const p of sim.pickups) {
+    if (!p.alive) continue;
+    p.life -= dt;
+    if (p.life <= 0 || p.along < hero.along - 40) {
+      p.alive = false;
+      continue;
+    }
+    const dx = hero.x - p.x;
+    const dy = hero.y + 0.6 - p.y;
+    const dz = hero.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (!p.crate && sim.up.magnetT > 0 && d < 35 && d > 0.01) {
+      const pull = Math.min(d, 34 * dt);
+      p.x += (dx / d) * pull;
+      p.z += (dz / d) * pull;
+      p.y += dy * Math.min(1, 4 * dt);
+      p.along = queryTrack(sim.track, p.x, p.z, p.along).s;
+    }
+    if (!hero.alive || Math.abs(dy) > 2.6) continue;
+    if (p.crate && d < 2.6) {
+      openCrate(sim, p);
+      damageHero(sim, 4);
+    } else if (!p.crate && d < 2.9) {
+      p.alive = false;
+      applyPickup(sim, p.kind);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- player weapons
+
+/** Gun tiers act on the shot v0.1's fireShot() just produced (tier 0 is exactly v0.1). */
+function upgradeFreshShots(sim: Sim) {
+  const hero = sim.cars[0];
+  const tier = sim.up.gun;
+  for (const s of sim.shots) {
+    if (!s.alive || s.owner !== 0 || s.rocket || s.life !== 0.72) continue;
+    s.life = 0.7199999; // processed
+    s.dmg = tier >= 2 ? 24 : 16;
+    s.target = -1;
+    aimAssist(sim, s);
+    if (tier < 1) continue;
+    const { rx, rz } = fxDir(hero.yaw);
+    const extra: [number, number, number][] = [[0.42, 0, s.dmg]];
+    if (tier >= 3) extra.push([0, 0.12, 16], [0, -0.12, 16]);
+    s.x -= rx * 0.42;
+    s.z -= rz * 0.42;
+    s.px = s.x;
+    s.pz = s.z;
+    for (const [side, ang, dmg] of extra) {
+      const c = sim.shots.find((o) => !o.alive);
+      if (!c) break;
+      Object.assign(c, s);
+      c.dmg = dmg;
+      c.x = s.x + rx * (side * 2 + (ang ? 0.42 : 0));
+      c.z = s.z + rz * (side * 2 + (ang ? 0.42 : 0));
+      c.px = c.x;
+      c.pz = c.z;
+      if (ang) {
+        const cos = Math.cos(ang);
+        const sin = Math.sin(ang);
+        c.vx = s.vx * cos + s.vz * sin;
+        c.vz = -s.vx * sin + s.vz * cos;
+      }
+    }
+  }
+}
+
+function freshHeroMines(sim: Sim) {
+  const hero = sim.cars[0];
+  for (const m of sim.mines) {
+    if (!m.alive || m.arm !== 0.38 || m.life !== 9) continue;
+    m.life = 8.9999;
+    m.owner = 0;
+    m.oil = sim.up.oilT > 0;
+    if (m.oil) m.life = 7;
+    if (sim.up.reserve > 0) {
+      sim.up.reserve -= 1;
+      hero.mines += 1;
+    }
+    if (sim.up.cluster) {
+      const { rx, rz } = fxDir(hero.yaw);
+      for (const side of [-2.4, 2.4]) {
+        const c = sim.mines.find((o) => !o.alive);
+        if (!c) break;
+        Object.assign(c, m);
+        c.x = m.x + rx * side;
+        c.z = m.z + rz * side;
+      }
+    }
+  }
+}
+
+function nearestTarget(sim: Sim, x: number, z: number, yaw: number, cone: number, range: number) {
+  const { fx, fz } = fxDir(yaw);
+  let best: Car | null = null;
+  let bestD = range;
+  for (const c of sim.cars) {
+    if (c.hero || !c.alive) continue;
+    const dx = c.x - x;
+    const dz = c.z - z;
+    const d = Math.hypot(dx, dz);
+    if (d < 2 || d > bestD) continue;
+    if ((dx * fx + dz * fz) / d < Math.cos(cone)) continue;
+    best = c;
+    bestD = d;
+  }
+  return best;
+}
+
+function fireRocket(sim: Sim, hero: Car) {
+  const slot = sim.shots.find((s) => !s.alive);
+  if (!slot) return;
+  const { fx, fz } = fxDir(hero.yaw);
+  const target = nearestTarget(sim, hero.x, hero.z, hero.yaw, 0.9, 140);
+  slot.alive = true;
+  slot.owner = 0;
+  slot.rocket = true;
+  slot.target = target ? target.id : -1;
+  slot.dmg = 45;
+  slot.x = hero.x + fx * 1.4;
+  slot.y = hero.y + 1.1;
+  slot.z = hero.z + fz * 1.4;
+  slot.px = slot.x;
+  slot.py = slot.y;
+  slot.pz = slot.z;
+  const spd = 58 + Math.max(0, hero.speed);
+  slot.vx = fx * spd;
+  slot.vy = 3;
+  slot.vz = fz * spd;
+  slot.life = 2.4;
+  sim.up.rockets -= 1;
+  sim.up.rocketCd = 0.42;
+  sim.events.push({ t: "rocket" });
+}
+
+// ---------------------------------------------------------------- enemies
 
 function lateralOf(sim: Sim, car: Car) {
   return queryTrack(sim.track, car.x, car.z, car.along).lateral;
@@ -746,7 +1152,9 @@ function aiInput(sim: Sim, car: Car): Input {
   const dS = car.along - hero.along;
   let wantLat = car.lane;
   let hold = car.hold;
-  if (car.kind === "rammer") {
+  if (car.leaving) {
+    hold = 400;
+  } else if (car.kind === "rammer") {
     // line up in your lane 14-16 m out (in front: in your guns; behind: over your mines), then charge
     const side = car.hold >= 0 && sim.idleT < 1.5 ? 1 : -1;
     if (car.ramCd > 0) hold = side * 16;
@@ -755,10 +1163,24 @@ function aiInput(sim: Sim, car: Car): Input {
       const lined = Math.abs(lateralOf(sim, car) - heroLat) < 2.5 || (sim.idleT > 1.5 && dS <= 2);
       hold = lined ? 0 : side * 14;
     }
-  } else {
+  } else if (car.kind === "gunner") {
     const side = heroLat + 6 <= 9.5 ? 1 : -1;
     wantLat = clamp(heroLat + side * 6 * (car.id % 2 === 0 ? 1 : -1), -9.5, 9.5);
     if (Math.abs(wantLat - heroLat) < 4) wantLat = clamp(heroLat - side * 6, -9.5, 9.5);
+  } else if (car.kind === "spiker") {
+    if (car.ramCd > 0) {
+      // after a grind it peels out in front of you for a few seconds (your window to shoot it)
+      wantLat = heroLat;
+      hold = 16;
+    } else {
+      const myLat = lateralOf(sim, car);
+      const side = myLat >= heroLat ? 1 : -1;
+      wantLat = clamp(heroLat + side * 2.7, -9.8, 9.8);
+      if (Math.abs(wantLat - heroLat) < 2) wantLat = clamp(heroLat - side * 2.7, -9.8, 9.8);
+      hold = sim.idleT > 1.5 ? -3 : 0;
+    }
+  } else if (car.kind === "boss") {
+    wantLat = Math.floor(sim.time / 5) % 2 === 0 ? 4.5 : -4.5;
   }
   const look = 9 + Math.min(20, Math.abs(car.speed) * 0.32);
   const ahead = poseAt(sim.track, car.along + look);
@@ -771,44 +1193,113 @@ function aiInput(sim: Sim, car: Car): Input {
   const diff = wrapAngle(desired - car.yaw);
   const steer = clamp(diff / 0.42, -1, 1);
   const err = hero.along + hold - car.along;
-  let target = clamp(hero.speed + clamp(err * 0.7, -16, 16), 0, 48);
+  car.baseSpeed += (hero.speed - car.baseSpeed) * Math.min(1, (car.kind === "spiker" ? 0.7 : 6) * (1 / 60));
+  const refSpeed = car.kind === "spiker" ? car.baseSpeed : hero.speed;
+  let target = clamp(refSpeed + clamp(err * (car.kind === "spiker" && err < 0 ? 0.35 : 0.7), -16, 16), 0, 48);
   if (car.kind === "rammer" && car.ramCd <= 0 && hold === 0 && Math.abs(dS) < 20) target = Math.max(target, hero.speed + 9);
+  if (car.kind === "boss") target = Math.min(target, 44);
   let throttle = 0.15;
   if (car.speed < target - 1) throttle = 1;
   else if (car.speed > target + 3) throttle = -0.5;
-  if (err < -8 && hero.speed < 6) throttle = car.speed > 0.5 ? -0.5 : 0; // player stopped behind us: pull up and wait
+  if (!car.leaving && err < -8 && hero.speed < 6) throttle = car.speed > 0.5 ? -0.5 : 0; // player stopped behind us: pull up
   const q = queryTrack(sim.track, car.x, car.z, car.along);
   const thrust = gapAhead(sim.track, car.along, 26) || q.gap || (!car.grounded && car.y < q.y + 2);
   return { steer, throttle, fire: false, mine: false, thrust };
 }
 
+function enemyMine(sim: Sim, car: Car) {
+  const slot = sim.mines.find((m) => !m.alive);
+  if (!slot) return;
+  const { fx, fz } = fxDir(car.yaw);
+  const back = car.kind === "boss" ? 6.5 : 3.8;
+  const q = queryTrack(sim.track, car.x - fx * back, car.z - fz * back, car.along);
+  if (q.gap) return;
+  slot.alive = true;
+  slot.owner = car.id;
+  slot.oil = false;
+  slot.x = car.x - fx * back;
+  slot.z = car.z - fz * back;
+  slot.y = q.y + 0.15;
+  slot.life = 12;
+  slot.arm = 0.6;
+  sim.events.push({ t: "emine" });
+}
+
+/** Out of the fight, or the player has parked: peel off forward into the fog, then re-enter from behind (never pops in view). */
+function recycleIfNeeded(sim: Sim, car: Car) {
+  const hero = sim.cars[0];
+  const dS = car.along - hero.along;
+  if (sim.idleT > 4 && dS > 8) car.leaving = true;
+  if (sim.idleT === 0 && car.leaving && dS < OUT_OF_VIEW) car.leaving = false;
+  const gone = dS < -170 || dS > 320 || (car.leaving && dS > OUT_OF_VIEW);
+  if (!gone) return false;
+  for (const off of [-60, -80, -100, -45, -125]) {
+    const s = hero.along + off;
+    if (s > sim.track.first * 2 + 4 && spawnPointOk(sim, s)) {
+      place(sim, car, s, hero.speed + 6);
+      if (car.kind === "drone") car.y += DRONE_ALT;
+      car.leaving = false;
+      if (car.kind === "rammer") car.hold = -1;
+      sim.recycled += 1;
+      break;
+    }
+  }
+  return true;
+}
+
+function stepDrone(sim: Sim, car: Car, dt: number) {
+  const hero = sim.cars[0];
+  car.holdT -= dt;
+  if (car.holdT <= 0) {
+    car.hold = car.hold > 0 ? -16 : 18;
+    car.holdT = 6 + Math.random() * 3;
+  }
+  const hold = car.leaving ? 400 : car.hold;
+  const err = hero.along + hold - car.along;
+  car.speed = clamp(hero.speed + clamp(err * 1.4, -22, 22), -10, 70);
+  car.along += car.speed * dt;
+  const heroLat = lateralOf(sim, hero);
+  const wantLat = clamp(heroLat + Math.sin(sim.time * 0.9 + car.id) * 6, -10, 10);
+  car.lane += clamp(wantLat - car.lane, -7 * dt, 7 * dt);
+  const p = poseAt(sim.track, car.along);
+  car.x = p.x + p.rx * car.lane;
+  car.z = p.z + p.rz * car.lane;
+  car.y = p.y + DRONE_ALT + Math.sin(sim.time * 2.1 + car.id) * 0.5;
+  car.yaw = yawFromDir(p.tx, p.tz);
+  car.lastAlong = car.along;
+  car.flash = Math.max(0, car.flash - dt);
+  car.fireCd = Math.max(0, car.fireCd - dt);
+  if (car.fireCd <= 0 && hero.alive && !car.leaving) {
+    const dist = Math.hypot(hero.x - car.x, hero.z - car.z);
+    if (dist < 45) {
+      enemyShot(sim, car);
+      car.fireCd = 1.6;
+    }
+  }
+}
+
 function stepEnemy(sim: Sim, car: Car, dt: number) {
   const hero = sim.cars[0];
   car.ramCd = Math.max(0, car.ramCd - dt);
+  car.dropCd = Math.max(0, car.dropCd - dt);
+  if (recycleIfNeeded(sim, car)) return;
+  if (car.kind === "drone") {
+    stepDrone(sim, car, dt);
+    return;
+  }
   drive(sim, car, aiInput(sim, car), dt, true);
   if (!car.alive) return;
   // Catch-up assist (enemies only; never applied to the player): drive() caps cars at
   // 48 m/s, so an enemy behind its hold point gets a little extra forward travel.
-  const err = hero.along + car.hold - car.along;
-  if (err > 6 && car.recover <= 0 && car.spin <= 0) {
+  const err = hero.along + (car.leaving ? 400 : car.hold) - car.along;
+  if (err > (car.kind === "spiker" ? 1.5 : 6) && car.recover <= 0 && car.spin <= 0) {
     const { fx, fz } = fxDir(car.yaw);
-    const extra = Math.min(16, err * 0.5) * dt;
+    const extra = Math.min(16, err * (car.kind === "spiker" ? 1.2 : 0.5)) * dt;
     car.x += fx * extra;
     car.z += fz * extra;
   }
+  if (car.leaving) return;
   const dS = car.along - hero.along;
-  if (dS < -170 || dS > 320 || (sim.idleT > 4 && dS > 8)) {
-    // out of the fight (or the player parked behind it): bring it back in behind the player
-    for (const off of [-60, -80, -100, -45, -125]) {
-      const s = hero.along + off;
-      if (s > sim.track.first * 2 + 4 && spawnPointOk(sim, s)) {
-        place(sim, car, s, hero.speed + 6);
-        car.hold = -Math.abs(car.hold) || -1;
-        break;
-      }
-    }
-    return;
-  }
   if (car.kind === "gunner") {
     car.holdT -= dt;
     if (car.holdT <= 0) {
@@ -830,11 +1321,55 @@ function stepEnemy(sim: Sim, car: Car, dt: number) {
         car.burstCd = 0;
       }
     }
+  } else if (car.kind === "mine") {
+    car.weaveT -= dt;
+    if (car.weaveT <= 0) {
+      car.lane = LANES[Math.floor(Math.random() * LANES.length)];
+      car.weaveT = 2.5 + Math.random() * 1.5;
+    }
+    if (car.dropCd <= 0 && dS > 6 && dS < 70) {
+      enemyMine(sim, car);
+      car.dropCd = 2.5;
+    }
+  } else if (car.kind === "spiker") {
+    const latGap = Math.abs(lateralOf(sim, car) - lateralOf(sim, hero));
+    if (car.ramCd <= 0 && Math.abs(dS) < 3.6 && latGap < 3.1 && Math.abs(hero.y - car.y) < 1.6 && hero.alive) {
+      car.spikeT -= dt;
+      car.weaveT -= dt;
+      if (car.weaveT <= -1.6) {
+        car.weaveT = 0;
+        car.ramCd = 3.2;
+      }
+      chipHero(sim, 12 * dt);
+      hero.speed *= 1 - 0.45 * dt;
+      if (car.spikeT <= 0) {
+        car.spikeT = 0.2;
+        sim.events.push({ t: "hit", x: (hero.x + car.x) / 2, y: hero.y + 0.5, z: (hero.z + car.z) / 2, big: false });
+        sim.events.push({ t: "scrape" });
+      }
+    }
+  } else if (car.kind === "boss") {
+    if (car.burst > 0) {
+      car.burstCd -= dt;
+      if (car.burstCd <= 0) {
+        enemyShot(sim, car, (car.burst - 3) * 0.12);
+        car.burst -= 1;
+        car.burstCd = 0.09;
+        if (car.burst === 0) car.fireCd = 2.4;
+      }
+    } else if (car.fireCd <= 0 && dS > 4 && dS < 55 && hero.alive) {
+      car.burst = 5;
+      car.burstCd = 0;
+    }
+    if (car.dropCd <= 0 && dS > 6 && dS < 60) {
+      enemyMine(sim, car);
+      car.dropCd = 3.5;
+    }
   }
 }
 
 function separate(sim: Sim) {
-  const cars = sim.cars.filter((c) => c.alive);
+  const cars = sim.cars.filter((c) => c.alive && c.kind !== "drone");
   for (let i = 0; i < cars.length; i++) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i];
@@ -842,7 +1377,7 @@ function separate(sim: Sim) {
       let dx = b.x - a.x;
       let dz = b.z - a.z;
       let d = Math.hypot(dx, dz);
-      const min = 2.15;
+      const min = a.kind === "boss" || b.kind === "boss" ? 3.7 : 2.15;
       if (d < 0.0001) {
         dx = 0.01;
         dz = 0;
@@ -852,10 +1387,11 @@ function separate(sim: Sim) {
         const push = (min - d) * 0.5;
         const nx = dx / d;
         const nz = dz / d;
-        a.x -= nx * push;
-        a.z -= nz * push;
-        b.x += nx * push;
-        b.z += nz * push;
+        const wa = b.kind === "boss" ? 1.8 : a.kind === "boss" ? 0.2 : 1;
+        a.x -= nx * push * wa;
+        a.z -= nz * push * wa;
+        b.x += nx * push * (2 - wa);
+        b.z += nz * push * (2 - wa);
         if (a.speed > b.speed) b.speed *= 0.98;
         else a.speed *= 0.98;
         if (a.hero && !b.hero && b.ramCd <= 0) ram(sim, a, b);
@@ -866,16 +1402,22 @@ function separate(sim: Sim) {
 
 function ram(sim: Sim, hero: Car, enemy: Car) {
   if (enemy.kind === "hero") return;
-  enemy.ramCd = 2.6;
+  enemy.ramCd = enemy.kind === "boss" ? 1.4 : 2.6;
   const { rx, rz } = fxDir(hero.yaw);
   const side = Math.sign((hero.x - enemy.x) * rx + (hero.z - enemy.z) * rz) || 1;
   const x = (hero.x + enemy.x) / 2;
   const z = (hero.z + enemy.z) / 2;
   sim.events.push({ t: "hit", x, y: hero.y + 0.6, z, big: true });
   if (damageHero(sim, ENEMY[enemy.kind].ram)) hero.lat += side * 7;
-  enemy.hp -= 6;
-  enemy.flash = 0.2;
-  if (enemy.hp <= 0) killAI(sim, enemy);
+  if (enemy.kind !== "boss") hurtEnemy(sim, enemy, 6, false);
+}
+
+function hurtEnemy(sim: Sim, car: Car, dmg: number, rear: boolean) {
+  car.hp -= dmg;
+  car.flash = 0.18;
+  if (car.kind !== "boss" && car.kind !== "drone") car.speed *= 0.86;
+  if (rear && sim.toastT < 1.4) toast(sim, "Weak point ×2");
+  if (car.hp <= 0) killAI(sim, car);
 }
 
 /** Light aim assist: a fresh player shot bends toward an enemy inside a narrow cone ahead. */
@@ -905,10 +1447,28 @@ function aimAssist(sim: Sim, s: Shot) {
   s.vz = (dz / d) * sp;
 }
 
+function homing(sim: Sim, s: Shot, dt: number) {
+  let t = s.target >= 0 ? sim.cars[s.target] : null;
+  if (!t || !t.alive) {
+    t = nearestTarget(sim, s.x, s.z, Math.atan2(-s.vx, -s.vz), 0.8, 120);
+    s.target = t ? t.id : -1;
+  }
+  if (!t) return;
+  const sp = Math.hypot(s.vx, s.vy, s.vz) || 1;
+  const dx = t.x - s.x;
+  const dy = t.y + 0.6 - s.y;
+  const dz = t.z - s.z;
+  const d = Math.hypot(dx, dy, dz) || 1;
+  const k = Math.min(1, 5 * dt);
+  s.vx += ((dx / d) * sp - s.vx) * k;
+  s.vy += ((dy / d) * sp - s.vy) * k;
+  s.vz += ((dz / d) * sp - s.vz) * k;
+}
+
 function stepShots(sim: Sim, dt: number) {
   for (const s of sim.shots) {
     if (!s.alive) continue;
-    if (s.owner === 0 && s.life === 0.72) aimAssist(sim, s);
+    if (s.rocket) homing(sim, s, dt);
     s.px = s.x;
     s.py = s.y;
     s.pz = s.z;
@@ -917,34 +1477,58 @@ function stepShots(sim: Sim, dt: number) {
     s.z += s.vz * dt;
     s.life -= dt;
     if (s.life <= 0) {
+      if (s.rocket) sim.events.push({ t: "boom", x: s.x, y: s.y, z: s.z });
       s.alive = false;
+      s.rocket = false;
       continue;
+    }
+    const abx = s.x - s.px;
+    const abz = s.z - s.pz;
+    const ab2 = abx * abx + abz * abz || 1;
+    if (s.owner === 0) {
+      for (const p of sim.pickups) {
+        if (!p.alive || !p.crate || Math.abs(p.y - s.y) > 1.4) continue;
+        const t = clamp(((p.x - s.px) * abx + (p.z - s.pz) * abz) / ab2, 0, 1);
+        const ex = p.x - (s.px + abx * t);
+        const ez = p.z - (s.pz + abz * t);
+        if (ex * ex + ez * ez < 1.2 * 1.2) {
+          openCrate(sim, p);
+          s.alive = false;
+          s.rocket = false;
+          break;
+        }
+      }
+      if (!s.alive) continue;
     }
     for (const car of sim.cars) {
       if (!car.alive || car.id === s.owner) continue;
       if (s.owner !== 0 && !car.hero) continue; // no enemy friendly fire
-      if (Math.abs(car.y + 0.6 - s.y) > 1.6) continue;
-      const abx = s.x - s.px;
-      const abz = s.z - s.pz;
-      const ab2 = abx * abx + abz * abz || 1;
+      const big = car.kind === "boss";
+      if (Math.abs(car.y + (big ? 1.2 : 0.6) - s.y) > (big ? 2.4 : 1.6)) continue;
       let t = ((car.x - s.px) * abx + (car.z - s.pz) * abz) / ab2;
       t = clamp(t, 0, 1);
       const cx = s.px + abx * t;
       const cz = s.pz + abz * t;
       const dx = car.x - cx;
       const dz = car.z - cz;
-      if (dx * dx + dz * dz < 1.7 * 1.7) {
+      const r = big ? 3.0 : 1.7;
+      if (dx * dx + dz * dz < r * r) {
         s.alive = false;
-        sim.events.push({ t: "hit", x: cx, y: s.y, z: cz, big: false });
+        sim.events.push(s.rocket ? { t: "boom", x: cx, y: s.y, z: cz } : { t: "hit", x: cx, y: s.y, z: cz, big: false });
         if (car.hero) {
-          damageHero(sim, 6);
+          damageHero(sim, s.dmg);
         } else {
-          car.hp -= 16;
-          car.flash = 0.18;
-          car.speed *= 0.86;
+          let dmg = s.dmg;
+          let rear = false;
+          if (big) {
+            const { fx, fz } = fxDir(car.yaw);
+            rear = s.vx * fx + s.vz * fz > 0;
+            if (rear) dmg *= 2;
+          }
           sim.score += 10;
-          if (car.hp <= 0) killAI(sim, car);
+          hurtEnemy(sim, car, dmg, rear);
         }
+        s.rocket = false;
         break;
       }
     }
@@ -962,26 +1546,37 @@ function stepMines(sim: Sim, dt: number) {
     }
     if (m.arm > 0) continue;
     for (const car of sim.cars) {
-      if (!car.alive) continue;
+      if (!car.alive || car.kind === "drone") continue;
+      if (m.owner > 0 && !car.hero) continue; // enemy mines only hunt the player
+      if (m.oil && car.hero) continue;
       const dx = car.x - m.x;
       const dz = car.z - m.z;
-      if (dx * dx + dz * dz < 2.55 * 2.55 && Math.abs(car.y - m.y) < 2.4) {
+      const r = m.oil ? 3.0 : car.kind === "boss" ? 3.4 : 2.55;
+      if (dx * dx + dz * dz < r * r && Math.abs(car.y - m.y) < 2.4) {
+        if (m.oil) {
+          if (car.spin <= 0 && car.kind !== "boss") {
+            car.spin = 1.1;
+            car.speed *= 0.5;
+            sim.score += 15;
+          }
+          continue;
+        }
         m.alive = false;
         sim.events.push({ t: "hit", x: m.x, y: m.y, z: m.z, big: true });
         sim.trauma = Math.min(1, sim.trauma + (car.hero ? 0.4 : 0.2));
         if (car.hero) {
-          if (car.invuln > 0) break;
-          car.speed *= 0.25;
-          car.spin = 0.7;
-          toast(sim, "Own mine");
-          damageHero(sim, 28);
+          if (car.invuln > 0 || sim.up.shieldT > 0) break;
+          car.speed *= m.owner > 0 ? 0.5 : 0.25;
+          car.spin = m.owner > 0 ? 0.5 : 0.7;
+          if (m.owner === 0) toast(sim, "Own mine");
+          damageHero(sim, m.owner > 0 ? 22 : 28);
         } else {
-          car.hp -= 28;
-          car.speed *= 0.25;
-          car.spin = 0.7;
-          car.flash = 0.3;
+          if (car.kind !== "boss") {
+            car.speed *= 0.25;
+            car.spin = 0.7;
+          }
           sim.score += 30;
-          if (car.hp <= 0) killAI(sim, car);
+          hurtEnemy(sim, car, 28, false);
         }
         break;
       }
@@ -1006,10 +1601,18 @@ export function step(sim: Sim, dt: number) {
 
   const input = readInput(sim);
   hero.invuln = Math.max(0, hero.invuln - dt);
+  const u = sim.up;
+  u.oilT = Math.max(0, u.oilT - dt);
+  u.shieldT = Math.max(0, u.shieldT - dt);
+  u.magnetT = Math.max(0, u.magnetT - dt);
+  u.rocketCd = Math.max(0, u.rocketCd - dt);
   sim.idleT = Math.abs(hero.speed) < 6 ? sim.idleT + dt : 0;
   if (hero.alive) drive(sim, hero, input, dt, false);
   sim.prevMine = input.mine;
   if (sim.phase !== "playing") return;
+  upgradeFreshShots(sim);
+  freshHeroMines(sim);
+  if (input.fire && u.rockets > 0 && u.rocketCd <= 0 && hero.alive && hero.recover <= 0) fireRocket(sim, hero);
 
   for (let i = 1; i < sim.cars.length; i++) {
     const car = sim.cars[i];
@@ -1018,7 +1621,25 @@ export function step(sim: Sim, dt: number) {
   separate(sim);
   stepShots(sim, dt);
   stepMines(sim, dt);
+  stepPickups(sim, dt);
   if (sim.phase === "playing") stepWaves(sim, dt);
+}
+
+// ---------------------------------------------------------------- debug/test staging (used by ?debug and tests)
+
+export function debugStartWave(sim: Sim, n: number) {
+  for (let i = 1; i < sim.cars.length; i++) {
+    sim.cars[i].alive = false;
+    sim.cars[i].y = -40;
+  }
+  sim.lull = 0;
+  startWave(sim, n);
+}
+
+export function debugSpawn(sim: Sim, kind: EnemyKind, offset: number, lane?: number) {
+  const car = spawnEnemy(sim, kind, offset, lane);
+  if (car) car.speed = sim.cars[0].speed;
+  return car;
 }
 
 export function formatTime(t: number) {

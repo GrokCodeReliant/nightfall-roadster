@@ -555,3 +555,29 @@
   .nf-bottom { top: calc(7.6rem + env(safe-area-inset-top)); }
   .nf-center { top: calc(13.4rem + env(safe-area-inset-top)); }
 }
+
+/* v0.2 M3: active upgrade chips, hung under the meters (absolute: the v0.1 HUD boxes don't move) */
+.nf-chips {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.3rem;
+  pointer-events: none;
+}
+.nf-chips:empty { display: none; }
+.nf-chip {
+  font-family: var(--font-hud);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  border: 1px solid var(--chip, var(--color-border));
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  white-space: nowrap;
+}

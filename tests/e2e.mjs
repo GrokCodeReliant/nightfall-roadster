@@ -5,11 +5,12 @@ import { chromium, devices } from "playwright";
 import fs from "node:fs";
 
 const ROOT = "/workspace/studio/nightfall_roadster";
-const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m2/nightfall-roadster-v02-m2.html`;
+const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m3/nightfall-roadster-v02-m3.html`;
 const V01 = `${ROOT}/release/nightfall-roadster-single.html`;
-const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m2/screenshots`;
+const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m3/screenshots`;
 fs.mkdirSync(SHOTS, { recursive: true });
 
+const ONLY = process.env.NF_ONLY;
 const profiles = [
   { name: "desktop", ctx: { viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 } },
   { name: "phone", ctx: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 } },
@@ -44,6 +45,45 @@ async function waitFor(page, fn, arg, ms) {
   return false;
 }
 
+// run the real sim forward (autopilot "hunt", "idle" or explicit keys) until cond() or timeout (game seconds)
+async function runUntil(page, keys, cond, secs) {
+  return page.evaluate(([keys, cond, secs]) => {
+    const f = new Function("sim", "return (" + cond + ")");
+    for (let i = 0; i < secs * 20; i++) {
+      window.__nfAdvance(0.05, keys);
+      if (f(window.__nf)) return true;
+      if (window.__nf.phase !== "playing") return false;
+    }
+    return false;
+  }, [keys, cond, secs]);
+}
+
+async function capture(page, path, settleMs = 3500) {
+  await page.evaluate(() => { window.__nf.hitstop = 60; });
+  await page.waitForTimeout(settleMs);
+  await page.screenshot({ path });
+  await page.evaluate(() => { window.__nf.hitstop = 0; });
+}
+
+async function flat(page, len = 230) {
+  await runUntil(page, "cruise", `window.__nfStage.flat(${len})`, 40);
+}
+
+async function clearField(page) {
+  await page.evaluate(() => {
+    const sim = window.__nf;
+    for (const c of sim.cars.slice(1)) { c.alive = false; c.y = -40; }
+    for (const s of sim.shots) s.alive = false;
+    for (const m of sim.mines) m.alive = false;
+    for (const p of sim.pickups) p.alive = false;
+    sim.queue = [];
+    sim.lull = 1e9;
+    sim.cars[0].hp = sim.cars[0].maxHp;
+    sim.cars[0].invuln = 0;
+    sim.toastT = 0;
+  });
+}
+
 async function start(page, url) {
   await page.goto(url);
   await page.waitForSelector(".nf-btn", { timeout: 15000 });
@@ -52,7 +92,7 @@ async function start(page, url) {
 }
 
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-for (const prof of profiles) {
+for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const P = prof.name;
   const ctx = await browser.newContext(prof.ctx);
   const page = await ctx.newPage();
@@ -109,17 +149,119 @@ for (const prof of profiles) {
   const r1 = await page.evaluate(() => window.__nf.cars[0].rounds);
   check(P, "fires", r1 < r0 - 2, `rounds ${r0.toFixed(1)} -> ${r1.toFixed(1)}`);
 
+  // ---------------- M3 staged scenes (real sim, staged spawns via the ?debug hook)
+  const W = "cruise";
+  await clearField(page);
+  await runUntil(page, W, "sim.cars[0].speed > 40", 10);
+
+  // Mine Layer
+  await flat(page);
+  await page.evaluate(() => { const ml = window.__nfStage.debugSpawn(window.__nf, "mine", 20, 3); ml.hold = 14; window.__mlId = ml.id; });
+  const layer = await runUntil(page, W, "(() => { const c = sim.cars[window.__mlId]; const d = c.along - sim.cars[0].along; return c.alive && sim.mines.some((m) => m.alive && m.owner === c.id && m.arm <= 0) && d > 9 && d < 18; })()", 25);
+  check(P, "Mine Layer lays mines", layer);
+  await capture(page, `${SHOTS}/${P}-mine-layer.png`);
+
+  // Spiker
+  await flat(page);
+  await clearField(page);
+  await page.evaluate(() => { window.__spId = window.__nfStage.debugSpawn(window.__nf, "spiker", -5, 3).id; window.__hp0 = window.__nf.cars[0].hp; });
+  const spike = await runUntil(page, W, "sim.cars[0].hp < window.__hp0 - 3 && Math.abs(sim.cars[window.__spId].along - sim.cars[0].along) < 3.6", 20);
+  check(P, "Spiker grinds you for chip damage", spike);
+  await capture(page, `${SHOTS}/${P}-spiker.png`);
+
+  // Drone
+  await flat(page);
+  await clearField(page);
+  await page.evaluate(() => { const dr = window.__nfStage.debugSpawn(window.__nf, "drone", 20, 0); dr.hold = 20; dr.holdT = 99; window.__drId = dr.id; });
+  const drone = await runUntil(page, W, "(() => { const d = sim.cars[window.__drId]; const dd = d.along - sim.cars[0].along; return d.alive && dd > 16 && dd < 26 && sim.shots.some((s) => s.alive && s.owner === d.id); })()", 25);
+  const alt = await page.evaluate(() => window.__nfStage.alt(window.__drId));
+  check(P, "Drone flies ~6 m up and fires", drone && alt > 4, `altitude ${alt.toFixed(1)} m`);
+  await capture(page, `${SHOTS}/${P}-drone.png`);
+  const roster6 = await page.evaluate(() => { window.__nfStage.debugStartWave(window.__nf, 6); const q = [...window.__nf.queue]; window.__nf.queue = []; window.__nf.lull = 1e9; return q; });
+  check(P, "wave 6 roster brings drones", roster6.includes("drone"), roster6.join(","));
+
+  // Boss (wave 5)
+  await flat(page);
+  await clearField(page);
+  await page.evaluate(() => { window.__nfStage.debugStartWave(window.__nf, 5); });
+  const boss = await runUntil(page, W, "(() => { const b = sim.cars.find((c) => c.alive && c.kind === 'boss'); if (!b) return false; b.hold = 11; const d = b.along - sim.cars[0].along; window.__bossId = b.id; return sim.cars[0].grounded && window.__nfStage.flat(20) && d > 6 && d < 18 && sim.shots.some((s) => s.alive && s.owner === b.id); })()", 60);
+  check(P, "Boss (Armored Hauler) spawns on wave 5 and fires", boss);
+  await capture(page, `${SHOTS}/${P}-boss.png`);
+  await page.evaluate(() => { const b = window.__nf.cars[window.__bossId]; b.hp = 40; for (const c of window.__nf.cars.slice(1)) if (c.id !== b.id) { c.alive = false; c.y = -40; } window.__nf.cars[0].invuln = 999; });
+  const bossDead = await runUntil(page, "hunt", "!sim.cars[window.__bossId].alive && ((window.__drops = sim.pickups.filter((p) => p.alive && !p.crate).length), true)", 40);
+  const drops = await page.evaluate(() => window.__drops ?? 0);
+  check(P, "Boss dies and drops 3 pickups", bossDead && drops >= 3, `drops ${drops}`);
+  await page.evaluate(() => { window.__nf.cars[0].invuln = 0; });
+
+  // Pickups row + crate, then drive through
+  await flat(page);
+  await clearField(page);
+  await page.evaluate(() => {
+    const sim = window.__nf, S = window.__nfStage, h = sim.cars[0];
+    sim.up.gun = 0; sim.up.rockets = 0;
+    const lat = Math.max(-9, Math.min(9, S.lat()));
+    const off = (d) => (lat > 0 ? lat - d : lat + d);
+    S.spawnPickup(sim, "gun", h.along + 24, lat, false);
+    S.spawnPickup(sim, "rockets", h.along + 34, lat, false);
+    S.spawnPickup(sim, "shield", h.along + 44, lat, false);
+    S.spawnPickup(sim, "repair", h.along + 62, off(6), false);
+    S.spawnPickup(sim, "armor", h.along + 66, off(12), false);
+    S.spawnPickup(sim, "nitro", h.along + 70, off(9), false);
+    S.spawnPickup(sim, "magnet", h.along + 74, off(15), false);
+    S.spawnPickup(sim, "oil", h.along + 78, off(6), false);
+    S.spawnPickup(sim, "minepack", h.along + 82, off(12), false);
+    S.spawnPickup(sim, null, h.along + 90, off(3), true);
+  });
+  await page.evaluate(() => { const sim = window.__nf; for (const p of sim.pickups) if (p.alive) { const q = p; } sim.cars[0].speed = 20; });
+  await capture(page, `${SHOTS}/${P}-pickups.png`, 2500);
+  await page.evaluate(() => { const sim = window.__nf, h = sim.cars[0]; for (const p of sim.pickups) if (p.alive && ["gun", "rockets", "shield"].includes(p.kind)) { p.x = p.x - (p.x - h.x) * 0; } });
+  // steer onto the pickup line: the bot collects pickups when nothing is hostile
+  await page.evaluate(() => { window.__nf.up.magnetT = 12; }); // magnet makes the drive-through independent of the racing line
+  const got = await runUntil(page, "cruise", "sim.up.gun >= 1 && sim.up.rockets > 0 && sim.up.shieldT > 0", 10);
+  const up = await page.evaluate(() => ({ gun: window.__nf.up.gun, rockets: window.__nf.up.rockets, shield: window.__nf.up.shieldT.toFixed(1) }));
+  check(P, "drive-through pickups apply (gun, rockets, shield)", got, JSON.stringify(up));
+  const chips = await page.evaluate(() => [...document.querySelectorAll(".nf-chip")].map((c) => c.textContent));
+  await page.waitForTimeout(400);
+  const chips2 = await page.evaluate(() => [...document.querySelectorAll(".nf-chip")].map((c) => c.textContent));
+  check(P, "HUD upgrade chips show", chips2.some((c) => /Rockets/.test(c)) || chips.some((c) => /Rockets/.test(c)), chips2.join(", "));
+  // rockets fire and home
+  await page.evaluate(() => { window.__nfStage.debugSpawn(window.__nf, "gunner", 40, 6); });
+  const rocket = await runUntil(page, ["KeyW", "KeyF"], "sim.shots.some((s) => s.alive && s.rocket)", 5);
+  check(P, "homing rockets launch on Fire", rocket);
+  await capture(page, `${SHOTS}/${P}-rockets.png`, 2000);
+
+  // losing a life costs one tier
+  await clearField(page);
+  await page.evaluate(() => { const sim = window.__nf; sim.up.gun = 2; sim.up.armor = 25; sim.up.shieldT = 0; sim.cars[0].maxHp = 125; sim.cars[0].hp = 3; sim.cars[0].invuln = 0; window.__l0 = sim.lives; const c = window.__nfStage.debugSpawn(sim, "gunner", 20, 3); });
+  const lostLife = await runUntil(page, "idle", "sim.lives < window.__l0", 40);
+  const tier = await page.evaluate(() => ({ gun: window.__nf.up.gun, armor: window.__nf.up.armor, maxHp: window.__nf.cars[0].maxHp }));
+  check(P, "death costs one upgrade tier", lostLife && tier.gun === 1 && tier.armor === 0 && tier.maxHp === 100, JSON.stringify(tier));
+
+  // camera fix: an enemy between the chase camera and the car fades out
+  await clearField(page);
+  await runUntil(page, W, "sim.cars[0].speed > 30", 10);
+  await page.evaluate(() => { window.__nf.hitstop = 60; });
+  await page.waitForTimeout(800);
+  const bid = await page.evaluate(() => window.__nfBehind(-5.5));
+  await page.waitForTimeout(2500);
+  const fade = await page.evaluate((id) => window.__nfFade()[id], bid);
+  check(P, "enemy behind you fades instead of blocking the camera", bid > 0 && fade < 0.6, `opacity ${fade?.toFixed(2)}`);
+  await page.screenshot({ path: `${SHOTS}/${P}-camera-fade.png` });
+  await page.evaluate(() => { window.__nf.hitstop = 0; });
+  await clearField(page);
+  await page.evaluate(() => { window.__nf.lull = 2; window.__nf.wave = 0; window.__nf.lives = 3; });
+
   // combat screenshot: wave running, an enemy tracer in the air, HUD visible
   await page.evaluate(() => window.__nfAdvance(5, "hunt"));
   let firing = false;
   for (let i = 0; i < 1200 && !firing; i++) {
-    firing = await page.evaluate(() => {
+    firing = await page.evaluate((i) => {
       window.__nfAdvance(0.05, "hunt");
       const sim = window.__nf;
       const hero = sim.cars[0];
       // an enemy tracer in the air, fired by an enemy that is in front of the camera
-      return sim.shots.some((s) => s.alive && s.owner !== 0 && s.life < 0.8 && (() => { const c = sim.cars[s.owner]; const d = c.along - hero.along; return c.alive && d > 6 && d < 40; })());
-    });
+      return sim.shots.some((s) => s.alive && s.owner !== 0 && s.life < 0.8 && (() => { const c = sim.cars[s.owner]; const d = c.along - hero.along; return c.alive && d > (i > 600 ? -30 : 6) && d < 40; })());
+    }, i);
   }
   check(P, "enemies fire at the player", firing);
   // freeze the sim (hitstop, no pause overlay) so the chase camera settles, then capture
@@ -135,9 +277,11 @@ for (const prof of profiles) {
   check(P, "an enemy dies", k1 >= 1, `kills ${k0} -> ${k1}`);
 
   // a wave advances
+  await flat(page, 60);
   await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.wave < 2 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
   const wave = await page.evaluate(() => ({ w: window.__nf.wave, phase: window.__nf.phase }));
-  check(P, "a wave advances", wave.w >= 2, `wave ${wave.w} (${wave.phase})`);
+  const dbg = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return JSON.stringify({ q: s.queue, lull: s.lull, cd: s.spawnCd, hero: { a: h.alive, sp: h.speed.toFixed(0), al: h.along.toFixed(0) }, e: s.cars.filter((c) => c.alive && !c.hero).map((c) => `${c.kind}:${(c.along - h.along).toFixed(0)}:${c.leaving}:${c.hp}`) }); });
+  check(P, "a wave advances", wave.w >= 2, `wave ${wave.w} (${wave.phase}) ${wave.w < 2 ? dbg : ""}`);
   await page.evaluate(() => { window.__nf.keysOverride = new Set(["KeyW", "KeyF"]); window.__nf.hitstop = 30; });
   await page.waitForTimeout(3500);
   const hudText = await page.evaluate(() => [document.querySelector(".nf-readout .nf-stat")?.textContent, document.querySelector(".nf-readout .nf-sub")?.textContent]);

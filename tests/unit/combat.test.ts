@@ -25,10 +25,10 @@ test("road is endless, 24 m wide, and local queries agree with poses", () => {
   }
 });
 
-test("wave roster grows and always has a gunner", () => {
+test("wave roster grows, non-boss waves always have a gunner", () => {
   assert.equal(waveRoster(1).length, 3);
-  assert.equal(waveRoster(5).length, 7);
-  for (let n = 1; n < 10; n++) assert.ok(waveRoster(n).includes("gunner"));
+  assert.equal(waveRoster(4).length, 6);
+  for (let n = 1; n < 12; n++) if (n % 5) assert.ok(waveRoster(n).includes("gunner"), `wave ${n}`);
   assert.equal(ENEMY.rammer.hp, 40);
   assert.equal(ENEMY.gunner.hp, 55);
 });

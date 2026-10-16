@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const dist = "dist";
-const out = process.env.NF_OUT || "/workspace/studio/nightfall_roadster/v02_m2";
+const tag = process.env.NF_TAG || "m3";
+const out = process.env.NF_OUT || `/workspace/studio/nightfall_roadster/v02_${tag}`;
 const folder = out + "/nightfall-roadster";
 fs.rmSync(folder, { recursive: true, force: true });
 fs.mkdirSync(folder + "/assets", { recursive: true });
@@ -24,7 +25,7 @@ const single = html
   .replace(js[0], "")
   .replace(css[0], () => `<style>${cssTxt}</style>`)
   .replace("</body>", () => `<script>${jsTxt}</script>\n</body>`);
-fs.writeFileSync(out + "/nightfall-roadster-v02-m2.html", single);
-fs.rmSync(out + "/nightfall-roadster-v02-m2.zip", { force: true });
-execSync(`cd "${out}" && python3 -c "import shutil,zipfile,os\nz=zipfile.ZipFile('nightfall-roadster-v02-m2.zip','w',zipfile.ZIP_DEFLATED)\nfor r,_,fs in os.walk('nightfall-roadster'):\n  [z.write(os.path.join(r,f)) for f in fs]\nz.write('nightfall-roadster-v02-m2.html')"`);
-console.log("packaged", out, fs.statSync(out + "/nightfall-roadster-v02-m2.html").size);
+fs.writeFileSync(`${out}/nightfall-roadster-v02-${tag}.html`, single);
+fs.rmSync(`${out}/nightfall-roadster-v02-${tag}.zip`, { force: true });
+execSync(`cd "${out}" && python3 -c "import shutil,zipfile,os\nz=zipfile.ZipFile('nightfall-roadster-v02-${tag}.zip','w',zipfile.ZIP_DEFLATED)\nfor r,_,fs in os.walk('nightfall-roadster'):\n  [z.write(os.path.join(r,f)) for f in fs]\nz.write('nightfall-roadster-v02-${tag}.html')"`);
+console.log("packaged", out, fs.statSync(`${out}/nightfall-roadster-v02-${tag}.html`).size);
