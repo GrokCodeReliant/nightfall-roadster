@@ -29,6 +29,10 @@ const KIND_COLOR: Record<Kind, number> = {
   drone: 0x22262e,
   boss: 0x1c1f24,
 };
+export const CAM_BACK = 19;
+export const CAM_UP = 13.5;
+const CAM_LOOK_BACK = 1.5;
+
 const KIND_SCALE: Partial<Record<Kind, [number, number, number]>> = { boss: [1.55, 1.3, 1.9] };
 
 const PICKUP_COLOR: Record<PickupKind, number> = {
@@ -119,6 +123,7 @@ export type World = {
   resize: (w: number, h: number, dpr: number) => void;
   dispose: () => void;
   debugFade: () => number[];
+  project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
 
 const reduceMotion =
@@ -461,6 +466,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   const camera = new THREE.PerspectiveCamera(68, 1, 0.1, 700);
   const camPos = new THREE.Vector3(0, 4, 12);
+  const projA = new THREE.Vector3();
+  const projB = new THREE.Vector3();
   const lookPos = new THREE.Vector3();
   let attract = 0;
 
@@ -796,11 +803,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
       // M2 issue fix: an enemy between the chase camera and the player fades out instead of blocking the view
       if (!car.hero) {
-        const dCam = Math.hypot(car.x - camera.position.x, car.y - camera.position.y, car.z - camera.position.z);
-        const dHero = Math.hypot(car.x - hero.x, car.z - hero.z);
-        const camHero = Math.hypot(hero.x - camera.position.x, hero.z - camera.position.z);
-        const between = dCam < camHero + 1.5 && dHero < camHero + 1;
-        const target = between ? Math.max(0.15, Math.min(0.35, (dCam - 3) / 8)) : 1;
+        // fade only when the enemy actually covers the player's car on screen and is nearer the camera
+        projA.set(car.x, car.y + 0.6, car.z).project(camera);
+        projB.set(hero.x, hero.y + 0.6, hero.z).project(camera);
+        const covers = projA.z < projB.z && Math.abs(projA.x - projB.x) * camera.aspect < 0.22 && Math.abs(projA.y - projB.y) < 0.2;
+        const target = covers ? 0.25 : 1;
         view.fade += (target - view.fade) * Math.min(1, dt * 10);
         const op = view.fade > 0.98 ? 1 : view.fade;
         for (const m of view.mats) {
@@ -831,7 +838,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         if (w.pivot.userData.front) w.pivot.rotation.y = view.steer * 0.28;
         w.spin.rotation.x = view.spin;
       }
-      const thrust = car.thrust;
+      const thrust = car.hero ? car.thrust : 0; // only the Roadster has thrusters
       view.flames.forEach((f, idx) => {
         const len = thrust > 0 ? 0.7 + Math.sin(performance.now() * 0.03 + idx) * 0.15 : 0.02;
         f.scale.set(thrust > 0 ? 1 : 0.15, len, thrust > 0 ? 1 : 0.15);
@@ -959,9 +966,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     } else {
       const fx = -Math.sin(hero.yaw);
       const fz = -Math.cos(hero.yaw);
-      const dist = 9.6 + Math.min(1.1, Math.abs(hero.speed) * 0.018);
-      const desired = new THREE.Vector3(hero.x - fx * dist, hero.y + 3.35, hero.z - fz * dist);
-      const look = new THREE.Vector3(hero.x + fx * 8.5, hero.y + 0.85, hero.z + fz * 8.5);
+      // m3b: pulled back and raised (higher, more overhead, not top-down) so ~14 m behind the car is on screen
+      const dist = CAM_BACK + Math.min(1.5, Math.abs(hero.speed) * 0.025);
+      const desired = new THREE.Vector3(hero.x - fx * dist, hero.y + CAM_UP, hero.z - fz * dist);
+      const look = new THREE.Vector3(hero.x - fx * CAM_LOOK_BACK, hero.y + 0.5, hero.z - fz * CAM_LOOK_BACK);
       camPos.lerp(desired, k);
       lookPos.lerp(look, k);
       const t = performance.now() * 0.001;
@@ -987,7 +995,23 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     hull.dispose();
   }
 
-  return { sync, resize, dispose, debugFade: () => views.map((v) => v.fade) };
+  /** screen position of a car in CSS px (x,y), and whether it is inside the view */
+  function project(sim: Sim, id: number) {
+    const c = sim.cars[id];
+    projA.set(c.x, c.y + 0.6, c.z).project(camera);
+    const w = renderer.domElement.clientWidth || 1;
+    const h = renderer.domElement.clientHeight || 1;
+    const behindCam = projA.z > 1;
+    const on = !behindCam && Math.abs(projA.x) < 0.97 && Math.abs(projA.y) < 0.97;
+    let nx = projA.x;
+    let ny = projA.y;
+    if (behindCam) {
+      nx = -nx;
+      ny = -Math.abs(ny) - 1;
+    }
+    return { x: ((nx + 1) / 2) * w, y: ((1 - ny) / 2) * h, on, w, h };
+  }
+  return { sync, resize, dispose, project, debugFade: () => views.map((v) => v.fade) };
 }
 
 function clamp01(v: number) {

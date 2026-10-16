@@ -5,9 +5,9 @@ import { chromium, devices } from "playwright";
 import fs from "node:fs";
 
 const ROOT = "/workspace/studio/nightfall_roadster";
-const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m3/nightfall-roadster-v02-m3.html`;
+const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m3b/nightfall-roadster-v02-m3b.html`;
 const V01 = `${ROOT}/release/nightfall-roadster-single.html`;
-const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m3/screenshots`;
+const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m3b/screenshots`;
 fs.mkdirSync(SHOTS, { recursive: true });
 
 const ONLY = process.env.NF_ONLY;
@@ -237,17 +237,34 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const tier = await page.evaluate(() => ({ gun: window.__nf.up.gun, armor: window.__nf.up.armor, maxHp: window.__nf.cars[0].maxHp }));
   check(P, "death costs one upgrade tier", lostLife && tier.gun === 1 && tier.armor === 0 && tier.maxHp === 100, JSON.stringify(tier));
 
-  // camera fix: an enemy between the chase camera and the car fades out
+  // m3b camera: an enemy close behind is on screen below the car; an enemy far behind gets an edge chevron that pulses while it fires
   await clearField(page);
-  await runUntil(page, W, "sim.cars[0].speed > 30", 10);
-  await page.evaluate(() => { window.__nf.hitstop = 60; });
-  await page.waitForTimeout(800);
-  const bid = await page.evaluate(() => window.__nfBehind(-5.5));
-  await page.waitForTimeout(2500);
-  const fade = await page.evaluate((id) => window.__nfFade()[id], bid);
-  check(P, "enemy behind you fades instead of blocking the camera", bid > 0 && fade < 0.6, `opacity ${fade?.toFixed(2)}`);
-  await page.screenshot({ path: `${SHOTS}/${P}-camera-fade.png` });
+  await flat(page);
+  await runUntil(page, "cruise", "sim.cars[0].speed > 30", 10);
+  const ids = await page.evaluate(() => {
+    const sim = window.__nf, S = window.__nfStage;
+    const lat = S.lat();
+    const near = S.debugSpawn(sim, "rammer", -10, Math.max(-9, Math.min(9, lat + 3)));
+    near.ramCd = 99; near.hold = -10;
+    const far = S.debugSpawn(sim, "gunner", -45, Math.max(-9, Math.min(9, lat - 4)));
+    far.hold = -45; far.holdT = 99;
+    return { near: near.id, far: far.id };
+  });
+  await page.evaluate(() => window.__nfAdvance(0.3, "cruise"));
+  // freeze with the far gunner mid-burst so its chevron is hot
+  await page.evaluate((id) => { const g = window.__nf.cars[id]; g.burst = 3; g.burstCd = 0.05; window.__nf.hitstop = 60; }, ids.far);
+  await page.waitForTimeout(3500);
+  const geo = await page.evaluate((ids) => ({ hero: window.__nfProject(0), near: window.__nfProject(ids.near), far: window.__nfProject(ids.far), fade: window.__nfFade()[ids.near] }), ids);
+  check(P, "camera: enemy 10 m behind is on screen, below the car, unfaded", geo.near.on && geo.near.y > geo.hero.y + 10 && geo.fade > 0.9, `hero y ${geo.hero.y.toFixed(0)} enemy y ${geo.near.y.toFixed(0)} of ${geo.near.h}, opacity ${geo.fade.toFixed(2)}`);
+  const ind = await page.evaluate(() => [...document.querySelectorAll(".nf-threat")].filter((e) => e.style.display !== "none").map((e) => ({ id: +e.dataset.id, on: e.dataset.on, hot: e.classList.contains("is-hot"), r: e.getBoundingClientRect() })));
+  const farInd = ind.find((i) => i.id === ids.far);
+  const nearInd = ind.find((i) => i.id === ids.near);
+  check(P, "off-screen enemy behind gets an edge chevron, pulsing red while firing", !geo.far.on && !!farInd && farInd.on === "0" && farInd.hot, JSON.stringify(farInd ? { on: farInd.on, hot: farInd.hot, x: Math.round(farInd.r.x), y: Math.round(farInd.r.y) } : null));
+  check(P, "visible enemy behind is marked too", !!nearInd && nearInd.on === "1");
+  await page.screenshot({ path: `${SHOTS}/${P}-enemy-behind.png` });
   await page.evaluate(() => { window.__nf.hitstop = 0; });
+  const noFlames = await page.evaluate(() => { window.__nfAdvance(1, ["KeyW", "Space"]); return window.__nf.cars.filter((c) => !c.hero && c.alive).every((c) => c.thrust === 0); });
+  check(P, "player thrust: no enemy fires thrusters", noFlames);
   await clearField(page);
   await page.evaluate(() => { window.__nf.lull = 2; window.__nf.wave = 0; window.__nf.lives = 3; });
 

@@ -24,3 +24,8 @@ Handling is untouched: gun tiers, rockets, cluster/oil mines are layered on top 
 ## M2 known-issue fixes
 - **Pop-in when parked:** enemies no longer teleport in view. When you park, enemies ahead drive off forward into the fog (>175 m) and re-enter from behind the camera. Unit test asserts zero visible teleports over 40 s parked.
 - **Enemy blocking the camera:** an enemy between the chase camera and your car fades to ~12–40% opacity. Browser test asserts it.
+
+## m3b (David's M3 notes)
+- **Camera:** pulled back (19 m) and raised (13.5 m), looking at the car: higher, more overhead, not top-down. About 14 m behind the car is on screen on desktop and phone portrait. Behind-holds for gunners/rammers moved to 11–12 m so they sit in view. The camera fade now triggers only when an enemy really covers the car on screen.
+- **Threat chevrons:** every enemy behind you or off-screen gets a chevron (clamped to the screen edge when off-screen, or just above the car when it's visible behind you). It pulses red while that enemy is firing or about to fire, lining up a ram, grinding (spiker) or dropping mines.
+- **Thrust bug (root cause):** enemies ran the same `drive()` with AI input whose `thrust` flag `aiInput()` set to true near voids (`gapAhead(26)`), over gaps, and whenever airborne and low, with infinite fuel. Those are the same spots where the HUD tells the player to thrust, so nearby enemies lit thrusters and launched at the same moment the player did. Fix: `aiInput()` never sets thrust (only the Roadster has thrusters). Enemies brake before voids and are brought back in behind you once you're across. Enemy views never show flames. Tests: `tests/unit/thrust.test.ts`.

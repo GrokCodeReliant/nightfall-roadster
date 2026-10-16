@@ -581,3 +581,21 @@
   padding: 0.12rem 0.5rem;
   white-space: nowrap;
 }
+
+/* m3b: off-screen / behind threat chevrons (absolute layer: no HUD box moves) */
+.nf-threats { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.nf-threat {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  will-change: transform;
+}
+.nf-threat span {
+  position: absolute; left: -11px; top: -11px; width: 22px; height: 22px;
+  background: #f2d6b0;
+  clip-path: polygon(50% 0, 100% 78%, 50% 56%, 0 78%);
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
+  opacity: 0.9;
+}
+.nf-threat.is-near span { transform: scale(0.8); }
+.nf-threat.is-hot span { background: #ff3a2a; animation: nf-threat-pulse 0.32s ease-in-out infinite alternate; }
+@keyframes nf-threat-pulse { from { transform: scale(0.9); opacity: 0.75; } to { transform: scale(1.3); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .nf-threat.is-hot span { animation: none; transform: scale(1.15); } }

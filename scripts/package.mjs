@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const dist = "dist";
-const tag = process.env.NF_TAG || "m3";
+const tag = process.env.NF_TAG || "m3b";
 const out = process.env.NF_OUT || `/workspace/studio/nightfall_roadster/v02_${tag}`;
 const folder = out + "/nightfall-roadster";
 fs.rmSync(folder, { recursive: true, force: true });

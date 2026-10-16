@@ -137,6 +137,7 @@ export type Car = {
   spikeT: number;
   weaveT: number;
   leaving: boolean;
+  leaveT: number;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -248,6 +249,7 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     spikeT: 0,
     weaveT: 0,
     leaving: false,
+    leaveT: 0,
   };
 }
 
@@ -828,7 +830,8 @@ function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
   if (at != null) s = hero.along + at;
   else {
     const ahead = kind === "boss" || kind === "mine";
-    const order = ahead && hero.speed > 15 ? [95, -58] : sim.spawnFlip % 2 === 0 || hero.speed < 15 ? [-58, 95] : [95, -58];
+    const base = ahead && hero.speed > 15 ? [95, -58] : sim.spawnFlip % 2 === 0 || hero.speed < 15 ? [-58, 95] : [95, -58];
+    const order = [...base, -85, -115, 130, 170];
     for (const off of order) {
       if (hero.along + off >= sim.track.first * 2 + 4 && spawnPointOk(sim, hero.along + off)) {
         s = hero.along + off;
@@ -852,7 +855,7 @@ function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
   car.weaveT = kind === "spiker" ? 0 : 3;
   car.baseSpeed = hero.speed;
   car.leaving = false;
-  car.hold = kind === "gunner" ? (s > hero.along ? 24 : -22) : kind === "drone" ? 18 : kind === "boss" ? 28 : kind === "mine" ? 30 : s > hero.along ? 1 : -1;
+  car.hold = kind === "gunner" ? (s > hero.along ? 24 : -12) : kind === "drone" ? 18 : kind === "boss" ? 28 : kind === "mine" ? 30 : s > hero.along ? 1 : -1;
   car.holdT = 6 + Math.random() * 4;
   if (kind === "drone") {
     car.y += DRONE_ALT;
@@ -1157,11 +1160,11 @@ function aiInput(sim: Sim, car: Car): Input {
   } else if (car.kind === "rammer") {
     // line up in your lane 14-16 m out (in front: in your guns; behind: over your mines), then charge
     const side = car.hold >= 0 && sim.idleT < 1.5 ? 1 : -1;
-    if (car.ramCd > 0) hold = side * 16;
+    if (car.ramCd > 0) hold = side * (side < 0 ? 12 : 16);
     else {
       wantLat = heroLat;
       const lined = Math.abs(lateralOf(sim, car) - heroLat) < 2.5 || (sim.idleT > 1.5 && dS <= 2);
-      hold = lined ? 0 : side * 14;
+      hold = lined ? 0 : side * (side < 0 ? 11 : 14);
     }
   } else if (car.kind === "gunner") {
     const side = heroLat + 6 <= 9.5 ? 1 : -1;
@@ -1202,9 +1205,10 @@ function aiInput(sim: Sim, car: Car): Input {
   if (car.speed < target - 1) throttle = 1;
   else if (car.speed > target + 3) throttle = -0.5;
   if (!car.leaving && err < -8 && hero.speed < 6) throttle = car.speed > 0.5 ? -0.5 : 0; // player stopped behind us: pull up
-  const q = queryTrack(sim.track, car.x, car.z, car.along);
-  const thrust = gapAhead(sim.track, car.along, 26) || q.gap || (!car.grounded && car.y < q.y + 2);
-  return { steer, throttle, fire: false, mine: false, thrust };
+  // m3b: only the player's Roadster has thrusters. Enemies never thrust; they brake to a stop
+  // before a void instead and are brought back in behind you once you are across (stepEnemy).
+  if (gapAhead(sim.track, car.along, 45)) throttle = car.speed > 1 ? -1 : 0;
+  return { steer, throttle, fire: false, mine: false, thrust: false };
 }
 
 function enemyMine(sim: Sim, car: Car) {
@@ -1229,9 +1233,12 @@ function enemyMine(sim: Sim, car: Car) {
 function recycleIfNeeded(sim: Sim, car: Car) {
   const hero = sim.cars[0];
   const dS = car.along - hero.along;
-  if (sim.idleT > 4 && dS > 8) car.leaving = true;
+  if (sim.idleT > 4 && dS > 2) car.leaving = true;
   if (sim.idleT === 0 && car.leaving && dS < OUT_OF_VIEW) car.leaving = false;
-  const gone = dS < -170 || dS > 320 || (car.leaving && dS > OUT_OF_VIEW);
+  // m3b: enemies no longer thrust over voids, so a car peeling away can get stuck at a void edge: recycle it once it's far out
+  car.leaveT = car.leaving ? car.leaveT + 1 / 60 : 0;
+  const stuckAtVoid = car.kind !== "drone" && car.leaving && dS > 60 && ((Math.abs(car.speed) < 3 && gapAhead(sim.track, car.along, 45)) || car.leaveT > 12);
+  const gone = dS < -170 || dS > 320 || (car.leaving && dS > OUT_OF_VIEW) || stuckAtVoid;
   if (!gone) return false;
   for (const off of [-60, -80, -100, -45, -125]) {
     const s = hero.along + off;
@@ -1283,6 +1290,18 @@ function stepEnemy(sim: Sim, car: Car, dt: number) {
   car.ramCd = Math.max(0, car.ramCd - dt);
   car.dropCd = Math.max(0, car.dropCd - dt);
   if (recycleIfNeeded(sim, car)) return;
+  // waiting at a void you already jumped: re-enter behind you, out of view
+  if (car.kind !== "drone" && hero.along - car.along > 40 && gapAhead(sim.track, car.along, 45) && !gapAhead(sim.track, hero.along - 130, 125)) {
+    for (const off of [-60, -80, -100]) {
+      const s = hero.along + off;
+      if (s > car.along && spawnPointOk(sim, s)) {
+        place(sim, car, s, hero.speed + 4);
+        sim.recycled += 1;
+        break;
+      }
+    }
+    return;
+  }
   if (car.kind === "drone") {
     stepDrone(sim, car, dt);
     return;
@@ -1303,7 +1322,7 @@ function stepEnemy(sim: Sim, car: Car, dt: number) {
   if (car.kind === "gunner") {
     car.holdT -= dt;
     if (car.holdT <= 0) {
-      car.hold = car.hold > 0 ? -22 : 24;
+      car.hold = car.hold > 0 ? -12 : 24;
       car.holdT = 6 + Math.random() * 4;
     }
     if (car.burst > 0) {
@@ -1647,4 +1666,28 @@ export function formatTime(t: number) {
   const m = Math.floor(t / 60);
   const s = t - m * 60;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
+}
+
+/** HUD threat state: is this enemy firing, about to fire, or lining up a ram right now? */
+export function threatHot(sim: Sim, car: Car) {
+  if (!car.alive || car.leaving) return false;
+  const hero = sim.cars[0];
+  const dS = car.along - hero.along;
+  const d = Math.hypot(hero.x - car.x, hero.z - car.z);
+  switch (car.kind) {
+    case "gunner":
+      return car.burst > 0 || (car.fireCd < 0.45 && d < 42);
+    case "boss":
+      return car.burst > 0 || (car.fireCd < 0.5 && dS > 4 && dS < 55);
+    case "drone":
+      return car.fireCd < 0.4 && d < 45;
+    case "rammer":
+      return car.ramCd <= 0 && Math.abs(dS) < 22;
+    case "spiker":
+      return car.ramCd <= 0 && Math.abs(dS) < 8;
+    case "mine":
+      return car.dropCd < 0.5 && dS > 6 && dS < 70;
+    default:
+      return false;
+  }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
+import { threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { createWorld } from "./world";
@@ -60,6 +60,7 @@ export function RoadsterGame() {
   const livesRef = useRef<HTMLElement>(null);
   const gunLabelRef = useRef<HTMLSpanElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
+  const threatsRef = useRef<HTMLDivElement>(null);
   const chipKey = useRef("");
   const knobRef = useRef<HTMLSpanElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
@@ -129,6 +130,7 @@ export function RoadsterGame() {
       };
       Object.assign(w, {
         __nfFade: () => world.debugFade(),
+        __nfProject: (id: number) => world.project(sim, id),
         __nfBehind: (off: number) => {
           const h = sim.cars[0];
           const lat = queryTrack(sim.track, h.x, h.z, h.along).lateral;
@@ -260,6 +262,7 @@ export function RoadsterGame() {
         }
       }
       if (live) paintHud(sim);
+      paintThreats(sim, world, live && sim.phase === "playing");
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -283,6 +286,58 @@ export function RoadsterGame() {
       simRef.current = null;
     };
   }, []);
+
+  /** m3b: chevrons for enemies behind you or off-screen; pulse red while that enemy is firing or lining up a ram */
+  function paintThreats(sim: Sim, world: { project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number } }, show: boolean) {
+    const box = threatsRef.current;
+    if (!box) return;
+    const hero = sim.cars[0];
+    let n = 0;
+    if (show) {
+      for (let i = 1; i < sim.cars.length; i++) {
+        const c = sim.cars[i];
+        if (!c.alive || c.leaving) continue;
+        const behind = c.along < hero.along - 2;
+        const p = world.project(sim, i);
+        if (p.on && !behind) continue;
+        if (Math.hypot(c.x - hero.x, c.z - hero.z) > 120) continue;
+        let el = box.children[n] as HTMLDivElement | undefined;
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "nf-threat";
+          el.innerHTML = "<span></span>";
+          box.appendChild(el);
+        }
+        const cx = p.w / 2;
+        const cy = p.h / 2;
+        let x = p.x;
+        let y = p.y;
+        let ang: number;
+        if (p.on) {
+          // visible but behind you: mark it with a chevron just above it, pointing down at it
+          y -= 26;
+          ang = Math.PI;
+          el.classList.add("is-near");
+        } else {
+          const dx = x - cx;
+          const dy = y - cy;
+          const m = 22;
+          const s = Math.min((cx - m) / Math.max(1e-3, Math.abs(dx)), (cy - m) / Math.max(1e-3, Math.abs(dy)));
+          x = cx + dx * Math.min(1, s);
+          y = cy + dy * Math.min(1, s);
+          ang = Math.atan2(dx, -dy);
+          el.classList.remove("is-near");
+        }
+        el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) rotate(${ang.toFixed(3)}rad)`;
+        el.classList.toggle("is-hot", threatHot(sim, c));
+        el.dataset.id = String(i);
+        el.dataset.on = p.on ? "1" : "0";
+        el.style.display = "";
+        n += 1;
+      }
+    }
+    for (let k = n; k < box.children.length; k++) (box.children[k] as HTMLElement).style.display = "none";
+  }
 
   function paintHud(sim: Sim) {
     const hero = sim.cars[0];
@@ -397,6 +452,7 @@ export function RoadsterGame() {
       <canvas ref={canvasRef} className="nf-canvas" aria-label="Nightfall Roadster highway combat" />
       {showPlay && (
         <div className="nf-hud">
+          <div className="nf-threats" ref={threatsRef} aria-hidden="true" />
           <button type="button" className="nf-icon-btn left" onClick={togglePause} aria-label={phase === "paused" ? "Resume" : "Pause"}>
             {phase === "paused" ? <Play size={18} /> : <Pause size={18} />}
           </button>
