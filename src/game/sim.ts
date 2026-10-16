@@ -1157,7 +1157,8 @@ function aiInput(sim: Sim, car: Car): Input {
   let hold = car.hold;
   if (car.leaving) {
     hold = 400;
-  } else if (car.kind === "rammer") {
+  } else if (car.kind === "rammer" || (sim.idleT > 4 && car.kind !== "boss" && car.kind !== "gunner")) {
+    // (a parked player gets charged by everything except gunners/boss, which shoot instead)
     // line up in your lane 14-16 m out (in front: in your guns; behind: over your mines), then charge
     const side = car.hold >= 0 && sim.idleT < 1.5 ? 1 : -1;
     if (car.ramCd > 0) hold = side * (side < 0 ? 12 : 16);
@@ -1207,7 +1208,9 @@ function aiInput(sim: Sim, car: Car): Input {
   if (!car.leaving && err < -8 && hero.speed < 6) throttle = car.speed > 0.5 ? -0.5 : 0; // player stopped behind us: pull up
   // m3b: only the player's Roadster has thrusters. Enemies never thrust; they brake to a stop
   // before a void instead and are brought back in behind you once you are across (stepEnemy).
-  if (gapAhead(sim.track, car.along, 45)) throttle = car.speed > 1 ? -1 : 0;
+  // only gaps before the player matter while the player is ahead (the road up to a parked player is solid)
+  const reach = hero.along > car.along ? Math.min(45, hero.along - car.along - 4) : 45;
+  if (reach >= 6 && gapAhead(sim.track, car.along, reach)) throttle = car.speed > 1 ? -1 : 0;
   return { steer, throttle, fire: false, mine: false, thrust: false };
 }
 
@@ -1242,7 +1245,7 @@ function recycleIfNeeded(sim: Sim, car: Car) {
   if (!gone) return false;
   for (const off of [-60, -80, -100, -45, -125]) {
     const s = hero.along + off;
-    if (s > sim.track.first * 2 + 4 && spawnPointOk(sim, s)) {
+    if (s > sim.track.first * 2 + 4 && (car.kind === "drone" || spawnPointOk(sim, s))) {
       place(sim, car, s, hero.speed + 6);
       if (car.kind === "drone") car.y += DRONE_ALT;
       car.leaving = false;

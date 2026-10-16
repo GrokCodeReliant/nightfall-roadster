@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { Kind, PickupKind, Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, type Piece } from "./road";
 
@@ -18,6 +19,7 @@ type CarView = {
   parts: Partial<Record<Kind, THREE.Group>>;
   mats: THREE.Material[];
   fade: number;
+  glb?: THREE.Object3D;
 };
 
 const KIND_COLOR: Record<Kind, number> = {
@@ -123,6 +125,7 @@ export type World = {
   resize: (w: number, h: number, dpr: number) => void;
   dispose: () => void;
   debugFade: () => number[];
+  carInfo: () => CarInfo;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
 
@@ -235,6 +238,8 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     }),
   );
   glass.position.set(0, 0.86, 0.02);
+  mesh.userData.proc = true;
+  glass.userData.proc = true;
   glass.rotation.x = -0.62;
   tilt.add(glass);
 
@@ -244,6 +249,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
       new THREE.MeshStandardMaterial({ color: 0xf4efe6, roughness: 0.4, metalness: 0.2 }),
     );
     stripe.position.set(0, 0.7, 0.35);
+    stripe.userData.proc = true;
     tilt.add(stripe);
   }
 
@@ -257,6 +263,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     }),
   );
   tail.position.set(0, 0.48, -2.12);
+  tail.userData.tail = true;
   tilt.add(tail);
 
   const lampMat = new THREE.MeshStandardMaterial({
@@ -267,6 +274,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
   for (const side of [-1, 1]) {
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.06), lampMat);
     lamp.position.set(side * 0.48, 0.46, 2.18);
+    lamp.userData.proc = true;
     tilt.add(lamp);
   }
 
@@ -276,6 +284,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.26, 10), copper);
     pod.rotation.x = Math.PI / 2;
     pod.position.set(side * 0.42, 0.4, -2.18);
+    pod.userData.proc = true;
     tilt.add(pod);
     const flame = new THREE.Mesh(
       new THREE.ConeGeometry(0.13, 0.85, 8),
@@ -300,16 +309,19 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
   );
   cock.rotation.x = -Math.PI / 2;
   cock.position.set(0, 0.8, -0.42);
+  cock.userData.proc = true;
   tilt.add(cock);
   const suit = new THREE.MeshStandardMaterial({ color: hero ? 0x1a120c : 0x101114, roughness: 0.8 });
   const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.22, 3, 8), suit);
   torso.position.set(0, 0.98, -0.46);
+  torso.userData.driver = "torso";
   tilt.add(torso);
   const helm = new THREE.Mesh(
     new THREE.SphereGeometry(0.15, 12, 10),
     new THREE.MeshStandardMaterial({ color: 0x0e0e10, metalness: 0.4, roughness: 0.35 }),
   );
   helm.position.set(0, 1.2, -0.4);
+  helm.userData.driver = "helm";
   tilt.add(helm);
 
   const rim = hero ? 0xc6a36a : 0x8a9098;
@@ -322,6 +334,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     const wheel = makeWheel(rim);
     wheel.pivot.position.set(w.x, 0.36, w.z);
     wheel.pivot.userData.front = w.front;
+    wheel.pivot.userData.proc = true;
     tilt.add(wheel.pivot);
     return wheel;
   });
@@ -331,10 +344,12 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
     L.position.set(-0.4, 0.55, 1.7);
     L.target.position.set(-0.4, 0.15, 14);
     tilt.add(L, L.target);
+    L.userData.lamp = "lamp_L";
     const R = new THREE.SpotLight(0xfff3d4, 7, 48, 0.48, 0.6, 1.5);
     R.position.set(0.4, 0.55, 1.7);
     R.target.position.set(0.4, 0.15, 14);
     tilt.add(R, R.target);
+    R.userData.lamp = "lamp_R";
   }
 
   const shadow = new THREE.Mesh(
@@ -418,6 +433,97 @@ function hash(i: number) {
   return x - Math.floor(x);
 }
 
+// ---------------------------------------------------------------- m5a: Roadster GLB (Art & Assets stand-in)
+export type CarInfo = { source: "procedural" | "glb" | "loading"; lod: "phone" | "hero"; url: string; wheels: number; nodes: string[]; missing: string[]; error?: string; tris?: number };
+const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thruster_L", "thruster_R", "lamp_L", "lamp_R", "taillight", "turret_mount", "driver_seat"];
+
+function carUrl(lod: "phone" | "hero") {
+  const inline = (window as unknown as { __NF_GLB?: Record<string, string> }).__NF_GLB;
+  if (inline?.[lod]) return inline[lod];
+  return `${import.meta.env.BASE_URL}assets/v02/car/roadster_${lod}.glb`;
+}
+
+/**
+ * Swap the hero view's procedural hull for the GLB. Every attachment is found by node name
+ * (wheel_*, thruster_*, lamp_*, taillight, turret_mount, driver_seat), so a re-export with the
+ * same node names drops straight in. Returns the names that were missing.
+ */
+function applyCarGlb(view: CarView, model: THREE.Object3D): string[] {
+  const missing: string[] = [];
+  const node = (name: string) => {
+    const n = model.getObjectByName(name);
+    if (!n) missing.push(name);
+    return n ?? null;
+  };
+  // paint: the GLB's "body" material becomes the existing hero paint (0xc4161c, clearcoat)
+  model.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mat = m.material as THREE.MeshStandardMaterial;
+    if (mat?.name === "body") m.material = view.body;
+    else if (mat?.name === "taillight") mat.emissiveIntensity = Math.max(mat.emissiveIntensity, 1.4);
+    else if (mat?.name === "lamp") mat.emissiveIntensity = Math.max(mat.emissiveIntensity, 2);
+    m.castShadow = false;
+  });
+  // hide the procedural hull parts (keep flames, spotlights, tail bar and driver: they get re-parented)
+  for (const c of view.chassis.children) if (c.userData.proc) c.visible = false;
+  view.chassis.add(model);
+  // wheels: pivot = node (steer yaw on the front pair), a spin group inserted between it and the mesh (spin about X)
+  const wheels: Wheel[] = [];
+  for (const name of ["wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR"]) {
+    const pivot = node(name);
+    if (!pivot) continue;
+    const spin = new THREE.Group();
+    for (const ch of [...pivot.children]) spin.add(ch);
+    pivot.add(spin);
+    pivot.userData.front = name === "wheel_FL" || name === "wheel_FR";
+    wheels.push({ pivot: pivot as THREE.Group, spin });
+  }
+  if (wheels.length === 4) view.wheels = wheels;
+  // thruster flames point -Z out of thruster_L / thruster_R
+  view.flames.forEach((flame, i) => {
+    const n = node(i === 0 ? "thruster_L" : "thruster_R");
+    if (!n) return;
+    n.add(flame);
+    flame.position.set(0, 0, -0.37);
+  });
+  // headlight spots ride on lamp_L / lamp_R
+  for (const c of [...view.chassis.children]) {
+    const key = c.userData.lamp as string | undefined;
+    if (!key) continue;
+    const n = node(key);
+    if (!n) continue;
+    const spot = c as THREE.SpotLight;
+    n.add(spot, spot.target);
+    spot.position.set(0, 0.03, 0.05);
+    spot.target.position.set(0, -0.4, 12.3);
+  }
+  // the stand-in has a taillight node but no taillight geometry: hang the existing emissive bar on it
+  const tl = node("taillight");
+  const tail = view.chassis.children.find((c) => c.userData.tail);
+  if (tl && tail) {
+    tl.add(tail);
+    tail.position.set(0, 0, 0.02);
+  }
+  // driver sits on driver_seat
+  const seat = node("driver_seat");
+  if (seat) {
+    for (const c of [...view.chassis.children]) {
+      if (c.userData.driver === "torso") {
+        seat.add(c);
+        c.position.set(0, 0.34, 0.02);
+      } else if (c.userData.driver === "helm") {
+        seat.add(c);
+        c.position.set(0, 0.57, 0.08);
+      }
+    }
+  }
+  node("turret_mount"); // hero weapon mount: no hero turret mesh yet; reserved for the gun upgrade visuals
+  node("body");
+  view.glb = model;
+  return missing;
+}
+
 export function createWorld(canvas: HTMLCanvasElement): World {
   const coarse = typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 820);
   const renderer = new THREE.WebGLRenderer({
@@ -472,6 +578,34 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   let attract = 0;
 
   const hull = hullGeometry();
+  const carLod: "phone" | "hero" = coarse ? "phone" : "hero";
+  const carInfo: CarInfo = { source: "loading", lod: carLod, url: "", wheels: 4, nodes: [], missing: [] };
+  let carModel: THREE.Object3D | null = null;
+  try {
+    const url = carUrl(carLod);
+    carInfo.url = url.startsWith("data:") ? "inline" : url;
+    new GLTFLoader().load(
+      url,
+      (gltf) => {
+        carModel = gltf.scene;
+        let tris = 0;
+        gltf.scene.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (o.name) carInfo.nodes.push(o.name);
+          if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+        });
+        carInfo.tris = Math.round(tris);
+      },
+      undefined,
+      (err) => {
+        carInfo.source = "procedural"; // fallback: keep the procedural hull
+        carInfo.error = String((err as Error)?.message ?? err).slice(0, 160);
+      },
+    );
+  } catch (err) {
+    carInfo.source = "procedural";
+    carInfo.error = String(err).slice(0, 160);
+  }
   const views: CarView[] = [];
 
   const sea = new THREE.Mesh(
@@ -761,6 +895,18 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     });
   }
 
+  function attachCar() {
+    if (!carModel || !views[0] || views[0].glb) return;
+    try {
+      carInfo.missing = applyCarGlb(views[0], carModel);
+      carInfo.wheels = views[0].wheels.length;
+      carInfo.source = "glb";
+    } catch (err) {
+      carInfo.source = "procedural";
+      carInfo.error = String(err).slice(0, 160);
+    }
+  }
+
   function ensureViews(sim: Sim) {
     while (views.length < sim.cars.length) {
       const view = buildCar(views.length === 0, hull);
@@ -779,6 +925,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   function sync(sim: Sim, dt: number, attractMode: boolean) {
     ensureViews(sim);
+    attachCar();
     const hero = sim.cars[0];
     streamRoad(sim, hero.along);
     sea.position.set(hero.x, -1.6, hero.z);
@@ -952,7 +1099,19 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
 
     const shake = reduceMotion ? 0 : sim.trauma * sim.trauma;
-    if (attractMode) {
+    const beauty = (window as unknown as { __nfBeauty?: number }).__nfBeauty;
+    if (beauty !== undefined) {
+      // debug/test only: close three-quarter beauty shot of the hero car
+      const a = hero.yaw + Math.PI + beauty;
+      camPos.set(hero.x + Math.sin(a) * 6.2, hero.y + 1.55, hero.z + Math.cos(a) * 6.2);
+      lookPos.set(hero.x, hero.y + 0.55, hero.z);
+      camera.position.copy(camPos);
+      camera.lookAt(lookPos);
+      if (Math.abs(camera.fov - 38) > 0.4) {
+        camera.fov = 38;
+        camera.updateProjectionMatrix();
+      }
+    } else if (attractMode) {
       attract += dt * 0.28;
       const r = 12.4;
       camPos.set(hero.x + Math.sin(attract) * r, hero.y + 4.1, hero.z + Math.cos(attract) * r);
@@ -1011,7 +1170,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     return { x: ((nx + 1) / 2) * w, y: ((1 - ny) / 2) * h, on, w, h };
   }
-  return { sync, resize, dispose, project, debugFade: () => views.map((v) => v.fade) };
+  return { sync, resize, dispose, project, debugFade: () => views.map((v) => v.fade), carInfo: () => carInfo };
 }
 
 function clamp01(v: number) {

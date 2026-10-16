@@ -5,9 +5,9 @@ import { chromium, devices } from "playwright";
 import fs from "node:fs";
 
 const ROOT = "/workspace/studio/nightfall_roadster";
-const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m3b/nightfall-roadster-v02-m3b.html`;
+const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m5a/nightfall-roadster-v02-m5a.html`;
 const V01 = `${ROOT}/release/nightfall-roadster-single.html`;
-const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m3b/screenshots`;
+const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m5a/screenshots`;
 fs.mkdirSync(SHOTS, { recursive: true });
 
 const ONLY = process.env.NF_ONLY;
@@ -149,6 +149,23 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const r1 = await page.evaluate(() => window.__nf.cars[0].rounds);
   check(P, "fires", r1 < r0 - 2, `rounds ${r0.toFixed(1)} -> ${r1.toFixed(1)}`);
 
+  // m5a: Roadster GLB is the hero car (desktop = hero LOD, phone = phone LOD), attached by node names
+  await page.waitForFunction(() => window.__nfCar && window.__nfCar().source !== "loading", null, { timeout: 30000 });
+  const car = await page.evaluate(() => window.__nfCar());
+  const wantLod = P === "phone" ? "phone" : "hero";
+  check(P, `hero car is the GLB (${wantLod} LOD)`, car.source === "glb" && car.lod === wantLod, `${car.source} ${car.lod} ${car.tris} tris ${car.error ?? ""}`);
+  check(P, "GLB nodes all found (4 wheels, thrusters, lamps, taillight, turret_mount, driver_seat)", car.wheels === 4 && car.missing.length === 0, `missing: ${car.missing.join(",") || "none"}`);
+  await clearField(page);
+  await runUntil(page, "cruise", "sim.cars[0].speed > 25", 10);
+  await capture(page, `${SHOTS}/${P}-car.png`, 2500);
+  await page.evaluate(() => { window.__nfAdvance(0.6, ["KeyW", "Space"]); window.__nf.hitstop = 60; });
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${SHOTS}/${P}-car-thrust.png` });
+  await page.evaluate(() => { window.__nfBeauty = 0.75; });
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${SHOTS}/${P}-car-beauty.png` });
+  await page.evaluate(() => { delete window.__nfBeauty; window.__nf.hitstop = 0; });
+  await runUntil(page, "cruise", "sim.cars[0].grounded", 5);
   // ---------------- M3 staged scenes (real sim, staged spawns via the ?debug hook)
   const W = "cruise";
   await clearField(page);
@@ -280,6 +297,11 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
       return sim.shots.some((s) => s.alive && s.owner !== 0 && s.life < 0.8 && (() => { const c = sim.cars[s.owner]; const d = c.along - hero.along; return c.alive && d > (i > 600 ? -30 : 6) && d < 40; })());
     }, i);
   }
+  if (!firing) {
+    // the natural wave may be between spawns: stage a gunner ahead and wait for its burst
+    await page.evaluate(() => { window.__nfStage.debugSpawn(window.__nf, "gunner", 22, 3); });
+    firing = await runUntil(page, "cruise", "sim.shots.some((s) => s.alive && s.owner !== 0)", 20);
+  }
   check(P, "enemies fire at the player", firing);
   // freeze the sim (hitstop, no pause overlay) so the chase camera settles, then capture
   await page.evaluate(() => { window.__nf.keysOverride = new Set(["KeyW"]); window.__nf.hitstop = 30; });
@@ -316,7 +338,8 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   await page.evaluate(() => { for (let i = 0; i < 1200 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "idle"); });
   await page.waitForSelector("text=Run it again", { timeout: 5000 }).catch(() => {});
   const over = await page.evaluate(() => ({ phase: window.__nf.phase, lives: window.__nf.lives, card: !!document.querySelector(".nf-card .nf-title-sm")?.textContent?.includes("Wrecked") }));
-  check(P, "game over card", over.phase === "finished" && over.lives === 0 && over.card, JSON.stringify(over));
+  const dump = over.phase === "finished" ? "" : await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return JSON.stringify({ hp: h.hp, inv: h.invuln, sh: s.up.shieldT, y: h.y.toFixed(1), sp: h.speed.toFixed(1), alive: h.alive, rec: h.recover, q: s.queue, lull: s.lull, wave: s.wave, idle: s.idleT.toFixed(0), e: s.cars.filter((c) => c.alive && !c.hero).map((c) => `${c.kind}:${(c.along - h.along).toFixed(0)}:${c.leaving}:${c.speed.toFixed(0)}:${c.ramCd.toFixed(1)}`) }); });
+  check(P, "game over card", over.phase === "finished" && over.lives === 0 && over.card, JSON.stringify(over) + " " + dump);
   await page.screenshot({ path: `${SHOTS}/${P}-gameover.png` });
 
   // restart
@@ -327,6 +350,43 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
 
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 5).join(" || "));
   await ctx.close();
+}
+// m5a: GLB fallback (a broken GLB must leave the procedural hull and a playable game, with no console errors)
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  await ctx.addInitScript(() => { Object.defineProperty(window, "__NF_GLB", { value: { phone: "data:model/gltf-binary;base64,AAAA", hero: "data:model/gltf-binary;base64,AAAA" }, writable: false }); });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await start(page, "file://" + BUILD + "?debug");
+  await page.waitForFunction(() => window.__nfCar().source !== "loading", null, { timeout: 20000 });
+  const car = await page.evaluate(() => window.__nfCar());
+  await page.evaluate(() => window.__nfAdvance(3, ["KeyW"]));
+  const ok = await page.evaluate(() => window.__nf.phase === "playing" && window.__nf.cars[0].speed > 10);
+  check("fallback", "broken GLB falls back to the procedural hull and stays playable", car.source === "procedural" && ok, car.error ?? "");
+  check("fallback", "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
+  await ctx.close();
+}
+// m5a: static folder served over http loads the GLB file (not the inline copy)
+{
+  const { spawn } = await import("node:child_process");
+  const dir = BUILD.replace(/[^/]+\.html$/, "nightfall-roadster");
+  const srv = spawn("python3", ["-m", "http.server", "8765", "--bind", "127.0.0.1"], { cwd: dir, stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 1200));
+  for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
+    const ctx = await browser.newContext(prof.ctx);
+    const page = await ctx.newPage();
+    const bad = [];
+    page.on("response", (r) => { if (r.status() >= 400) bad.push(`${r.status()} ${r.url()}`); });
+    page.on("console", (m) => { if (m.type() === "error") bad.push(m.text()); });
+    await start(page, "http://127.0.0.1:8765/index.html?debug");
+    await page.waitForFunction(() => window.__nfCar().source !== "loading", null, { timeout: 30000 });
+    const car = await page.evaluate(() => window.__nfCar());
+    check(`static-${prof.name}`, "static folder loads the GLB file over http", car.source === "glb" && /roadster_(phone|hero)\.glb$/.test(car.url) && bad.length === 0, `${car.url} ${bad.join(" | ")}`);
+    await ctx.close();
+  }
+  srv.kill();
 }
 await browser.close();
 fs.writeFileSync(`${SHOTS}/e2e-results.json`, JSON.stringify(results, null, 2));
