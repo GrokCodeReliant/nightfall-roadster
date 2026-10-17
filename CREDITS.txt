@@ -1,0 +1,7 @@
+Nightfall Roadster v0.2 - credits
+
+All 3D models, textures and sounds were made by Grok Code Reliant studio.
+Tesla-styled vehicles (Model 3 and Roadster), the Semi rig and the Optimus robot are studio-made fan models and are not part of the CC0 Open Kit. No logos, badges or wordmarks are used.
+Original enemy vehicles, road and city props: planned for free release (CC0) as part of the studio's Open Kit.
+AI tools were used in developing this game.
+An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.
