@@ -164,6 +164,7 @@ export function RoadsterGame() {
         __nfSkipRollout: () => world.skipRollout(),
         __nfDraws: () => world.drawInfo(),
         __nfStageInfo: () => world.stageInfo(),
+        __nfRolloutSet: (t: number) => world.rolloutSeek(t),
         __nfEnemies: () => world.enemyInfo(),
         __nfBehind: (off: number) => {
           const h = sim.cars[0];

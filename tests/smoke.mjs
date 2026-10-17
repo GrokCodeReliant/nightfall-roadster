@@ -50,11 +50,17 @@ for (const prof of profiles) {
   await page.waitForSelector(".nf-hud");
   const r0 = await page.evaluate(() => window.__nfRollout());
   check(P, "rollout starts on Start (sim waits)", r0.active, JSON.stringify(r0));
-  await page.waitForFunction(() => window.__nfRollout().t > 4.3 || !window.__nfRollout().active, null, { timeout: 120000 });
+  // the box is CPU-bound in headless runs: let the timeline run ~1.5 s for real, then seek to mid hover-out
+  await page.waitForFunction(() => window.__nfRollout().t > 1.5 || !window.__nfRollout().active, null, { timeout: 120000 });
+  await page.evaluate(() => window.__nfRolloutSet(4.35));
+  await page.waitForFunction(() => window.__nfRollout().t > 4.4, null, { timeout: 120000 });
+  const hov = await page.evaluate(() => window.__nfRollout());
+  check(P, "hover-out: thrusters lit mid rollout", hov.thrust === 1, JSON.stringify(hov));
   await page.screenshot({ path: `${SHOTS}/${P}-rollout.png` });
   const rr = await page.evaluate(() => window.__nfRollout());
   check(P, "robots placed at robot spawn nodes with idle clip", rr.robots === 2 && rr.idle, JSON.stringify(rr));
   const along0 = await page.evaluate(() => window.__nf.cars[0].along);
+  await page.evaluate(() => window.__nfRolloutSet(5.5));
   const handed = await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 }).then(() => true).catch(() => false);
   check(P, "rollout hands over control", handed);
   const si = await page.evaluate(() => window.__nfStageInfo());

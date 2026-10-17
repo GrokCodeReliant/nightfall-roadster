@@ -11,7 +11,8 @@ const PIECES: [string, string][] = [
   ["city", "bldg_mid_12x12"], ["city", "bldg_mid_24x12"], ["city", "bldg_mid_24x24"],
   ["city", "bldg_top_12x12"], ["city", "bldg_top_24x12"], ["city", "bldg_top_24x24"],
   ["city", "sidewalk_12x40"], ["city", "overpass_60x12"], ["city", "billboard_pole_12x6"], ["city", "water_barrier_2m"], ["city", "traffic_cone"],
-  ["kit", "streetlight"], ["kit", "sign_fork"],
+  ["kit", "sign_fork"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"], ["city", "ramp_launch_2p5m"], ["city", "ramp_kicker_1m"],
+  ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
 ];
 const lib: Record<string, THREE.Object3D> = {};
 const mats = new Map<string, THREE.Material>();
@@ -39,6 +40,10 @@ export function loadCity() {
   for (const [dir, name] of PIECES) {
     const d = inl()?.[`${dir}_${name}`];
     new GLTFLoader(mgr).load(d ?? `${BASE()}${dir}/${name}.glb`, (g) => {
+      // strip hidden collider nodes (UCX_<piece>_NN): never rendered or merged
+      const ucx: THREE.Object3D[] = [];
+      g.scene.traverse((o) => { if (/^UCX_/i.test(o.name)) ucx.push(o); });
+      for (const o of ucx) o.parent?.remove(o);
       g.scene.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
@@ -112,6 +117,10 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       add(`bldg_base_${key}`, p, lx, 0.22, 0, ry);
       for (let f = 1; f < floors; f++) add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry + (f % 2 ? 0 : 0));
       add(`bldg_top_${key}`, p, lx, 0.22 + 12 * floors, 0, ry);
+      if (rnd(index * 17 + n * 3 + side) < 0.6) {
+        const ns = ["neon_arrow", "neon_ring", "neon_bar", "neon_cup", "neon_bolt", "neon_bowl"][Math.floor(rnd(index * 23 + n) * 6)];
+        add(ns, p, side * (half + 12.3), 6 + rnd(index + n * 11) * 10, 0, ry);
+      }
       z += front;
       n++;
     }
@@ -119,7 +128,8 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   // streetlights every 20 m, alternating sides
   for (let k = 0; k < 2; k++) {
     const p = at(Math.floor((k * seg) / 2));
-    add("streetlight", p, k % 2 ? half + 0.8 : -(half + 0.8), 0, 0, k % 2 ? Math.PI : 0);
+    add("streetlight_city_twin_8m", p, k % 2 ? half + 1.2 : -(half + 1.2), 0.22, 0, k % 2 ? Math.PI : 0);
+    add("streetlight_city_6m", at(Math.floor(((k + 0.5) * seg) / 2)), k % 2 ? -(half + 10) : half + 10, 0.22, 0, k % 2 ? 0 : Math.PI);
   }
   // water barriers along the right kerb, sometimes a cone line
   if (rnd(index * 5 + 1) < 0.5) for (let k = 0; k < 6; k++) add("water_barrier_2m", at(Math.floor((k / 6) * seg)), -(half - 0.6), 0, 0, 0);
@@ -129,6 +139,9 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   if (index % 6 === 3) {
     // boost gate: sign_fork on both kerbs, status_lamp tinted green/amber/red in code
     for (const side of [1, -1]) add("sign_fork", mid, side * (half - 1.4), 0, 0, Math.PI);
+    // set dressing on the sidewalk beside the gate (no jump physics)
+    add("ramp_launch_2p5m", at(2), half + 6.3, 0.22, 0, 0);
+    add("ramp_kicker_1m", at(seg - 3), -(half + 6.3), 0.22, 0, 0);
     const src = lib.sign_fork?.getObjectByName("status_lamp") as THREE.Mesh | undefined;
     if (src) {
       const gate = new THREE.Group();

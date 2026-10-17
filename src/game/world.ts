@@ -137,6 +137,7 @@ export type World = {
   carInfo: () => CarInfo;
   setCar: (id: CarId) => void;
   setStage: (id: StageId) => void;
+  rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
@@ -468,6 +469,7 @@ export type StageId = (typeof STAGES)[number]["id"];
 export const CARS = [
   { id: "volt", name: "Volt Compact", file: "sedan_compact" },
   { id: "volt_r", name: "Volt Compact R", file: "sedan_compact_r" },
+  { id: "volt_rs", name: "Volt Compact RS", file: "sedan_compact_rs" },
   { id: "roadster", name: "Roadster 2017", file: "roadster" },
   { id: "roadster2026", name: "Roadster 2026", file: "roadster2026" },
 ] as const;
@@ -1625,6 +1627,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     debugFade: () => views.map((v) => v.fade),
     carInfo: () => carInfo,
     setCar,
+    rolloutSeek(t: number) {
+      if (roll && !roll.handed) roll.t = t;
+    },
     setStage(id: StageId) {
       if (id === stage) return;
       stage = id;
