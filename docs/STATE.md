@@ -9,15 +9,16 @@
 ## What works
 - Vehicle combat on an endless procedural road (`src/game/road.ts`): waves; 6 enemy types (Rammer, Gunner, Mine Layer, Spiker, Drone w6+, Boss every 5th wave); pickups; lose one upgrade tier on death; 3 lives; game over/restart.
 - Handling, input, HUD and v0.1 feel are frozen (proved by `tests/unit/handling.test.ts`). Camera: m3b pulled-back high chase cam; off-screen threat chevrons pulse red.
-- Cars (title picker, same handling): Volt Compact, Volt Compact R, Roadster 2017, Roadster 2026. GLBs with attach points read from nodes (wheels, thrusters, lamps, taillight, turret_mount, driver_seat); `body` material tinted red. Procedural hull fallback.
+- Cars (title picker, same handling): Volt Compact, Volt Compact R, Volt Compact RS, Roadster 2017, Roadster 2026. GLBs with attach points read from nodes (wheels, thrusters, lamps, taillight, turret_mount, driver_seat); `body` material tinted red. Procedural hull fallback.
 - All 6 enemy GLBs, collision radii/clamps sized to the meshes (`ENEMY` in `sim.ts`), placeholder fallback.
 - EV audio (procedural WebAudio: motor whine, thruster roar, fan hum, tyre noise), mute respected.
 - Run-start rollout (timeline in `world.ts`, outside the sim, skippable by tap/key): the rig arrives, the ramp lowers, then the doors open; robots (pass 5) idle at robot_spawn_A/B; the car starts on `bay_floor`, backs out hovering at bay height with thrusters lit and roaring, drops onto the road with a bounce, then hands over. Rear 3/4 camera blends into the gameplay camera.
-- Stage select on the title: **Night City** (playable; `src/game/city.ts`: Art's city and road-kit GLBs, building rows on the 12 m grid, sidewalks, streetlights, water barriers, overpasses every 4th chunk, pole billboards, boost gates = sign_fork pair with status_lamp cycling green/amber/red; pass on green = speed boost), Classic Night (the m5 slab scenery). Coast Road / Pine Woods / Open Highway / Industrial Port / Mountain Pass appear as "Coming soon".
+- Stage select on the title: **Night City** (playable; `src/game/city.ts`: Art's city and road-kit GLBs, building rows on the 12 m grid, sidewalks, streetlights, water barriers, overpasses every 4th chunk, pole billboards, City v2 neon wall signs and city streetlights (twin 8 m + 6 m), ramp_launch/ramp_kicker as sidewalk set dressing (UCX_ collider nodes stripped at load, not used), boost gates = sign_fork pair with status_lamp cycling green/amber/red; pass on green = speed boost), Classic Night (the m5 slab scenery). Coast Road / Pine Woods / Open Highway / Industrial Port / Mountain Pass appear as "Coming soon".
 
 ## Known issues
 - Puddles read as dark slashes on the road kit atlas; city facades are flat (no relief/trim; City v2 from Art addresses some).
 - Draw calls over the 120 phone budget in combat (≈140-230 with enemies; city chunks are merged per material, ~3 draws/chunk). David's phone runs smooth.
+- Not used yet: facade trim (fins_12, balcony_12, ac_12), jump_scaffold_4m, jump_overpass_gap, ramp_landing, all coast/ pieces (Coast Road stays 'Coming soon'), meshopt/KTX2 compression (city download ~6 MB as is).
 - Tunnels (tunnel_40/portal) are not placed; the boost-gate "shortcut" is a speed boost on the main road, not a forked route (M8).
 - The boost gate pokes hero speed from the render layer (world.ts), not the sim; move it into sim if gates become gameplay.
 - Headless tests are slow when the box is loaded (Blender jobs); run profiles separately with `NF_ONLY=phone|desktop`.
