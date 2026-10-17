@@ -7,9 +7,9 @@
 - Source: branch `v02` (never merged to main). Main gets only `preview/<name>/` folders.
 
 ## What works
-- Vehicle combat on an endless procedural road (`src/game/road.ts`): waves; 6 enemy types (Rammer, Gunner, Mine Layer, Spiker, Drone w6+, Boss every 5th wave); pickups; lose one upgrade tier on death; 3 lives; game over/restart.
+- Vehicle combat on an endless procedural road (`src/game/road.ts`): waves; 6 enemy types (Rammer, Gunner, Mine Layer, Spiker, Drone w6+, Boss every 5th wave); pickups; lose one upgrade tier on death; 3 lives; game over with Retry and Title (smoke-tested: reset, rollout replay/skip, new car + stage).
 - Handling, input, HUD and v0.1 feel are frozen (proved by `tests/unit/handling.test.ts`). Camera: m3b pulled-back high chase cam; off-screen threat chevrons pulse red.
-- Cars (title picker, same handling): Volt Compact, Volt Compact R, Volt Compact RS, Roadster 2017, Roadster 2026. GLBs with attach points read from nodes (wheels, thrusters, lamps, taillight, turret_mount, driver_seat); `body` material tinted red. Procedural hull fallback.
+- Cars (title picker, same handling): Model 3 (2017), Model 3 Highland, Model 3 Performance, Roadster (2017), Roadster (2026) (display names; internal ids volt/volt_r/volt_rs/roadster/roadster2026, files sedan_compact*/roadster*). Phone loads <file>_phone; desktop loads <file>_hero from the folder build (the single-file HTML inlines phone LODs only). Title footer: 'An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.' No logos or badges anywhere. In on-screen text the robots are 'Optimus' and the rig is 'Semi' (none shown in-game today). GLBs with attach points read from nodes (wheels, thrusters, lamps, taillight, turret_mount, driver_seat); `body` material tinted red. Procedural hull fallback.
 - All 6 enemy GLBs, collision radii/clamps sized to the meshes (`ENEMY` in `sim.ts`), placeholder fallback.
 - EV audio (procedural WebAudio: motor whine, thruster roar, fan hum, tyre noise), mute respected.
 - Run-start rollout (timeline in `world.ts`, outside the sim, skippable by tap/key): the rig arrives, the ramp lowers, then the doors open; robots (pass 5) idle at robot_spawn_A/B; the car starts on `bay_floor`, backs out hovering at bay height with thrusters lit and roaring, drops onto the road with a bounce, then hands over. Rear 3/4 camera blends into the gameplay camera.
@@ -21,6 +21,7 @@
 - Not used yet: facade trim (fins_12, balcony_12, ac_12), jump_scaffold_4m, jump_overpass_gap, ramp_landing, all coast/ pieces (Coast Road stays 'Coming soon'), meshopt/KTX2 compression (city download ~6 MB as is).
 - Tunnels (tunnel_40/portal) are not placed; the boost-gate "shortcut" is a speed boost on the main road, not a forked route (M8).
 - The boost gate pokes hero speed from the render layer (world.ts), not the sim; move it into sim if gates become gameplay.
+- Shipped CREDITS_LICENSE.md files (car/, rig/, enemies/) still contain internal notes such as 'license TBD' and 'pending IP Gate'; Art/Sara should clean them before itch or the live root.
 - Headless tests are slow when the box is loaded (Blender jobs); run profiles separately with `NF_ONLY=phone|desktop`.
 
 ## What's next
@@ -34,7 +35,7 @@
 cd /workspace/studio/nightfall_roadster/repo_v02   # branch v02
 npm ci && npx playwright install chromium          # after a box reboot (gh may also need reinstalling)
 npm run typecheck && npm run test:unit             # handling, combat, m3, thrust
-NF_TAG=final npm run build                         # -> ../v02_final/{nightfall-roadster/, *.html (single file, phone GLBs inlined), *.zip}
+NF_TAG=final npm run build                         # -> ../v02_final/{nightfall-roadster/, *.html (single file, phone GLBs inlined), *.zip (index.html at zip root)}
 NF_ONLY=phone node tests/smoke.mjs                 # smoke (boot, cars, stages, rollout, drive, fire, kill, 0 errors) + screenshots
 node tests/e2e.mjs                                 # older full e2e (m3-era scenes)
 ```

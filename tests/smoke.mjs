@@ -133,7 +133,7 @@ for (const prof of profiles) {
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
 }
-if (!process.env.NF_ONLY || process.env.NF_ONLY === "desktop") {
+if (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ONLY)) {
   const http = await import("node:http");
   const path = await import("node:path");
   const DIR = BUILD.replace(/[^/]+\.html$/, "nightfall-roadster");
@@ -144,7 +144,7 @@ if (!process.env.NF_ONLY || process.env.NF_ONLY === "desktop") {
   const page = await ctx.newPage();
   const errs = [];
   page.on("pageerror", (e) => errs.push(String(e)));
-  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.goto(`http://127.0.0.1:${port}/?debug`);
   await page.waitForSelector(".nf-btn");
   const got = [];
   for (const nm of Object.keys(EXPECT)) {
