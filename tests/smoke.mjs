@@ -9,6 +9,13 @@ const profiles = [
   { name: "desktop", ctx: { viewport: { width: 1280, height: 720 } } },
   { name: "phone", ctx: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 } },
 ].filter((p) => !process.env.NF_ONLY || p.name === process.env.NF_ONLY);
+const EXPECT = {
+  "Volt Compact": { id: "volt", file: "sedan_compact" },
+  "Volt Compact R": { id: "volt_r", file: "sedan_compact_r" },
+  "Volt Compact RS": { id: "volt_rs", file: "sedan_compact_rs" },
+  "Roadster 2017": { id: "roadster", file: "roadster" },
+  "Roadster 2026": { id: "roadster2026", file: "roadster2026" },
+};
 const results = [];
 let failed = 0;
 const check = (p, n, ok, d = "") => { results.push({ p, n, ok, d }); if (!ok) failed++; console.log(`${ok ? "PASS" : "FAIL"} [${p}] ${n}${d ? " — " + d : ""}`); };
@@ -30,10 +37,12 @@ for (const prof of profiles) {
     const nm = await page.textContent(".nf-carpick-name");
     if (seen.includes(nm)) break;
     seen.push(nm);
-    await page.waitForFunction(() => window.__nfCar && window.__nfCar().source !== "loading", null, { timeout: 90000 });
-    await page.waitForTimeout(300);
+    const want = EXPECT[nm];
+    await page.waitForFunction((id) => window.__nfCar && window.__nfCar().car === id && window.__nfCar().source !== "loading", want?.id, { timeout: 90000 });
     const car = await page.evaluate(() => window.__nfCar());
-    check(P, `car ${nm} renders its GLB`, car.source === "glb" && car.missing.filter((m) => m !== "body").length === 0 && car.wheels === 4, `${car.lod} ${car.tris} tris ${car.error ?? ""} missing:${car.missing.join(",")}`);
+    // single-file build inlines phone LODs only: both profiles load <file>_phone here; desktop hero is checked on the served folder below
+    const okFile = want && car.file === `${want.file}_phone`;
+    check(P, `car ${nm} loads its own file`, car.source === "glb" && okFile && car.missing.filter((m) => m !== "body").length === 0 && car.wheels === 4, `${car.file} (${car.url}) ${car.tris} tris lod=${car.lod} ${car.error ?? ""}`);
     if (i === 0) { await page.waitForTimeout(1200); await page.screenshot({ path: `${SHOTS}/${P}-carpick.png` }); }
     await page.click("[aria-label='Next car']");
   }
@@ -87,8 +96,63 @@ for (const prof of profiles) {
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
   const k1 = await page.evaluate(() => window.__nf.takedowns);
   check(P, "an enemy dies", k1 > k0 || k0 > 0, `kills ${k0} -> ${k1}`);
+  // ---- full run loop: game over -> retry -> title -> different car + stage
+  await page.evaluate(() => { const s = window.__nf; s.lives = 1; const h = s.cars[0]; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = 0.01; });
+  await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
+  const over = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+  const ov = await page.evaluate(() => ({ phase: window.__nf.phase, lives: window.__nf.lives, wrecked: !!document.querySelector(".nf-card .nf-title-sm")?.textContent?.includes("Wrecked") }));
+  check(P, "game over screen", over && ov.phase === "finished" && ov.wrecked, JSON.stringify(ov));
+  await page.screenshot({ path: `${SHOTS}/${P}-gameover.png` });
+  await page.click("text=Run it again");
+  await page.waitForSelector(".nf-hud");
+  const rs = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return { phase: s.phase, wave: s.wave, kills: s.takedowns, score: s.score ?? 0, lives: s.lives, hp: h.hp, alive: h.alive, enemies: s.cars.filter((c) => !c.hero && c.alive).length, roll: window.__nfRollout() }; });
+  check(P, "retry resets the run", rs.phase === "playing" && rs.kills === 0 && rs.wave <= 1 && rs.lives === 3 && rs.alive && rs.enemies === 0 && rs.roll.active, JSON.stringify(rs));
+  await page.evaluate(() => window.__nfSkipRollout());
+  await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
+  const mv = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); return window.__nf.cars[0].along - a; });
+  check(P, "retry: rollout skips and control returns", mv > 10, `${mv.toFixed(1)} m`);
+  // back to title, pick another car and stage, start again
+  await page.evaluate(() => { const s = window.__nf; s.lives = 1; });
+  await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
+  await page.waitForSelector("text=Run it again", { timeout: 30000 });
+  await page.click("button:has-text('Title')");
+  await page.waitForSelector(".nf-carpick");
+  await page.click("[aria-label='Next car']");
+  await page.click("[aria-label='Next stage']");
+  const pick = { car: await page.textContent(".nf-carpick-name"), stage: await page.textContent(".nf-stagepick .nf-carpick-name") };
+  await page.click(".nf-btn");
+  await page.waitForSelector(".nf-hud");
+  await page.evaluate(() => window.__nfSkipRollout());
+  await page.waitForFunction((id) => !window.__nfRollout().active && window.__nfCar().car === id && window.__nfCar().source === "glb", EXPECT[pick.car]?.id, { timeout: 120000 });
+  const again = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); return { m: window.__nf.cars[0].along - a, car: window.__nfCar().file, stage: window.__nfStageInfo().stage, kills: window.__nf.takedowns, lives: window.__nf.lives }; });
+  check(P, "title -> new car + stage -> plays", again.m > 10 && again.stage === "classic" && again.car === `${EXPECT[pick.car].file}_phone` && again.lives === 3, `${pick.car} / ${pick.stage}: ${JSON.stringify(again)}`);
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
+}
+if (!process.env.NF_ONLY || process.env.NF_ONLY === "desktop") {
+  const http = await import("node:http");
+  const path = await import("node:path");
+  const DIR = BUILD.replace(/[^/]+\.html$/, "nightfall-roadster");
+  const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".glb": "model/gltf-binary", ".png": "image/png" };
+  const srv = http.createServer((q, r) => { let f = path.join(DIR, decodeURIComponent(q.url.split("?")[0])); if (f.endsWith("/")) f += "index.html"; fs.readFile(f, (e, d) => { if (e) { r.writeHead(404); r.end(); return; } r.writeHead(200, { "content-type": types[path.extname(f)] || "application/octet-stream" }); r.end(d); }); }).listen(0);
+  const port = srv.address().port;
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await ctx.newPage();
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.waitForSelector(".nf-btn");
+  const got = [];
+  for (const nm of Object.keys(EXPECT)) {
+    await page.waitForFunction((id) => window.__nfCar && window.__nfCar().car === id && window.__nfCar().source !== "loading", EXPECT[nm].id, { timeout: 120000 }).catch(() => {});
+    const c = await page.evaluate(() => window.__nfCar());
+    got.push(`${nm}=${c.file}:${c.tris}`);
+    if (c.file !== `${EXPECT[nm].file}_hero`) got.push("WRONG");
+    await page.click("[aria-label='Next car']");
+  }
+  check("desktop-folder", "desktop loads each car's own hero LOD (served folder)", !got.includes("WRONG") && errs.length === 0, got.join(", "));
+  await ctx.close();
+  srv.close();
 }
 await browser.close();
 fs.writeFileSync(`${SHOTS}/smoke-results.json`, JSON.stringify(results, null, 2));

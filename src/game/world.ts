@@ -452,7 +452,7 @@ function hash(i: number) {
 }
 
 // ---------------------------------------------------------------- m5a: Roadster GLB (Art & Assets stand-in)
-export type CarInfo = { source: "procedural" | "glb" | "loading"; car: string; lod: "phone" | "hero"; url: string; wheels: number; nodes: string[]; missing: string[]; error?: string; tris?: number };
+export type CarInfo = { source: "procedural" | "glb" | "loading"; car: string; lod: "phone" | "hero"; url: string; wheels: number; nodes: string[]; missing: string[]; error?: string; tris?: number; file?: string };
 const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thruster_L", "thruster_R", "lamp_L", "lamp_R", "taillight", "turret_mount", "driver_seat"];
 
 /** Playable cars: same handling for all; only the GLB changes. file = assets_v02/car/<file>_<lod>.glb */
@@ -480,6 +480,13 @@ function inlineGlb(key: string) {
   return inline?.[key];
 }
 
+/** the exact file key a car loads: <file>_<lod>, or the phone LOD when only that is inlined (single-file build) */
+function carFile(car: CarId, lod: "phone" | "hero") {
+  const file = CARS.find((c) => c.id === car)?.file ?? "roadster";
+  if (inlineGlb(`${file}_${lod}`)) return `${file}_${lod}`;
+  if (inlineGlb(`${file}_phone`)) return `${file}_phone`;
+  return `${file}_${lod}`;
+}
 function carUrl(car: CarId, lod: "phone" | "hero") {
   const file = CARS.find((c) => c.id === car)?.file ?? "roadster";
   const d = inlineGlb(`${file}_${lod}`) ?? inlineGlb(`${file}_phone`) ?? (file === "roadster" ? inlineGlb(lod) : undefined);
@@ -738,6 +745,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
   function setCar(id: CarId) {
     carId = id;
+    if ((views[0] as (CarView & { carId?: string }) | undefined)?.carId !== id) {
+      carInfo.source = "loading";
+      carInfo.file = undefined;
+    }
     carInfo.car = id;
     loadCar(id);
   }
@@ -1165,22 +1176,24 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const hv = views[0] as CarView & { carId?: string };
     try {
       const inst = model.clone(true);
-      const names: string[] = [];
-      inst.traverse((o) => {
-        if (o.name) names.push(o.name);
-      });
-      carInfo.missing = applyCarGlb(hv, inst);
       let tris = 0;
       inst.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
       });
+      const names: string[] = [];
+      inst.traverse((o) => {
+        if (o.name) names.push(o.name);
+      });
+      carInfo.missing = applyCarGlb(hv, inst);
       carInfo.nodes = names;
       carInfo.tris = Math.round(tris);
       carInfo.wheels = hv.wheels.length;
       carInfo.source = "glb";
       const u = carUrl(carId, carLod);
-      carInfo.url = u.startsWith("data:") ? "inline" : u;
+      carInfo.car = carId;
+      carInfo.file = carFile(carId, carLod);
+      carInfo.url = u.startsWith("data:") ? "inline:" + carInfo.file : u;
       carInfo.error = undefined;
     } catch (err) {
       carInfo.source = "procedural";

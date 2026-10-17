@@ -425,6 +425,13 @@ export function RoadsterGame() {
     if (map) drawMap(map, sim);
   }
 
+  function toTitle() {
+    const sim = simRef.current;
+    if (!sim) return;
+    sim.phase = "menu";
+    phaseRef.current = "menu";
+    setPhase("menu");
+  }
   function startRace() {
     const sim = simRef.current;
     const audio = audioRef.current;
@@ -653,6 +660,7 @@ export function RoadsterGame() {
               <div><span>Score</span><strong>{result.score}</strong></div>
             </div>
             <button type="button" className="nf-btn" onClick={startRace}>Run it again</button>
+            <button type="button" className="nf-btn nf-btn-ghost" onClick={toTitle}>Title</button>
             <p className="nf-best">{best}</p>
           </div>
         </div>
