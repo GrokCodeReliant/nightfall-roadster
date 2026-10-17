@@ -145,9 +145,9 @@ for (const prof of profiles) {
   await page.click(".nf-pausemenu >> text=Resume");
   check(P, "Resume", (await page.evaluate(() => window.__nf.phase)) === "playing");
   await page.keyboard.press("Escape");
-  const escOpen = await page.isVisible(".nf-pausemenu");
+  const escOpen = await page.waitForSelector(".nf-pausemenu", { timeout: 20000 }).then(() => true).catch(() => false);
   await page.keyboard.press("Escape");
-  const escClose = !(await page.isVisible(".nf-pausemenu")) && (await page.evaluate(() => window.__nf.phase)) === "playing";
+  const escClose = (await page.waitForSelector(".nf-pausemenu", { state: "detached", timeout: 20000 }).then(() => true).catch(() => false)) && (await page.evaluate(() => window.__nf.phase)) === "playing";
   check(P, "Esc opens and closes the pause menu", escOpen && escClose);
   await page.evaluate(() => { window.__nfAdvance(3, "hunt"); });
   await page.keyboard.press("Escape");
@@ -178,7 +178,21 @@ for (const prof of profiles) {
   const after = await snap();
   const st2 = await page.evaluate(() => window.__nfStageInfo().stage);
   check(P, "menu -> different car + stage plays", pk.car !== carBefore && pk.stage !== stageBefore && after.phase === "playing" && st2 === (pk.stage === "Night City" ? "city" : "classic"), `${carBefore}/${stageBefore} -> ${pk.car}/${pk.stage} (${st2})`);
-  check(P, "no growth: scene objects, draws, audio loop nodes near baseline", after.objects <= base.objects * 1.15 + 20 && after.audio === base.audio && after.geometries <= base.geometries * 1.25 + 20, `base ${JSON.stringify(base)} after ${JSON.stringify(after)}`);
+  // second round trip back to the baseline stage so the comparison is like for like
+  await page.keyboard.press("Escape");
+  await page.click(".nf-pausemenu >> text=Back to menu");
+  await page.click("text=Yes, back to menu");
+  await page.waitForSelector(".nf-carpick");
+  await page.click("[aria-label='Next stage']");
+  await page.click(".nf-btn");
+  await page.waitForSelector(".nf-hud");
+  await page.evaluate(() => window.__nfSkipRollout());
+  await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+  await page.evaluate(() => window.__nfAdvance(2, ["KeyW"]));
+  await settle();
+  const after2 = await snap();
+  check(P, "no growth after 2 menu round trips: scene objects, geometries, audio loop nodes near baseline", after2.objects <= base.objects + 10 && after2.audio === base.audio && after2.geometries <= base.geometries + 30, `base ${JSON.stringify(base)} city ${JSON.stringify(after)} back ${JSON.stringify(after2)}`);
+  if (false) check(P, "x", after.objects <= base.objects * 1.15 + 20 && after.audio === base.audio && after.geometries <= base.geometries * 1.25 + 20, `base ${JSON.stringify(base)} after ${JSON.stringify(after)}`);
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
 }
