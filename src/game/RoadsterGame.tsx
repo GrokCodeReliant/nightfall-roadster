@@ -4,7 +4,7 @@ import { createAudio, type AudioBus } from "./audio";
 import { threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
-import { createWorld } from "./world";
+import { CARS, createWorld, type CarId } from "./world";
 
 declare global {
   interface Window {
@@ -61,6 +61,24 @@ export function RoadsterGame() {
   const gunLabelRef = useRef<HTMLSpanElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
   const threatsRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<ReturnType<typeof createWorld> | null>(null);
+  const [carIdx, setCarIdx] = useState(() => {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("nf-car") : null;
+    const i = CARS.findIndex((c) => c.id === saved);
+    return i >= 0 ? i : 0;
+  });
+  const carIdxRef = useRef(carIdx);
+  function pickCar(delta: number) {
+    const i = (carIdxRef.current + delta + CARS.length) % CARS.length;
+    carIdxRef.current = i;
+    setCarIdx(i);
+    try {
+      localStorage.setItem("nf-car", CARS[i].id);
+    } catch {
+      /* private mode */
+    }
+    worldRef.current?.setCar(CARS[i].id as CarId);
+  }
   const chipKey = useRef("");
   const knobRef = useRef<HTMLSpanElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
@@ -80,6 +98,8 @@ export function RoadsterGame() {
     let world: ReturnType<typeof createWorld>;
     try {
       world = createWorld(canvas);
+      worldRef.current = world;
+      world.setCar(CARS[carIdxRef.current].id as CarId);
     } catch (err) {
       console.warn("WebGL unavailable", err);
       setGlError(true);
@@ -132,6 +152,9 @@ export function RoadsterGame() {
         __nfFade: () => world.debugFade(),
         __nfProject: (id: number) => world.project(sim, id),
         __nfCar: () => world.carInfo(),
+        __nfRollout: () => world.rolloutState(),
+        __nfSkipRollout: () => world.skipRollout(),
+        __nfDraws: () => world.drawInfo(),
         __nfEnemies: () => world.enemyInfo(),
         __nfBehind: (off: number) => {
           const h = sim.cars[0];
@@ -158,6 +181,11 @@ export function RoadsterGame() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
+      if (world?.rolloutState().active) {
+        world.skipRollout(); // any key skips the rig rollout
+        return;
+      }
+      if (sim.phase === "menu" && !e.repeat && (e.code === "ArrowLeft" || e.code === "ArrowRight")) pickCar(e.code === "ArrowLeft" ? -1 : 1);
       sim.keys.add(e.code);
       if (e.repeat) return;
       if (e.code === "KeyM") {
@@ -183,6 +211,10 @@ export function RoadsterGame() {
       else audio.resume();
     };
     const onDown = (e: PointerEvent) => {
+      if (world?.rolloutState().active) {
+        world.skipRollout(); // tap skips the rig rollout
+        return;
+      }
       if (e.pointerType !== "mouse" || sim.phase !== "playing") return;
       const el = e.target as HTMLElement | null;
       if (el?.closest("button, a, .nf-touch, .nf-panel, .nf-card")) return;
@@ -227,7 +259,9 @@ export function RoadsterGame() {
       acc = Math.min(stepDt * 5, acc + dt);
       sim.events.length = 0;
       let guard = 0;
-      while (acc >= stepDt && guard < 5) {
+      const rolling = world.rolloutState().active;
+      if (rolling) acc = 0;
+      while (!rolling && acc >= stepDt && guard < 5) {
         step(sim, stepDt);
         acc -= stepDt;
         guard += 1;
@@ -388,6 +422,8 @@ export function RoadsterGame() {
     sim.autoGas = coarse;
     setCruise(coarse);
     begin(sim);
+    worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
+    worldRef.current?.startRollout(sim); // hauler rig rollout; the sim waits (skippable by tap/key)
     phaseRef.current = "playing";
     setPhase("playing");
   }
@@ -550,6 +586,11 @@ export function RoadsterGame() {
             <p className="nf-lede">
               Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
             </p>
+            <div className="nf-carpick" role="group" aria-label="Choose car">
+              <button type="button" className="nf-carpick-arrow" aria-label="Previous car" onClick={() => pickCar(-1)}>‹</button>
+              <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
+              <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
+            </div>
             <div className="nf-launch">
               <button type="button" className="nf-btn" onClick={startRace}>
                 Start

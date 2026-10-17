@@ -1,7 +1,9 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { Kind, PickupKind, Sim } from "./sim";
-import { ensureTrack, poseAt, sampleAt, STEP, type Piece } from "./road";
+import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
 type CarView = {
@@ -132,6 +134,11 @@ export type World = {
   dispose: () => void;
   debugFade: () => number[];
   carInfo: () => CarInfo;
+  setCar: (id: CarId) => void;
+  startRollout: (sim: Sim) => boolean;
+  skipRollout: () => void;
+  rolloutState: () => { active: boolean; t: number; robots: number; idle: boolean };
+  drawInfo: () => { draws: number; tris: number };
   enemyInfo: () => Record<string, unknown>;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
@@ -441,13 +448,71 @@ function hash(i: number) {
 }
 
 // ---------------------------------------------------------------- m5a: Roadster GLB (Art & Assets stand-in)
-export type CarInfo = { source: "procedural" | "glb" | "loading"; lod: "phone" | "hero"; url: string; wheels: number; nodes: string[]; missing: string[]; error?: string; tris?: number };
+export type CarInfo = { source: "procedural" | "glb" | "loading"; car: string; lod: "phone" | "hero"; url: string; wheels: number; nodes: string[]; missing: string[]; error?: string; tris?: number };
 const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thruster_L", "thruster_R", "lamp_L", "lamp_R", "taillight", "turret_mount", "driver_seat"];
 
-function carUrl(lod: "phone" | "hero") {
+/** Playable cars: same handling for all; only the GLB changes. file = assets_v02/car/<file>_<lod>.glb */
+export const CARS = [
+  { id: "volt", name: "Volt Compact", file: "sedan_compact" },
+  { id: "roadster", name: "Roadster 2017", file: "roadster" },
+  { id: "roadster2026", name: "Roadster 2026", file: "roadster2026" },
+] as const;
+export type CarId = (typeof CARS)[number]["id"];
+
+function inlineGlb(key: string) {
   const inline = (window as unknown as { __NF_GLB?: Record<string, string> }).__NF_GLB;
-  if (inline?.[lod]) return inline[lod];
-  return `${import.meta.env.BASE_URL}assets/v02/car/roadster_${lod}.glb`;
+  return inline?.[key];
+}
+
+function carUrl(car: CarId, lod: "phone" | "hero") {
+  const file = CARS.find((c) => c.id === car)?.file ?? "roadster";
+  const d = inlineGlb(`${file}_${lod}`) ?? inlineGlb(`${file}_phone`) ?? (file === "roadster" ? inlineGlb(lod) : undefined);
+  if (d) return d;
+  return `${import.meta.env.BASE_URL}assets/v02/car/${file}_${lod}.glb`;
+}
+
+function rigUrl(file: string) {
+  return inlineGlb(file) ?? `${import.meta.env.BASE_URL}assets/v02/rig/${file}.glb`;
+}
+
+/**
+ * Draw-call budget: bake node transforms and merge static meshes per material (one draw per material).
+ * Animated/tinted/attach subtrees named by `keep` (wheels, doors, ramp, rotors, turret, blades...) and skinned
+ * meshes stay separate. Attach empties are untouched.
+ */
+const KEEP_RE = /^(wheel_|cab_wheel_|trailer_wheel_|door_|trailer_door_|ramp|rotor_|turret_mount|blades_|chute_hatch|robot)/;
+export function mergeStatic(root: THREE.Object3D) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const victims: THREE.Mesh[] = [];
+  const kept = (o: THREE.Object3D) => {
+    for (let p: THREE.Object3D | null = o; p && p !== root; p = p.parent) if (KEEP_RE.test(p.name)) return true;
+    return false;
+  };
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || (m as unknown as THREE.SkinnedMesh).isSkinnedMesh || kept(m) || Array.isArray(m.material)) return;
+    const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", g0.getAttribute("position"));
+    if (g0.getAttribute("normal")) g.setAttribute("normal", g0.getAttribute("normal"));
+    else return;
+    g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    const list = groups.get(m.material as THREE.Material) ?? [];
+    list.push(g);
+    groups.set(m.material as THREE.Material, list);
+    victims.push(m);
+  });
+  if (victims.length < 2) return;
+  for (const v of victims) v.parent?.remove(v);
+  for (const [mat, list] of groups) {
+    const merged = mergeGeometries(list, false);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.name = `merged_${mat.name || "mat"}`;
+    root.add(mesh);
+  }
 }
 
 /**
@@ -633,33 +698,34 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   const hull = hullGeometry();
   const carLod: "phone" | "hero" = coarse ? "phone" : "hero";
-  const carInfo: CarInfo = { source: "loading", lod: carLod, url: "", wheels: 4, nodes: [], missing: [] };
-  let carModel: THREE.Object3D | null = null;
-  try {
-    const url = carUrl(carLod);
-    carInfo.url = url.startsWith("data:") ? "inline" : url;
-    new GLTFLoader().load(
-      url,
-      (gltf) => {
-        carModel = gltf.scene;
-        let tris = 0;
-        gltf.scene.traverse((o) => {
-          const m = o as THREE.Mesh;
-          if (o.name) carInfo.nodes.push(o.name);
-          if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
-        });
-        carInfo.tris = Math.round(tris);
-      },
-      undefined,
-      (err) => {
-        carInfo.source = "procedural"; // fallback: keep the procedural hull
-        carInfo.error = String((err as Error)?.message ?? err).slice(0, 160);
-      },
-    );
-  } catch (err) {
-    carInfo.source = "procedural";
-    carInfo.error = String(err).slice(0, 160);
+  const carInfo: CarInfo = { source: "loading", car: "volt", lod: carLod, url: "", wheels: 4, nodes: [], missing: [] };
+  const carModels: Partial<Record<CarId, THREE.Object3D>> = {};
+  const carFailed: Partial<Record<CarId, string>> = {};
+  let carId: CarId = "volt";
+  function loadCar(id: CarId) {
+    if (carModels[id] || carFailed[id]) return;
+    try {
+      new GLTFLoader().load(
+        carUrl(id, carLod),
+        (gltf) => {
+          mergeStatic(gltf.scene);
+          carModels[id] = gltf.scene;
+        },
+        undefined,
+        (err) => {
+          carFailed[id] = String((err as Error)?.message ?? err).slice(0, 160);
+        },
+      );
+    } catch (err) {
+      carFailed[id] = String(err).slice(0, 160);
+    }
   }
+  function setCar(id: CarId) {
+    carId = id;
+    carInfo.car = id;
+    loadCar(id);
+  }
+  loadCar("volt");
   const views: CarView[] = [];
 
   const sea = new THREE.Mesh(
@@ -960,6 +1026,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       new GLTFLoader().load(
         enemyUrl(kind, enemyLod),
         (g) => {
+          mergeStatic(g.scene);
           enemyModels[kind] = g.scene;
           enemyInfo[kind] = "glb";
         },
@@ -1006,16 +1073,182 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   function attachCar() {
-    if (!carModel || !views[0] || views[0].glb) return;
+    const v = views[0] as (CarView & { carId?: string }) | undefined;
+    if (!v) return;
+    if (carFailed[carId]) {
+      if (v.glb) rebuildHero(); // fallback: procedural hull
+      (views[0] as CarView & { carId?: string }).carId = carId;
+      carInfo.source = "procedural";
+      carInfo.error = carFailed[carId];
+      return;
+    }
+    const model = carModels[carId];
+    if (!model) {
+      if (!v.glb) carInfo.source = "loading";
+      return;
+    }
+    if (v.carId === carId && v.glb) return;
+    if (v.glb) rebuildHero();
+    const hv = views[0] as CarView & { carId?: string };
     try {
-      carInfo.missing = applyCarGlb(views[0], carModel);
-      carInfo.wheels = views[0].wheels.length;
+      const inst = model.clone(true);
+      const names: string[] = [];
+      inst.traverse((o) => {
+        if (o.name) names.push(o.name);
+      });
+      carInfo.missing = applyCarGlb(hv, inst);
+      let tris = 0;
+      inst.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+      });
+      carInfo.nodes = names;
+      carInfo.tris = Math.round(tris);
+      carInfo.wheels = hv.wheels.length;
       carInfo.source = "glb";
+      const u = carUrl(carId, carLod);
+      carInfo.url = u.startsWith("data:") ? "inline" : u;
+      carInfo.error = undefined;
     } catch (err) {
       carInfo.source = "procedural";
       carInfo.error = String(err).slice(0, 160);
     }
+    hv.carId = carId;
   }
+
+  function rebuildHero() {
+    const old = views[0];
+    scene.remove(old.root);
+    scene.remove(old.shadow);
+    const v = buildCar(true, hull);
+    scene.add(v.root);
+    scene.add(v.shadow);
+    views[0] = v;
+  }
+
+  // ---------------------------------------------------------------- m5: hauler rig rollout (timeline outside the sim)
+  let rigModel: THREE.Object3D | null = null;
+  let robotGltf: { scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null = null;
+  try {
+    new GLTFLoader().load(rigUrl("rig_phone"), (g) => {
+      mergeStatic(g.scene);
+      rigModel = g.scene;
+    }, undefined, () => {});
+    new GLTFLoader().load(rigUrl("robot_phone"), (g) => (robotGltf = g), undefined, () => {});
+  } catch {
+    /* rollout simply won't play */
+  }
+  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[] };
+  let roll: Rollout | null = null;
+  const RIG_BACK = 14.6; // the car ends 14.6 m behind the rig origin (past the ramp foot)
+  const HAND = 5.6;
+  function startRollout(sim: Sim): boolean {
+    stopRollout();
+    if (!rigModel) return false;
+    const rig = rigModel.clone(true);
+    scene.add(rig);
+    const mixers: THREE.AnimationMixer[] = [];
+    let robots = 0;
+    let idle = false;
+    if (robotGltf) {
+      for (const n of ["robot_spawn_A", "robot_spawn_B"]) {
+        const at = rig.getObjectByName(n);
+        if (!at) continue;
+        try {
+          const r = skeletonClone(robotGltf.scene);
+          at.add(r);
+          robots += 1;
+          const clip = robotGltf.animations.find((a) => a.name === "idle");
+          if (clip) {
+            const mx = new THREE.AnimationMixer(r);
+            mx.clipAction(clip).play();
+            mx.update(Math.random());
+            mixers.push(mx);
+            idle = true;
+          }
+        } catch {
+          /* robots are optional */
+        }
+      }
+    }
+    const wheels: THREE.Object3D[] = [];
+    rig.traverse((o) => {
+      if (/wheel/.test(o.name) && !/_mesh/.test(o.name)) wheels.push(o);
+    });
+    roll = { t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
+    return true;
+  }
+  function stopRollout() {
+    if (roll) scene.remove(roll.rig);
+    roll = null;
+  }
+  function skipRollout() {
+    if (roll && !roll.handed) roll.t = HAND;
+  }
+  const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+  function rigS(r: Rollout, t: number) {
+    const stop = r.spawnS + RIG_BACK;
+    if (t < 2.2) return stop - 45 * (1 - ease(t / 2.2)); // drives in ahead and stops
+    if (t < HAND) return stop;
+    const u = t - HAND;
+    return stop + 9 * u * u + 6 * u; // pulls away after handover
+  }
+  function updateRollout(sim: Sim, dt: number) {
+    if (!roll) return;
+    const r = roll;
+    r.t += dt;
+    for (const m of r.mixers) m.update(dt);
+    const t = r.t;
+    const s = rigS(r, t);
+    const p = poseAt(sim.track, s);
+    r.rig.position.set(p.x, p.y, p.z);
+    r.rig.rotation.set(0, yawFromDir(p.tx, p.tz) + Math.PI, 0);
+    const rigSpeed = (rigS(r, t + 0.02) - s) / 0.02;
+    for (const w of r.wheels) w.rotation.x += (rigSpeed * dt) / 0.52;
+    // ramp drops BEFORE the doors open; the doors close BEFORE the ramp is raised
+    const rampDown = t < 2.2 ? 0 : t < 3.0 ? ease((t - 2.2) / 0.8) : t < HAND + 0.6 ? 1 : 1 - ease((t - HAND - 0.6) / 0.8);
+    const doors = t < 3.0 ? 0 : t < 3.6 ? ease((t - 3.0) / 0.6) : t < HAND ? 1 : 1 - ease((t - HAND) / 0.6);
+    if (r.ramp) r.ramp.rotation.x = ((-94 * Math.PI) / 180) * rampDown;
+    if (r.doorL) r.doorL.rotation.y = ((100 * Math.PI) / 180) * doors;
+    if (r.doorR) r.doorR.rotation.y = ((-100 * Math.PI) / 180) * doors;
+    if (!r.handed && t >= HAND) r.handed = true;
+    if (t > HAND + 9) stopRollout();
+  }
+  /** while the rollout runs the hero car is posed by the timeline, not by the sim */
+  function poseHeroInRollout(sim: Sim) {
+    if (!roll || roll.handed || !views[0]) return;
+    const r = roll;
+    const t = r.t;
+    const stop = r.spawnS + RIG_BACK;
+    // local z in the trailer: bay_floor (-9.05) -> ramp foot (-13.8) -> road (-14.6); the car rolls out backwards
+    const u = t < 3.6 ? 0 : ease((t - 3.6) / (HAND - 3.6));
+    const localZ = -9.05 + (-RIG_BACK + 9.05) * u;
+    const sNow = (t < 2.2 ? rigS(r, t) : stop) + localZ;
+    const p = poseAt(sim.track, sNow);
+    const hinge = -11.56;
+    const foot = -13.8;
+    const y = localZ > hinge ? 0.155 : localZ > foot ? 0.155 * (1 - (hinge - localZ) / (hinge - foot)) : 0;
+    const v = views[0];
+    v.root.position.set(p.x, p.y + y, p.z);
+    v.root.rotation.set(0, yawFromDir(p.tx, p.tz) + Math.PI, 0);
+    v.shadow.position.set(p.x, p.y + 0.08, p.z);
+    for (const w of v.wheels) w.spin.rotation.x = -localZ / 0.38;
+    for (const f of v.flames) f.scale.set(0.15, 0.02, 0.15);
+    // cinematic camera off the trailer's rear quarter, looking at the car
+    const cs = poseAt(sim.track, stop - 24);
+    camera.position.set(cs.x + cs.rx * 6.5, cs.y + 3.2, cs.z + cs.rz * 6.5);
+    camera.lookAt(p.x, p.y + 0.8, p.z);
+    if (Math.abs(camera.fov - 50) > 0.4) {
+      camera.fov = 50;
+      camera.updateProjectionMatrix();
+    }
+    camPos.copy(camera.position);
+    lookPos.set(p.x, p.y + 0.8, p.z);
+  }
+  function rolloutState() {
+    return roll ? { active: !roll.handed, t: roll.t, robots: roll.robots, idle: roll.idle } : { active: false, t: -1, robots: 0, idle: false };
+  }
+
 
   function ensureViews(sim: Sim) {
     while (views.length < sim.cars.length) {
@@ -1264,6 +1497,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
     }
     // P0 fix: the frame was never drawn (no render call) -> black 3D view on every device.
+    if (roll) {
+      updateRollout(sim, dt);
+      poseHeroInRollout(sim);
+    }
     if (!contextLost) renderer.render(scene, camera);
   }
 
@@ -1295,6 +1532,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     project,
     debugFade: () => views.map((v) => v.fade),
     carInfo: () => carInfo,
+    setCar,
+    startRollout,
+    skipRollout,
+    rolloutState,
+    drawInfo: () => ({ draws: renderer.info.render.calls, tris: renderer.info.render.triangles }),
     enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),
   };
 }

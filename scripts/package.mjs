@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const dist = "dist";
-const tag = process.env.NF_TAG || "m5b";
+const tag = process.env.NF_TAG || "m5a";
 const out = process.env.NF_OUT || `/workspace/studio/nightfall_roadster/v02_${tag}`;
 const folder = out + "/nightfall-roadster";
 fs.rmSync(folder, { recursive: true, force: true });
@@ -28,8 +28,10 @@ const glbDir = dist + "/assets/v02/car";
 // enemies: only the phone LODs are inlined (the single file uses them on desktop too, to keep it ~10 MB)
 const enDir = dist + "/assets/v02/enemies";
 const b64 = (p) => "data:model/gltf-binary;base64," + fs.readFileSync(p).toString("base64");
-const inlineMap = Object.fromEntries(["phone", "hero"].filter((l) => fs.existsSync(`${glbDir}/roadster_${l}.glb`)).map((l) => [l, b64(`${glbDir}/roadster_${l}.glb`)]));
-if (fs.existsSync(enDir)) for (const f of fs.readdirSync(enDir)) if (f.endsWith("_phone.glb")) inlineMap[f.replace(".glb", "")] = b64(`${enDir}/${f}`);
+const inlineMap = {};
+for (const [dir, test] of [[glbDir, (f) => f.endsWith("_phone.glb")], [enDir, (f) => f.endsWith("_phone.glb")], [dist + "/assets/v02/rig", (f) => f.endsWith("_phone.glb")]]) {
+  if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (test(f)) inlineMap[f.replace(".glb", "")] = b64(`${dir}/${f}`);
+}
 const glbInline = "window.__NF_GLB=" + JSON.stringify(inlineMap) + ";";
 const cssTxt = fs.readFileSync(`${folder}/${css[1]}`, "utf8");
 const single = html
