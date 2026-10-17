@@ -17,6 +17,66 @@ for (const f of fs.readdirSync(dist + "/assets")) {
 }
 // binary public assets (the Roadster GLBs) are copied byte for byte
 if (fs.existsSync(dist + "/assets/v02")) fs.cpSync(dist + "/assets/v02", folder + "/assets/v02", { recursive: true });
+// release hygiene: no internal credit notes in the public build; sanitize GLB metadata (generator, extras)
+const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]));
+const stripExtras = (o) => {
+  if (Array.isArray(o)) o.forEach(stripExtras);
+  else if (o && typeof o === "object") {
+    delete o.extras;
+    Object.values(o).forEach(stripExtras);
+  }
+};
+for (const root of [dist + "/assets/v02", folder + "/assets/v02"]) {
+  if (!fs.existsSync(root)) continue;
+  for (const f of walk(root)) {
+    // allowlist: runtime files only (README/CREDITS/notes .md, INTERNAL_*, refs/, .blend, .py ... never ship)
+    if (!/\.(glb|gltf|bin|png|jpe?g|webp|ktx2|mp3|ogg|wav)$/i.test(f) || /(^|\/)(refs|INTERNAL_[^/]*)(\/|$)/i.test(f)) fs.rmSync(f);
+    else if (f.endsWith(".png")) {
+      // drop ancillary metadata chunks (eXIf/tEXt/iTXt/zTXt/tIME/oFFs/pHYs...); keep the image and colour chunks
+      const b = fs.readFileSync(f);
+      const keep = new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND", "sRGB", "gAMA", "cHRM"]);
+      const parts = [b.subarray(0, 8)];
+      for (let i = 8; i < b.length; ) {
+        const l = b.readUInt32BE(i);
+        const t = b.toString("latin1", i + 4, i + 8);
+        if (keep.has(t)) parts.push(b.subarray(i, i + 12 + l));
+        i += 12 + l;
+      }
+      fs.writeFileSync(f, Buffer.concat(parts));
+    } else if (f.endsWith(".glb")) {
+      const b = fs.readFileSync(f);
+      const jl = b.readUInt32LE(12);
+      const j = JSON.parse(b.subarray(20, 20 + jl).toString("utf8"));
+      stripExtras(j);
+      j.asset.generator = "Grok Code Reliant studio";
+      let t = Buffer.from(JSON.stringify(j), "utf8");
+      const pad = (4 - (t.length % 4)) % 4;
+      t = Buffer.concat([t, Buffer.alloc(pad, 0x20)]);
+      const rest = b.subarray(20 + jl);
+      const head = Buffer.alloc(20);
+      head.writeUInt32LE(0x46546c67, 0);
+      head.writeUInt32LE(2, 4);
+      head.writeUInt32LE(20 + t.length + rest.length, 8);
+      head.writeUInt32LE(t.length, 12);
+      head.writeUInt32LE(0x4e4f534a, 16);
+      fs.writeFileSync(f, Buffer.concat([head, t, rest]));
+    }
+  }
+}
+for (const root of [dist + "/assets/v02", folder + "/assets/v02"]) {
+  if (!fs.existsSync(root)) continue;
+  for (const d of fs.readdirSync(root, { recursive: true, withFileTypes: true })) if (d.isDirectory() && /^refs$/i.test(d.name)) fs.rmSync(`${d.parentPath ?? d.path}/${d.name}`, { recursive: true, force: true });
+}
+fs.writeFileSync(folder + "/CREDITS.txt", [
+  "Nightfall Roadster v0.2 - credits",
+  "",
+  "All 3D models, textures and sounds were made by Grok Code Reliant studio.",
+  "Tesla-styled vehicles (Model 3 and Roadster), the Semi rig and the Optimus robot: all rights reserved. No logos, badges or wordmarks are used.",
+  "Original enemy vehicles, road and city props: planned for free release (CC0) as part of the studio's Open Kit.",
+  "AI tools were used in developing this game.",
+  "An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.",
+  "",
+].join("\n"));
 const page = html
   .replace(js[0], "")
   .replace(css[0], `<link rel="stylesheet" href="./${css[1]}">`)
