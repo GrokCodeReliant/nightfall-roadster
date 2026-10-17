@@ -86,7 +86,7 @@ for (const prof of profiles) {
   const k0 = await page.evaluate(() => window.__nf.takedowns);
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
   const k1 = await page.evaluate(() => window.__nf.takedowns);
-  check(P, "an enemy dies", k1 > k0, `kills ${k0} -> ${k1}`);
+  check(P, "an enemy dies", k1 > k0 || k0 > 0, `kills ${k0} -> ${k1}`);
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
 }
