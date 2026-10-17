@@ -269,7 +269,9 @@ export function RoadsterGame() {
       world.sync(sim, dt, sim.phase === "menu");
       const hero = sim.cars[0];
       const live = sim.phase === "playing" || sim.phase === "paused";
-      audio.engine(hero.speed, hero.thrust, sim.phase === "playing" && hero.alive);
+      const rs = world.rolloutState();
+      if (rs.active) audio.engine(0, rs.thrust, true);
+      else audio.engine(hero.speed, hero.thrust, sim.phase === "playing" && hero.alive);
       for (const e of sim.events) {
         if (e.t === "shot") audio.gun();
         else if (e.t === "mine") audio.mine();

@@ -137,7 +137,7 @@ export type World = {
   setCar: (id: CarId) => void;
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
-  rolloutState: () => { active: boolean; t: number; robots: number; idle: boolean };
+  rolloutState: () => { thrust: number; bayY: number; active: boolean; t: number; robots: number; idle: boolean };
   drawInfo: () => { draws: number; tris: number };
   enemyInfo: () => Record<string, unknown>;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
@@ -454,6 +454,7 @@ const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thru
 /** Playable cars: same handling for all; only the GLB changes. file = assets_v02/car/<file>_<lod>.glb */
 export const CARS = [
   { id: "volt", name: "Volt Compact", file: "sedan_compact" },
+  { id: "volt_r", name: "Volt Compact R", file: "sedan_compact_r" },
   { id: "roadster", name: "Roadster 2017", file: "roadster" },
   { id: "roadster2026", name: "Roadster 2026", file: "roadster2026" },
 ] as const;
@@ -1138,10 +1139,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   } catch {
     /* rollout simply won't play */
   }
-  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[] };
+  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[]; bayY: number };
   let roll: Rollout | null = null;
   const RIG_BACK = 14.6; // the car ends 14.6 m behind the rig origin (past the ramp foot)
-  const HAND = 5.6;
+  const HAND = 5.8;
   function startRollout(sim: Sim): boolean {
     stopRollout();
     if (!rigModel) return false;
@@ -1175,7 +1176,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     rig.traverse((o) => {
       if (/wheel/.test(o.name) && !/_mesh/.test(o.name)) wheels.push(o);
     });
-    roll = { t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
+    rig.position.set(0, 0, 0);
+    rig.rotation.set(0, 0, 0);
+    rig.updateMatrixWorld(true);
+    const bayN = rig.getObjectByName("bay_floor");
+    const bayY = bayN ? bayN.getWorldPosition(new THREE.Vector3()).y : 1.2;
+    roll = { bayY, t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
     return true;
   }
   function stopRollout() {
@@ -1215,38 +1221,53 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (t > HAND + 9) stopRollout();
   }
   /** while the rollout runs the hero car is posed by the timeline, not by the sim */
+  const OUT0 = 3.6, OUT1 = 5.3; // hover-out window (thrusters lit); then drop + bounce until HAND
+  function rollThrust(t: number) {
+    return t >= OUT0 - 0.15 && t < OUT1 ? 1 : 0;
+  }
   function poseHeroInRollout(sim: Sim) {
     if (!roll || roll.handed || !views[0]) return;
     const r = roll;
     const t = r.t;
     const stop = r.spawnS + RIG_BACK;
-    // local z in the trailer: bay_floor (-9.05) -> ramp foot (-13.8) -> road (-14.6); the car rolls out backwards
-    const u = t < 3.6 ? 0 : ease((t - 3.6) / (HAND - 3.6));
+    // starts on bay_floor (local z -9.05, bay height), backs out rearward HOVERING at bay height past the trailer end, then drops
+    const u = t < OUT0 ? 0 : ease((t - OUT0) / (OUT1 - OUT0));
     const localZ = -9.05 + (-RIG_BACK + 9.05) * u;
     const sNow = (t < 2.2 ? rigS(r, t) : stop) + localZ;
     const p = poseAt(sim.track, sNow);
-    const hinge = -11.56;
-    const foot = -13.8;
-    const y = localZ > hinge ? 0.155 : localZ > foot ? 0.155 * (1 - (hinge - localZ) / (hinge - foot)) : 0;
+    let y = r.bayY;
+    if (t >= OUT1) {
+      const d = Math.min(1, (t - OUT1) / (HAND - OUT1));
+      y = d < 0.45 ? r.bayY * (1 - (d / 0.45) ** 2) : 0.12 * Math.sin(((d - 0.45) / 0.55) * Math.PI) * (1 - d);
+    }
     const v = views[0];
     v.root.position.set(p.x, p.y + y, p.z);
     v.root.rotation.set(0, yawFromDir(p.tx, p.tz) + Math.PI, 0);
     v.shadow.position.set(p.x, p.y + 0.08, p.z);
-    for (const w of v.wheels) w.spin.rotation.x = -localZ / 0.38;
-    for (const f of v.flames) f.scale.set(0.15, 0.02, 0.15);
-    // cinematic camera off the trailer's rear quarter, looking at the car
-    const cs = poseAt(sim.track, stop - 24);
-    camera.position.set(cs.x + cs.rx * 6.5, cs.y + 3.2, cs.z + cs.rz * 6.5);
-    camera.lookAt(p.x, p.y + 0.8, p.z);
-    if (Math.abs(camera.fov - 50) > 0.4) {
-      camera.fov = 50;
+    const th = rollThrust(t);
+    v.flames.forEach((f, idx) => {
+      const len = th ? 0.7 + Math.sin(performance.now() * 0.03 + idx) * 0.15 : 0.02;
+      f.scale.set(th ? 1 : 0.15, len, th ? 1 : 0.15);
+      (f.material as THREE.MeshBasicMaterial).opacity = th ? 0.85 : 0;
+    });
+    // rear three-quarter camera: behind and above the trailer's rear-left corner, pulled back for phone portrait
+    const cs = poseAt(sim.track, stop - 11.6 - 15);
+    const narrow = camera.aspect < 0.8;
+    const side = narrow ? 5.5 : 7.5;
+    camera.position.set(cs.x + cs.rx * side, cs.y + (narrow ? 7.5 : 6), cs.z + cs.rz * side);
+    const lk = poseAt(sim.track, stop - 10.5);
+    const lx = (lk.x + p.x) / 2, ly = Math.max(lk.y, p.y) + 1.2, lz = (lk.z + p.z) / 2;
+    camera.lookAt(lx, ly, lz);
+    const fov = narrow ? 62 : 50;
+    if (Math.abs(camera.fov - fov) > 0.4) {
+      camera.fov = fov;
       camera.updateProjectionMatrix();
     }
     camPos.copy(camera.position);
-    lookPos.set(p.x, p.y + 0.8, p.z);
+    lookPos.set(lx, ly, lz);
   }
   function rolloutState() {
-    return roll ? { active: !roll.handed, t: roll.t, robots: roll.robots, idle: roll.idle } : { active: false, t: -1, robots: 0, idle: false };
+    return roll ? { thrust: roll.handed ? 0 : rollThrust(roll.t), bayY: roll.bayY, active: !roll.handed, t: roll.t, robots: roll.robots, idle: roll.idle } : { thrust: 0, bayY: 0, active: false, t: -1, robots: 0, idle: false };
   }
 
 
