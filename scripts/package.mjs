@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { execSync } from "node:child_process";
 const dist = "dist";
-const tag = process.env.NF_TAG || "m5a";
+const tag = process.env.NF_TAG || "m5b";
 const out = process.env.NF_OUT || `/workspace/studio/nightfall_roadster/v02_${tag}`;
 const folder = out + "/nightfall-roadster";
 fs.rmSync(folder, { recursive: true, force: true });
@@ -25,9 +25,12 @@ fs.writeFileSync(folder + "/index.html", page);
 const jsTxt = fs.readFileSync(`${folder}/${js[1]}`, "utf8").replace(/<\/script/gi, "<\\/script");
 // single file: both Roadster LODs inlined as base64 data URIs (world.ts reads window.__NF_GLB first)
 const glbDir = dist + "/assets/v02/car";
-const glbInline = "window.__NF_GLB=" + JSON.stringify(
-  Object.fromEntries(["phone", "hero"].filter((l) => fs.existsSync(`${glbDir}/roadster_${l}.glb`)).map((l) => [l, "data:model/gltf-binary;base64," + fs.readFileSync(`${glbDir}/roadster_${l}.glb`).toString("base64")])),
-) + ";";
+// enemies: only the phone LODs are inlined (the single file uses them on desktop too, to keep it ~10 MB)
+const enDir = dist + "/assets/v02/enemies";
+const b64 = (p) => "data:model/gltf-binary;base64," + fs.readFileSync(p).toString("base64");
+const inlineMap = Object.fromEntries(["phone", "hero"].filter((l) => fs.existsSync(`${glbDir}/roadster_${l}.glb`)).map((l) => [l, b64(`${glbDir}/roadster_${l}.glb`)]));
+if (fs.existsSync(enDir)) for (const f of fs.readdirSync(enDir)) if (f.endsWith("_phone.glb")) inlineMap[f.replace(".glb", "")] = b64(`${enDir}/${f}`);
+const glbInline = "window.__NF_GLB=" + JSON.stringify(inlineMap) + ";";
 const cssTxt = fs.readFileSync(`${folder}/${css[1]}`, "utf8");
 const single = html
   .replace(js[0], "")

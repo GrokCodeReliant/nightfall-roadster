@@ -86,14 +86,26 @@ export type Upgrades = {
 
 export type Kind = "hero" | "rammer" | "gunner" | "mine" | "spiker" | "drone" | "boss";
 
-export const ENEMY: Record<Exclude<Kind, "hero">, { hp: number; tier: number; ram: number; name: string }> = {
-  rammer: { hp: 40, tier: 1, ram: 18, name: "Rammer" },
-  gunner: { hp: 55, tier: 2, ram: 6, name: "Gunner" },
-  mine: { hp: 80, tier: 2, ram: 8, name: "Mine Layer" },
-  spiker: { hp: 60, tier: 2, ram: 10, name: "Spiker" },
-  drone: { hp: 30, tier: 3, ram: 0, name: "Drone" },
-  boss: { hp: 600, tier: 10, ram: 30, name: "Armored Hauler" },
+/**
+ * Collision sizes follow the Art GLBs (m5b): r = car-car contact radius (contact at rA+rB; the player is 1.075,
+ * so two v0.1-size cars still touch at 2.15 m), hit = bullet radius, hitY/hitH = bullet band centre/half-height,
+ * mineR = mine trigger radius, clamp = wall clamp from the road edge (enemies only; the player keeps v0.1's 1.15).
+ */
+export const ENEMY: Record<
+  Exclude<Kind, "hero">,
+  { hp: number; tier: number; ram: number; name: string; r: number; hit: number; hitY: number; hitH: number; mineR: number; clamp: number }
+> = {
+  rammer: { hp: 40, tier: 1, ram: 18, name: "Rammer", r: 1.14, hit: 1.83, hitY: 0.6, hitH: 1.6, mineR: 2.7, clamp: 1.12 }, // 4.73 x 2.13
+  gunner: { hp: 55, tier: 2, ram: 6, name: "Gunner", r: 1.12, hit: 1.78, hitY: 0.6, hitH: 1.6, mineR: 2.63, clamp: 1.17 }, // 4.61 long, figure leans out the right side to x +1.116, 1.59 tall
+  mine: { hp: 80, tier: 2, ram: 8, name: "Mine Layer", r: 1.1, hit: 1.86, hitY: 0.6, hitH: 1.6, mineR: 2.7, clamp: 1.1 }, // 4.81 x 2.06
+  spiker: { hp: 60, tier: 2, ram: 10, name: "Spiker", r: 1.1, hit: 1.78, hitY: 0.6, hitH: 1.6, mineR: 2.63, clamp: 1.72 }, // 4.61, blades ±1.675
+  drone: { hp: 30, tier: 3, ram: 0, name: "Drone", r: 0, hit: 1.7, hitY: 0.6, hitH: 1.6, mineR: 0, clamp: 1.15 },
+  boss: { hp: 600, tier: 10, ram: 30, name: "Armored Hauler", r: 2.75, hit: 3.25, hitY: 1.4, hitH: 2.6, mineR: 3.68, clamp: 1.62 }, // 8.4 x 3.14 x 2.75
 };
+export const HERO_R = 1.075;
+export function carRadius(c: { kind: Kind }) {
+  return c.kind === "hero" ? HERO_R : ENEMY[c.kind].r;
+}
 export const DRONE_ALT = 6;
 const OUT_OF_VIEW = 175;
 
@@ -687,7 +699,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   car.z += (fz * car.speed + rz * car.lat) * dt;
 
   let q = queryTrack(sim.track, car.x, car.z, car.along);
-  const limit = q.width * 0.5 - 1.15;
+  const limit = q.width * 0.5 - (car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp);
   if (Math.abs(q.lateral) > limit) {
     const sign = Math.sign(q.lateral);
     const overflow = Math.abs(q.lateral) - limit;
@@ -1210,7 +1222,10 @@ function aiInput(sim: Sim, car: Car): Input {
   // before a void instead and are brought back in behind you once you are across (stepEnemy).
   // only gaps before the player matter while the player is ahead (the road up to a parked player is solid)
   const reach = hero.along > car.along ? Math.min(45, hero.along - car.along - 4) : 45;
-  if (reach >= 6 && gapAhead(sim.track, car.along, reach)) throttle = car.speed > 1 ? -1 : 0;
+  if (reach >= 6 && gapAhead(sim.track, car.along, reach)) {
+    // parked player beside/behind us and a void ahead: back up behind them (then the charge comes from behind)
+    throttle = sim.idleT > 4 && dS > -8 ? -1 : car.speed > 1 ? -1 : 0;
+  }
   return { steer, throttle, fire: false, mine: false, thrust: false };
 }
 
@@ -1322,6 +1337,8 @@ function stepEnemy(sim: Sim, car: Car, dt: number) {
   }
   if (car.leaving) return;
   const dS = car.along - hero.along;
+  // a player parked >6 s with an enemy right alongside gets side-swiped (no stalemates beside voids)
+  if (sim.idleT > 6 && car.ramCd <= 0 && car.kind !== "gunner" && car.kind !== "boss" && Math.abs(dS) < 4 && Math.abs(hero.y - car.y) < 1.6 && Math.hypot(hero.x - car.x, hero.z - car.z) < 4.6) ram(sim, hero, car);
   if (car.kind === "gunner") {
     car.holdT -= dt;
     if (car.holdT <= 0) {
@@ -1399,7 +1416,7 @@ function separate(sim: Sim) {
       let dx = b.x - a.x;
       let dz = b.z - a.z;
       let d = Math.hypot(dx, dz);
-      const min = a.kind === "boss" || b.kind === "boss" ? 3.7 : 2.15;
+      const min = carRadius(a) + carRadius(b);
       if (d < 0.0001) {
         dx = 0.01;
         dz = 0;
@@ -1526,14 +1543,15 @@ function stepShots(sim: Sim, dt: number) {
       if (!car.alive || car.id === s.owner) continue;
       if (s.owner !== 0 && !car.hero) continue; // no enemy friendly fire
       const big = car.kind === "boss";
-      if (Math.abs(car.y + (big ? 1.2 : 0.6) - s.y) > (big ? 2.4 : 1.6)) continue;
+      const st = car.kind === "hero" ? null : ENEMY[car.kind];
+      if (Math.abs(car.y + (st ? st.hitY : 0.6) - s.y) > (st ? st.hitH : 1.6)) continue;
       let t = ((car.x - s.px) * abx + (car.z - s.pz) * abz) / ab2;
       t = clamp(t, 0, 1);
       const cx = s.px + abx * t;
       const cz = s.pz + abz * t;
       const dx = car.x - cx;
       const dz = car.z - cz;
-      const r = big ? 3.0 : 1.7;
+      const r = st ? st.hit : 1.7;
       if (dx * dx + dz * dz < r * r) {
         s.alive = false;
         sim.events.push(s.rocket ? { t: "boom", x: cx, y: s.y, z: cz } : { t: "hit", x: cx, y: s.y, z: cz, big: false });
@@ -1573,7 +1591,7 @@ function stepMines(sim: Sim, dt: number) {
       if (m.oil && car.hero) continue;
       const dx = car.x - m.x;
       const dz = car.z - m.z;
-      const r = m.oil ? 3.0 : car.kind === "boss" ? 3.4 : 2.55;
+      const r = m.oil ? 3.0 : car.kind === "hero" ? 2.55 : ENEMY[car.kind].mineR;
       if (dx * dx + dz * dz < r * r && Math.abs(car.y - m.y) < 2.4) {
         if (m.oil) {
           if (car.spin <= 0 && car.kind !== "boss") {

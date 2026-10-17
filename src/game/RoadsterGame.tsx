@@ -132,6 +132,7 @@ export function RoadsterGame() {
         __nfFade: () => world.debugFade(),
         __nfProject: (id: number) => world.project(sim, id),
         __nfCar: () => world.carInfo(),
+        __nfEnemies: () => world.enemyInfo(),
         __nfBehind: (off: number) => {
           const h = sim.cars[0];
           const lat = queryTrack(sim.track, h.x, h.z, h.along).lateral;

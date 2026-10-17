@@ -5,9 +5,9 @@ import { chromium, devices } from "playwright";
 import fs from "node:fs";
 
 const ROOT = "/workspace/studio/nightfall_roadster";
-const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m5a/nightfall-roadster-v02-m5a.html`;
+const BUILD = process.env.NF_BUILD || `${ROOT}/v02_m5b/nightfall-roadster-v02-m5b.html`;
 const V01 = `${ROOT}/release/nightfall-roadster-single.html`;
-const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m5a/screenshots`;
+const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_m5b/screenshots`;
 fs.mkdirSync(SHOTS, { recursive: true });
 
 const ONLY = process.env.NF_ONLY;
@@ -96,6 +96,7 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const P = prof.name;
   const ctx = await browser.newContext(prof.ctx);
   const page = await ctx.newPage();
+  page.setDefaultTimeout(120000); // the box is shared: software GL can stall under load
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -107,8 +108,11 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const refBoxes = await hudBoxes(ref);
   await ref.close();
 
-  await start(page, "file://" + BUILD + "?debug");
+  await start(page, "file://" + BUILD + "?debug&enemylod=phone");
   check(P, "boots into play", await page.evaluate(() => window.__nf.phase === "playing"));
+  // let every GLB finish loading/parsing before timing-sensitive checks (software GL is slow)
+  await page.waitForFunction(() => window.__nfCar && window.__nfCar().source !== "loading" && Object.entries(window.__nfEnemies()).every(([k, v]) => k === "shown" || k === "lod" || v !== "loading"), null, { timeout: 60000 });
+  await page.waitForTimeout(1500);
   const boxes = await hudBoxes(page);
   // same boxes within 3 px (labels changed text: "Lap" -> "Wave", "1st" -> "Kills 0"); toasts cleared on both
   const same = boxes.length === refBoxes.length && boxes.every((b, i) => b && refBoxes[i] && b[0] === refBoxes[i][0] && b.slice(1).every((v, k) => Math.abs(v - refBoxes[i][k + 1]) <= 3));
@@ -166,6 +170,27 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   await page.screenshot({ path: `${SHOTS}/${P}-car-beauty.png` });
   await page.evaluate(() => { delete window.__nfBeauty; window.__nf.hitstop = 0; });
   await runUntil(page, "cruise", "sim.cars[0].grounded", 5);
+  // m5b: enemy GLBs for all 6 types, shown on the staged enemies
+  await page.waitForFunction(() => { const e = window.__nfEnemies(); return ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => e[k] !== "loading"); }, null, { timeout: 30000 });
+  const en = await page.evaluate(() => window.__nfEnemies());
+  check(P, "enemy GLBs loaded for all 6 types", ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => en[k] === "glb"), JSON.stringify(en).slice(0, 300));
+  await clearField(page);
+  await flat(page);
+  await runUntil(page, "cruise", "sim.cars[0].speed > 25", 10);
+  await page.evaluate(() => {
+    const sim = window.__nf, S = window.__nfStage;
+    for (const [k, off, lane] of [["rammer", 16, -9], ["gunner", 18, 3], ["mine", 30, -3], ["spiker", 12, 9], ["drone", 22, 0], ["boss", 44, 4.5]]) {
+      const c = S.debugSpawn(sim, k, off, lane);
+      if (c) { c.ramCd = 99; c.hold = off; c.holdT = 99; c.fireCd = 99; c.dropCd = 99; }
+    }
+    sim.hitstop = 60;
+  });
+  await page.waitForTimeout(3000);
+  const shown = await page.evaluate(() => window.__nfEnemies().shown.filter((s) => s));
+  check(P, "staged enemies render their GLB (no placeholder)", shown.length >= 6 && shown.every((s) => s.endsWith(":glb")), shown.join(","));
+  await page.screenshot({ path: `${SHOTS}/${P}-enemy-roster.png` });
+  await page.evaluate(() => { window.__nf.hitstop = 0; });
+
   // ---------------- M3 staged scenes (real sim, staged spawns via the ?debug hook)
   const W = "cruise";
   await clearField(page);
@@ -257,7 +282,7 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   // m3b camera: an enemy close behind is on screen below the car; an enemy far behind gets an edge chevron that pulses while it fires
   await clearField(page);
   await flat(page);
-  await runUntil(page, "cruise", "sim.cars[0].speed > 30", 10);
+  await runUntil(page, "cruise", "sim.cars[0].speed > 30 && sim.cars[0].grounded && window.__nfStage.flat(120)", 20);
   const ids = await page.evaluate(() => {
     const sim = window.__nf, S = window.__nfStage;
     const lat = S.lat();
@@ -354,8 +379,14 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
 // m5a: GLB fallback (a broken GLB must leave the procedural hull and a playable game, with no console errors)
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  await ctx.addInitScript(() => { Object.defineProperty(window, "__NF_GLB", { value: { phone: "data:model/gltf-binary;base64,AAAA", hero: "data:model/gltf-binary;base64,AAAA" }, writable: false }); });
+  await ctx.addInitScript(() => {
+    const bad = "data:model/gltf-binary;base64,AAAA";
+    const v = { phone: bad, hero: bad };
+    for (const f of ["rammer", "gunner", "mine_layer", "spiker", "drone", "boss"]) { v[f + "_phone"] = bad; v[f + "_hero"] = bad; }
+    Object.defineProperty(window, "__NF_GLB", { value: v, writable: false });
+  });
   const page = await ctx.newPage();
+  page.setDefaultTimeout(120000); // the box is shared: software GL can stall under load
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -365,6 +396,11 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   await page.evaluate(() => window.__nfAdvance(3, ["KeyW"]));
   const ok = await page.evaluate(() => window.__nf.phase === "playing" && window.__nf.cars[0].speed > 10);
   check("fallback", "broken GLB falls back to the procedural hull and stays playable", car.source === "procedural" && ok, car.error ?? "");
+  await page.waitForFunction(() => Object.values(window.__nfEnemies()).every((v) => v !== "loading"), null, { timeout: 20000 });
+  await page.evaluate(() => { window.__nfStage.debugSpawn(window.__nf, "boss", 30, 3); window.__nfStage.debugSpawn(window.__nf, "rammer", 15, -3); window.__nfAdvance(0.5, ["KeyW"]); });
+  await page.waitForTimeout(500);
+  const fen = await page.evaluate(() => window.__nfEnemies());
+  check("fallback", "broken enemy GLBs fall back to placeholders", fen.shown.filter((s) => s).every((s) => s.endsWith(":proc")) && String(fen.boss).startsWith("placeholder"), fen.shown.filter((s) => s).join(","));
   check("fallback", "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
 }
@@ -382,6 +418,9 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
     page.on("console", (m) => { if (m.type() === "error") bad.push(m.text()); });
     await start(page, "http://127.0.0.1:8765/index.html?debug");
     await page.waitForFunction(() => window.__nfCar().source !== "loading", null, { timeout: 30000 });
+    await page.waitForFunction(() => ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => window.__nfEnemies()[k] !== "loading"), null, { timeout: 60000 });
+    const en = await page.evaluate(() => window.__nfEnemies());
+    check(`static-${prof.name}`, `all 6 enemy GLBs load over http (${en.lod} LOD)`, ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => en[k] === "glb") && en.lod === (prof.name === "phone" ? "phone" : "hero"), JSON.stringify(en).slice(0, 200));
     const car = await page.evaluate(() => window.__nfCar());
     check(`static-${prof.name}`, "static folder loads the GLB file over http", car.source === "glb" && /roadster_(phone|hero)\.glb$/.test(car.url) && bad.length === 0, `${car.url} ${bad.join(" | ")}`);
     await ctx.close();

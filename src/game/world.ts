@@ -20,7 +20,13 @@ type CarView = {
   mats: THREE.Material[];
   fade: number;
   glb?: THREE.Object3D;
+  procWheels?: Wheel[];
+  inst?: Partial<Record<Kind, EnemyInst>>;
+  kindSrc?: string;
+  active?: EnemyInst | null;
 };
+
+type EnemyInst = { root: THREE.Object3D; wheels: Wheel[]; rotors: THREE.Object3D[]; turret: THREE.Object3D | null; rearTurret: boolean };
 
 const KIND_COLOR: Record<Kind, number> = {
   hero: 0xc4161c,
@@ -126,6 +132,7 @@ export type World = {
   dispose: () => void;
   debugFade: () => number[];
   carInfo: () => CarInfo;
+  enemyInfo: () => Record<string, unknown>;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
 
@@ -524,6 +531,53 @@ function applyCarGlb(view: CarView, model: THREE.Object3D): string[] {
   return missing;
 }
 
+// ---------------------------------------------------------------- m5b: enemy GLBs (ENEMY_SPEC.md)
+const ENEMY_FILE: Record<Exclude<Kind, "hero">, string> = { rammer: "rammer", gunner: "gunner", mine: "mine_layer", spiker: "spiker", drone: "drone", boss: "boss" };
+
+function enemyUrl(kind: Exclude<Kind, "hero">, lod: "phone" | "hero") {
+  const inline = (window as unknown as { __NF_GLB?: Record<string, string> }).__NF_GLB;
+  const f = ENEMY_FILE[kind];
+  if (inline) {
+    const d = inline[`${f}_${lod}`] ?? inline[`${f}_phone`];
+    if (d) return d;
+  }
+  return `${import.meta.env.BASE_URL}assets/v02/enemies/${f}_${lod}.glb`;
+}
+
+/** One per (view, kind): a clone with per-instance materials (fade/flash are per car); "body" uses the view's runtime-tinted paint. */
+function makeEnemyInst(view: CarView, kind: Kind, model: THREE.Object3D): EnemyInst {
+  const root = model.clone(true);
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const src = m.material as THREE.Material;
+    if (src.name === "body") m.material = view.body;
+    else {
+      const c = src.clone();
+      if (src.name === "lamp") (c as THREE.MeshStandardMaterial).emissiveIntensity = Math.max((c as THREE.MeshStandardMaterial).emissiveIntensity, 1.4);
+      m.material = c;
+      view.mats.push(c);
+    }
+    m.castShadow = false;
+  });
+  if (!view.mats.includes(view.body)) view.mats.push(view.body);
+  const wheels: Wheel[] = [];
+  for (const name of ["wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "wheel_RL2", "wheel_RR2"]) {
+    const pivot = root.getObjectByName(name);
+    if (!pivot) continue;
+    const spin = new THREE.Group();
+    for (const ch of [...pivot.children]) spin.add(ch);
+    pivot.add(spin);
+    pivot.userData.front = name === "wheel_FL" || name === "wheel_FR";
+    wheels.push({ pivot: pivot as THREE.Group, spin });
+  }
+  const rotors = ["rotor_FL", "rotor_FR", "rotor_RL", "rotor_RR"].map((n) => root.getObjectByName(n)).filter((n): n is THREE.Object3D => !!n);
+  if (kind === "drone") root.position.y = 0.6; // spec: origin at the drone's underside, code lifts it 0.6
+  root.visible = false;
+  view.tilt.add(root);
+  return { root, wheels, rotors, turret: root.getObjectByName("turret_mount") ?? null, rearTurret: kind === "boss" };
+}
+
 export function createWorld(canvas: HTMLCanvasElement): World {
   const coarse = typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 820);
   const renderer = new THREE.WebGLRenderer({
@@ -895,6 +949,62 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     });
   }
 
+  // ?enemylod=phone|hero overrides the enemy LOD (used by the headless tests on software GL)
+  const lodParam = new URLSearchParams(window.location.search).get("enemylod");
+  const enemyLod: "phone" | "hero" = lodParam === "phone" || lodParam === "hero" ? lodParam : carLod;
+  const enemyModels: Partial<Record<Kind, THREE.Object3D>> = {};
+  const enemyInfo: Record<string, string> = {};
+  for (const kind of Object.keys(ENEMY_FILE) as Exclude<Kind, "hero">[]) {
+    enemyInfo[kind] = "loading";
+    try {
+      new GLTFLoader().load(
+        enemyUrl(kind, enemyLod),
+        (g) => {
+          enemyModels[kind] = g.scene;
+          enemyInfo[kind] = "glb";
+        },
+        undefined,
+        (err) => {
+          enemyInfo[kind] = "placeholder: " + String((err as Error)?.message ?? err).slice(0, 80);
+        },
+      );
+    } catch (err) {
+      enemyInfo[kind] = "placeholder: " + String(err).slice(0, 80);
+    }
+  }
+
+  /** Show the GLB for this kind if it has loaded, else the procedural placeholder (with its boss scale). */
+  function useKind(view: CarView, kind: Kind) {
+    if (!view.procWheels) view.procWheels = view.wheels;
+    if (!view.inst) view.inst = {};
+    const model = enemyModels[kind];
+    let inst = view.inst[kind] ?? null;
+    if (!inst && model) {
+      try {
+        inst = view.inst[kind] = makeEnemyInst(view, kind, model);
+      } catch {
+        inst = null;
+      }
+    }
+    for (const i of Object.values(view.inst)) i!.root.visible = i === inst;
+    view.active = inst;
+    if (inst) {
+      view.chassis.visible = false;
+      for (const g of Object.values(view.parts)) g!.visible = false;
+      if (view.turret) view.turret.visible = false;
+      view.root.scale.set(1, 1, 1); // GLBs are modelled at final size
+      view.wheels = inst.wheels;
+    } else {
+      if (view.turret) view.turret.visible = kind === "gunner";
+      view.chassis.visible = kind !== "drone";
+      for (const [k, g] of Object.entries(view.parts)) g!.visible = k === kind;
+      const sc = KIND_SCALE[kind] ?? [1, 1, 1];
+      view.root.scale.set(sc[0], sc[1], sc[2]);
+      view.wheels = view.procWheels;
+    }
+    view.kindSrc = `${kind}:${inst ? "glb" : "proc"}`;
+  }
+
   function attachCar() {
     if (!carModel || !views[0] || views[0].glb) return;
     try {
@@ -934,14 +1044,19 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     for (let i = 0; i < views.length; i++) {
       const car = sim.cars[i];
       const view = views[i];
-      if (car.kind !== view.kind) {
+      if (!car.hero && (car.kind !== view.kind || view.kindSrc !== `${car.kind}:${enemyModels[car.kind] ? "glb" : "proc"}`)) {
         view.kind = car.kind;
         view.body.color.setHex(KIND_COLOR[car.kind]);
-        if (view.turret) view.turret.visible = car.kind === "gunner";
-        view.chassis.visible = car.kind !== "drone";
-        for (const [k, g] of Object.entries(view.parts)) g!.visible = k === car.kind;
-        const sc = KIND_SCALE[car.kind] ?? [1, 1, 1];
-        view.root.scale.set(sc[0], sc[1], sc[2]);
+        useKind(view, car.kind);
+      }
+      const act = view.active;
+      if (act && !car.hero) {
+        for (const r of act.rotors) r.rotation.y += dt * 40;
+        if (act.turret) {
+          // turret yaws toward the player (boss turret faces the rear)
+          const a = Math.atan2(hero.x - car.x, hero.z - car.z) - (car.yaw + Math.PI) - (act.rearTurret ? Math.PI : 0);
+          act.turret.rotation.y = Math.atan2(Math.sin(a), Math.cos(a));
+        }
       }
       if (car.kind === "drone") {
         view.parts.drone?.children.forEach((c) => {
@@ -953,7 +1068,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         // fade only when the enemy actually covers the player's car on screen and is nearer the camera
         projA.set(car.x, car.y + 0.6, car.z).project(camera);
         projB.set(hero.x, hero.y + 0.6, hero.z).project(camera);
-        const covers = projA.z < projB.z && Math.abs(projA.x - projB.x) * camera.aspect < 0.22 && Math.abs(projA.y - projB.y) < 0.2;
+        const cw = renderer.domElement.clientWidth || 1;
+        const ch = renderer.domElement.clientHeight || 1;
+        // in CSS px: the enemy's centre sits on top of the car (within ~60 x 36 px)
+        const covers = projA.z < projB.z && Math.abs(projA.x - projB.x) * cw * 0.5 < 60 && Math.abs(projA.y - projB.y) * ch * 0.5 < 36;
         const target = covers ? 0.25 : 1;
         view.fade += (target - view.fade) * Math.min(1, dt * 10);
         const op = view.fade > 0.98 ? 1 : view.fade;
@@ -1170,7 +1288,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     return { x: ((nx + 1) / 2) * w, y: ((1 - ny) / 2) * h, on, w, h };
   }
-  return { sync, resize, dispose, project, debugFade: () => views.map((v) => v.fade), carInfo: () => carInfo };
+  return {
+    sync,
+    resize,
+    dispose,
+    project,
+    debugFade: () => views.map((v) => v.fade),
+    carInfo: () => carInfo,
+    enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),
+  };
 }
 
 function clamp01(v: number) {
