@@ -14,6 +14,8 @@ export type AudioBus = {
   fall: () => void;
   lap: () => void;
   finish: () => void;
+  stopLoops: () => void;
+  stats: () => { loopNodes: number; state: string };
 };
 
 export function createAudio(): AudioBus {
@@ -33,7 +35,7 @@ export function createAudio(): AudioBus {
   let roarGain: GainNode | null = null;
 
   function ensure() {
-    if (ctx) return;
+    if (!ctx) {
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     ctx = new AC();
     master = ctx.createGain();
@@ -42,6 +44,53 @@ export function createAudio(): AudioBus {
     sfx = ctx.createGain();
     sfx.gain.value = 0.9;
     sfx.connect(master);
+    }
+    if (!oscA) buildLoops();
+  }
+  /** continuous loop nodes (motor, fan, tyre, roar, thrust); torn down by stopLoops() on restart / back to menu */
+  let loopNodes: AudioNode[] = [];
+  let loopSources: AudioScheduledSourceNode[] = [];
+  function buildLoops() {
+    if (!ctx || !master) return;
+    const c = ctx as unknown as Record<string, (...a: unknown[]) => AudioNode>;
+    const keys = ["createGain", "createOscillator", "createBiquadFilter", "createBufferSource"];
+    const orig: Record<string, (...a: unknown[]) => AudioNode> = {};
+    for (const k of keys) {
+      orig[k] = c[k];
+      const f = orig[k].bind(ctx);
+      c[k] = (...args: unknown[]) => {
+        const n = f(...args);
+        loopNodes.push(n);
+        if ("start" in n) loopSources.push(n as unknown as AudioScheduledSourceNode);
+        return n;
+      };
+    }
+    try {
+      buildLoopsInner();
+    } finally {
+      for (const k of keys) c[k] = orig[k];
+    }
+  }
+  function stopLoops() {
+    for (const n of loopSources) {
+      try {
+        n.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    for (const n of loopNodes) n.disconnect();
+    loopNodes = [];
+    loopSources = [];
+    oscA = oscB = null;
+    engineGain = null;
+    engineFilter = null;
+    thrustGain = null;
+    thrustSrc = null;
+    fanGain = tyreGain = roarGain = null;
+  }
+  function buildLoopsInner() {
+    if (!ctx || !master) return;
     // EV drivetrain (v0.2 m5): no combustion rev. A soft high motor whine that rises with speed.
     engineGain = ctx.createGain();
     engineGain.gain.value = 0;
@@ -66,9 +115,11 @@ export function createAudio(): AudioBus {
     oscB.start();
 
     const len = ctx.sampleRate * 1;
-    noise = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = noise.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    if (!noise) {
+      noise = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = noise.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
 
     // subtle suction-fan hum (constant while driving) and tyre noise (rises with speed)
     const mkNoise = (type: BiquadFilterType, freq: number, q: number) => {
@@ -140,6 +191,8 @@ export function createAudio(): AudioBus {
   }
 
   return {
+    stopLoops,
+    stats: () => ({ loopNodes: loopNodes.length, state: ctx ? ctx.state : "none" }),
     unlock() {
       ensure();
       if (ctx && ctx.state === "suspended") void ctx.resume();

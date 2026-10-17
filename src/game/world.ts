@@ -141,6 +141,8 @@ export type World = {
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
+  stopRollout: () => void;
+  sceneInfo: () => { objects: number; geometries: number; textures: number };
   rolloutState: () => { thrust: number; bayY: number; active: boolean; t: number; robots: number; idle: boolean };
   drawInfo: () => { draws: number; tris: number };
   enemyInfo: () => Record<string, unknown>;
@@ -910,7 +912,18 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     buildings.visible = stage !== "city";
     for (const ch of chunks) {
       ch.built = false;
+      ch.lamp = null;
       ch.city.visible = stage === "city";
+      // leaving/entering a stage: release this chunk's merged city meshes (geometry + gate lamp materials)
+      for (const c of [...ch.city.children]) {
+        ch.city.remove(c);
+        c.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh) return;
+          m.geometry.dispose();
+          if (m.material instanceof THREE.MeshBasicMaterial) m.material.dispose();
+        });
+      }
     }
     if (stage === "city") loadCity();
   }
@@ -1270,7 +1283,14 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     return true;
   }
   function stopRollout() {
-    if (roll) scene.remove(roll.rig);
+    if (roll) {
+      for (const m of roll.mixers) {
+        m.stopAllAction();
+        m.uncacheRoot(m.getRoot());
+      }
+      // the rig/robots are clones sharing the loaded GLB geometry and materials: detach only (the source stays cached)
+      scene.remove(roll.rig);
+    }
     roll = null;
   }
   function skipRollout() {
@@ -1651,6 +1671,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
     startRollout,
     skipRollout,
+    stopRollout,
+    sceneInfo: () => {
+      let objects = 0;
+      scene.traverse(() => objects++);
+      return { objects, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+    },
     rolloutState,
     drawInfo: () => ({ draws: renderer.info.render.calls, tris: renderer.info.render.triangles }),
     enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),

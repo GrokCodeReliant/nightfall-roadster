@@ -612,3 +612,21 @@
   border: 1px solid rgba(255, 255, 255, 0.28);
   color: #e8e4dc;
 }
+
+.nf-pausemenu {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  min-width: min(280px, 72vw);
+}
+.nf-pausemenu .nf-btn {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 0;
+}
+.nf-confirm {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  opacity: 0.85;
+}

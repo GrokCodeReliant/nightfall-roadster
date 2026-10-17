@@ -69,7 +69,12 @@ const tmp = new THREE.Matrix4();
 export function buildCityChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number, rnd: (n: number) => number) {
   for (const c of [...group.children]) {
     group.remove(c);
-    (c as THREE.Mesh).geometry?.dispose();
+    c.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      if (m.geometry !== (lib.sign_fork?.getObjectByName("status_lamp") as THREE.Mesh | undefined)?.geometry) m.geometry.dispose();
+      if (m.material instanceof THREE.MeshBasicMaterial) m.material.dispose();
+    });
   }
   if (!cityReady()) return null;
   const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();

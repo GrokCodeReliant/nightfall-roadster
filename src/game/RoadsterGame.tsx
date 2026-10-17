@@ -164,6 +164,8 @@ export function RoadsterGame() {
         __nfSkipRollout: () => world.skipRollout(),
         __nfDraws: () => world.drawInfo(),
         __nfStageInfo: () => world.stageInfo(),
+        __nfScene: () => world.sceneInfo(),
+        __nfAudio: () => audio.stats(),
         __nfRolloutSet: (t: number) => world.rolloutSeek(t),
         __nfEnemies: () => world.enemyInfo(),
         __nfBehind: (off: number) => {
@@ -204,6 +206,8 @@ export function RoadsterGame() {
         setMuted(next);
       }
       if (e.code === "Escape") {
+        // Esc opens the pause menu; Esc again closes it (resume)
+        setConfirmMenu(false);
         if (sim.phase === "playing") sim.phase = "paused";
         else if (sim.phase === "paused") sim.phase = "playing";
       }
@@ -276,7 +280,7 @@ export function RoadsterGame() {
         acc -= stepDt;
         guard += 1;
       }
-      world.sync(sim, dt, sim.phase === "menu");
+      world.sync(sim, sim.phase === "paused" ? 0 : dt, sim.phase === "menu"); // paused: rollout timeline + gates hold too
       const hero = sim.cars[0];
       const live = sim.phase === "playing" || sim.phase === "paused";
       const rs = world.rolloutState();
@@ -425,12 +429,35 @@ export function RoadsterGame() {
     if (map) drawMap(map, sim);
   }
 
+  const [confirmMenu, setConfirmMenu] = useState(false);
+  /** tear down the current run: looping audio, rollout rig/robots/mixers, held input; sim state is reset by begin() */
+  function cleanupRun() {
+    const sim = simRef.current;
+    audioRef.current?.stopLoops();
+    worldRef.current?.stopRollout();
+    setConfirmMenu(false);
+    if (!sim) return;
+    sim.keys.clear();
+    sim.mouseFire = false;
+    sim.mouseMine = false;
+  }
   function toTitle() {
     const sim = simRef.current;
     if (!sim) return;
+    cleanupRun();
+    begin(sim); // clears enemies, shots, mines, pickups, score, wave, hull and timers
     sim.phase = "menu";
     phaseRef.current = "menu";
     setPhase("menu");
+  }
+  function restartRun() {
+    cleanupRun();
+    startRace();
+  }
+  function resumeRun() {
+    setConfirmMenu(false);
+    const sim = simRef.current;
+    if (sim && sim.phase === "paused") sim.phase = "playing";
   }
   function startRace() {
     const sim = simRef.current;
@@ -449,6 +476,7 @@ export function RoadsterGame() {
   }
 
   function togglePause() {
+    setConfirmMenu(false);
     const sim = simRef.current;
     if (!sim) return;
     if (sim.phase === "playing") sim.phase = "paused";
@@ -642,7 +670,21 @@ export function RoadsterGame() {
           <div className="nf-card">
             <p className="nf-kicker">Hold position</p>
             <h2>Paused</h2>
-            <button type="button" className="nf-btn" onClick={togglePause}>Resume</button>
+            <div className="nf-pausemenu">
+              {!confirmMenu ? (
+                <>
+                  <button type="button" className="nf-btn" onClick={resumeRun}>Resume</button>
+                  <button type="button" className="nf-btn nf-btn-ghost" onClick={restartRun}>Restart</button>
+                  <button type="button" className="nf-btn nf-btn-ghost" onClick={() => setConfirmMenu(true)}>Back to menu</button>
+                </>
+              ) : (
+                <>
+                  <p className="nf-confirm">Leave this run and go back to the menu?</p>
+                  <button type="button" className="nf-btn" onClick={toTitle}>Yes, back to menu</button>
+                  <button type="button" className="nf-btn nf-btn-ghost" onClick={() => setConfirmMenu(false)}>Cancel</button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
