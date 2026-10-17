@@ -10,11 +10,11 @@ const profiles = [
   { name: "phone", ctx: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 } },
 ].filter((p) => !process.env.NF_ONLY || p.name === process.env.NF_ONLY);
 const EXPECT = {
-  "Volt Compact": { id: "volt", file: "sedan_compact" },
-  "Volt Compact R": { id: "volt_r", file: "sedan_compact_r" },
-  "Volt Compact RS": { id: "volt_rs", file: "sedan_compact_rs" },
-  "Roadster 2017": { id: "roadster", file: "roadster" },
-  "Roadster 2026": { id: "roadster2026", file: "roadster2026" },
+  "Model 3 (2017)": { id: "volt", file: "sedan_compact" },
+  "Model 3 Highland": { id: "volt_r", file: "sedan_compact_r" },
+  "Model 3 Performance": { id: "volt_rs", file: "sedan_compact_rs" },
+  "Roadster (2017)": { id: "roadster", file: "roadster" },
+  "Roadster (2026)": { id: "roadster2026", file: "roadster2026" },
 };
 const results = [];
 let failed = 0;
@@ -46,6 +46,10 @@ for (const prof of profiles) {
     if (i === 0) { await page.waitForTimeout(1200); await page.screenshot({ path: `${SHOTS}/${P}-carpick.png` }); }
     await page.click("[aria-label='Next car']");
   }
+  await page.locator(".nf-credit").scrollIntoViewIfNeeded();
+  const foot = await page.textContent(".nf-credit");
+  check(P, "footer disclaimer", foot.trim() === "An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.", foot.trim());
+  await page.screenshot({ path: `${SHOTS}/${P}-footer.png` });
   check(P, "car pick cycles all cars", seen.length >= 4, seen.join(" | "));
   // stage select
   const st = [];

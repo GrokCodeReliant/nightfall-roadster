@@ -467,11 +467,11 @@ export const STAGES = [
 ] as const;
 export type StageId = (typeof STAGES)[number]["id"];
 export const CARS = [
-  { id: "volt", name: "Volt Compact", file: "sedan_compact" },
-  { id: "volt_r", name: "Volt Compact R", file: "sedan_compact_r" },
-  { id: "volt_rs", name: "Volt Compact RS", file: "sedan_compact_rs" },
-  { id: "roadster", name: "Roadster 2017", file: "roadster" },
-  { id: "roadster2026", name: "Roadster 2026", file: "roadster2026" },
+  { id: "volt", name: "Model 3 (2017)", file: "sedan_compact" },
+  { id: "volt_r", name: "Model 3 Highland", file: "sedan_compact_r" },
+  { id: "volt_rs", name: "Model 3 Performance", file: "sedan_compact_rs" },
+  { id: "roadster", name: "Roadster (2017)", file: "roadster" },
+  { id: "roadster2026", name: "Roadster (2026)", file: "roadster2026" },
 ] as const;
 export type CarId = (typeof CARS)[number]["id"];
 

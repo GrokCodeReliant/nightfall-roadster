@@ -48,5 +48,5 @@ const single = html
   .replace("</body>", () => `<script>${glbInline}</script>\n<script>${jsTxt}</script>\n</body>`);
 fs.writeFileSync(`${out}/nightfall-roadster-v02-${tag}.html`, single);
 fs.rmSync(`${out}/nightfall-roadster-v02-${tag}.zip`, { force: true });
-execSync(`cd "${out}" && python3 -c "import shutil,zipfile,os\nz=zipfile.ZipFile('nightfall-roadster-v02-${tag}.zip','w',zipfile.ZIP_DEFLATED)\nfor r,_,fs in os.walk('nightfall-roadster'):\n  [z.write(os.path.join(r,f)) for f in fs]\nz.write('nightfall-roadster-v02-${tag}.html')"`);
+execSync(`cd "${out}/nightfall-roadster" && python3 -c "import zipfile,os\nz=zipfile.ZipFile('../nightfall-roadster-v02-${tag}.zip','w',zipfile.ZIP_DEFLATED)\nfor r,_,fs in os.walk('.'):\n  [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'.')) for f in fs]"`); // index.html at the zip root
 console.log("packaged", out, fs.statSync(`${out}/nightfall-roadster-v02-${tag}.html`).size);

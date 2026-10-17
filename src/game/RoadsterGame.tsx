@@ -631,7 +631,7 @@ export function RoadsterGame() {
               <kbd>Esc</kbd> pause
             </p>
             <p className="nf-credit" style={{ marginTop: "0.9rem", fontSize: "0.72rem", opacity: 0.6, letterSpacing: "0.04em" }}>
-              Grok Code Reliant studio. An original game, not affiliated with any car brand.
+              An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.
             </p>
           </div>
         </div>
