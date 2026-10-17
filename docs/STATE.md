@@ -21,7 +21,6 @@
 - Not used yet: facade trim (fins_12, balcony_12, ac_12), jump_scaffold_4m, jump_overpass_gap, ramp_landing, all coast/ pieces (Coast Road stays 'Coming soon'), meshopt/KTX2 compression (city download ~6 MB as is).
 - Tunnels (tunnel_40/portal) are not placed; the boost-gate "shortcut" is a speed boost on the main road, not a forked route (M8).
 - The boost gate pokes hero speed from the render layer (world.ts), not the sim; move it into sim if gates become gameplay.
-- Shipped CREDITS_LICENSE.md files (car/, rig/, enemies/) still contain internal notes such as 'license TBD' and 'pending IP Gate'; Art/Sara should clean them before itch or the live root.
 - Headless tests are slow when the box is loaded (Blender jobs); run profiles separately with `NF_ONLY=phone|desktop`.
 
 ## What's next
@@ -45,3 +44,6 @@ Publish a preview: `git clone --depth 1 -b main https://github.com/GrokCodeRelia
 - Source of truth: `/workspace/studio/nightfall_roadster/assets_v02/` (car/, enemies/, rig/, env/city/, env/road_kit/; READMEs: ENEMY_SPEC.md, CITY_README.md, KIT_README.md). Art sources: `/workspace/studio/art/`.
 - Copied into `spa/public/assets/v02/{car,enemies,rig,city,kit}/`. `*_phone.glb` are inlined in the single-file HTML; atlases inlined via a LoadingManager URL modifier.
 - Conventions: metres, +Y up, +Z forward, origin at ground centre, ≤6 materials, 1k textures; phone LOD on mobile (and `?enemylod=phone`), hero LOD on desktop. Atlas alpha = roughness (onBeforeCompile hook in city.ts). Node names are the attach contract (see world.ts `CAR_NODES`, rig `bay_floor`, `ramp`, `trailer_door_L/R`, `robot_spawn_A/B`).
+
+## Release hygiene (package.mjs)
+The public build ships runtime files only (html, js, css, glb, png, plus audio types if added) and one root CREDITS.txt. All .md/.txt notes, refs/ folders, INTERNAL_* files, .blend and .py are excluded by an allowlist. GLB asset.generator is set to 'Grok Code Reliant studio' and extras are stripped. PNG ancillary chunks (EXIF, text) are stripped. Zip has index.html at its root. Emblem check renders: v02_final/emblem_check/. Promotion to the live root and itch is on hold until David says go.
