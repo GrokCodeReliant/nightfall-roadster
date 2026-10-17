@@ -1,7 +1,7 @@
 # Nightfall Roadster v0.2: STATE (handoff, paused after Oct 16 2026)
 
 ## Preview URLs (GitHub Pages, repo GrokCodeReliant/nightfall-roadster)
-- Live game (v0.1, untouched): https://grokcodereliant.github.io/nightfall-roadster/
+- **Live game = v0.2** (promoted Oct 16 2026, 9:5x pm MT, main commit 8ce3925, zip MD5 bae127e663da362f4def42ecfe175d1e): https://grokcodereliant.github.io/nightfall-roadster/ . Rollback: tag `v0.1-live` (main at 272c264) — restore the root files from that tag, keeping preview/.
 - **v0.2 final:** https://grokcodereliant.github.io/nightfall-roadster/preview/v02-final/
 - Earlier: /preview/v02-m3b/, /preview/v02-m5a/ (unlinked)
 - Source: branch `v02` (never merged to main). Main gets only `preview/<name>/` folders.
@@ -46,4 +46,4 @@ Publish a preview: `git clone --depth 1 -b main https://github.com/GrokCodeRelia
 - Conventions: metres, +Y up, +Z forward, origin at ground centre, ≤6 materials, 1k textures; phone LOD on mobile (and `?enemylod=phone`), hero LOD on desktop. Atlas alpha = roughness (onBeforeCompile hook in city.ts). Node names are the attach contract (see world.ts `CAR_NODES`, rig `bay_floor`, `ramp`, `trailer_door_L/R`, `robot_spawn_A/B`).
 
 ## Release hygiene (package.mjs)
-The public build ships runtime files only (html, js, css, glb, png, plus audio types if added) and one root CREDITS.txt. All .md/.txt notes, refs/ folders, INTERNAL_* files, .blend and .py are excluded by an allowlist. GLB asset.generator is set to 'Grok Code Reliant studio' and extras are stripped. PNG ancillary chunks (EXIF, text) are stripped. Zip has index.html at its root. Emblem check renders: v02_final/emblem_check/. Promotion to the live root and itch is on hold until David says go.
+The public build ships runtime files only (html, js, css, glb, png, plus audio types if added) and one root CREDITS.txt. All .md/.txt notes, refs/ folders, INTERNAL_* files, .blend and .py are excluded by an allowlist. GLB asset.generator is set to 'Grok Code Reliant studio' and extras are stripped. PNG ancillary chunks (EXIF, text) are stripped. Zip has index.html at its root. Emblem check renders: v02_final/emblem_check/. Live root promoted; itch not yet updated.
