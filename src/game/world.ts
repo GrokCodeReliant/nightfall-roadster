@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { loadCity, buildCityChunk, cityReady } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -135,6 +136,8 @@ export type World = {
   debugFade: () => number[];
   carInfo: () => CarInfo;
   setCar: (id: CarId) => void;
+  setStage: (id: StageId) => void;
+  stageInfo: () => { stage: string; cityChunks: number; gates: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
   rolloutState: () => { thrust: number; bayY: number; active: boolean; t: number; robots: number; idle: boolean };
@@ -452,6 +455,16 @@ export type CarInfo = { source: "procedural" | "glb" | "loading"; car: string; l
 const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thruster_L", "thruster_R", "lamp_L", "lamp_R", "taillight", "turret_mount", "driver_seat"];
 
 /** Playable cars: same handling for all; only the GLB changes. file = assets_v02/car/<file>_<lod>.glb */
+export const STAGES = [
+  { id: "city", name: "Night City", ready: true, sky: 0x0a0814, fog: 0.0075 },
+  { id: "classic", name: "Classic Night", ready: true, sky: 0x07080e, fog: 0.0085 },
+  { id: "coast", name: "Coast Road", ready: false, sky: 0x2a1a24, fog: 0.006 },
+  { id: "woods", name: "Pine Woods", ready: false, sky: 0x0c1410, fog: 0.012 },
+  { id: "highway", name: "Open Highway", ready: false, sky: 0x1a140c, fog: 0.004 },
+  { id: "port", name: "Industrial Port", ready: false, sky: 0x0c1014, fog: 0.008 },
+  { id: "pass", name: "Mountain Pass", ready: false, sky: 0x10141c, fog: 0.008 },
+] as const;
+export type StageId = (typeof STAGES)[number]["id"];
 export const CARS = [
   { id: "volt", name: "Volt Compact", file: "sedan_compact" },
   { id: "volt_r", name: "Volt Compact R", file: "sedan_compact_r" },
@@ -850,7 +863,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const roadMat = new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.92, metalness: 0.05 });
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 });
   const markMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh };
+  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null };
   const chunks: Chunk[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -868,8 +881,39 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       scene.add(m);
       return m;
     };
-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat) });
+    const city = new THREE.Group();
+    scene.add(city);
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null });
   }
+  // ---------------------------------------------------------------- stages (v0.2 final): Night City is the playable one
+  let stage: StageId = "city";
+  let gateBoost = 0;
+  function applyStage() {
+    const st = STAGES.find((x) => x.id === stage) ?? STAGES[0];
+    (scene.background as THREE.Color).setHex(st.sky);
+    (scene.fog as THREE.FogExp2).color.setHex(st.sky);
+    (scene.fog as THREE.FogExp2).density = st.fog;
+    renderer.setClearColor(st.sky);
+    buildings.visible = stage !== "city";
+    for (const ch of chunks) {
+      ch.built = false;
+      ch.city.visible = stage === "city";
+    }
+    if (stage === "city") loadCity();
+  }
+  function cityChunk(ch: Chunk, sim: Sim) {
+    if (stage !== "city" || ch.index < 0 || ch.built || !cityReady()) return;
+    const i0 = ch.index * SEG;
+    const o = sampleAt(sim.track, i0);
+    ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n));
+    ch.city.position.set(o.x, 0, o.z);
+    ch.built = true;
+  }
+  function gateColor(t: number) {
+    const c = t % 6;
+    return c < 3 ? 0x33ff66 : c < 4.2 ? 0xffb020 : 0xff2a2a;
+  }
+  applyStage();
   const signs: Sign[] = [makeSign(), makeSign(), makeSign()];
   for (const s of signs) scene.add(s.group);
   const signTex = new Map<string, THREE.Texture | null>();
@@ -895,6 +939,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   function buildChunk(slot: number, index: number, sim: Sim) {
     const ch = chunks[slot];
     ch.index = index;
+    ch.built = false;
     const track = sim.track;
     const i0 = index * SEG;
     ensureTrack(track, (i0 + SEG + 2) * STEP);
@@ -990,8 +1035,29 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       buildChunk(slot, i, sim);
     }
     for (const ch of chunks) {
-      if (ch.index !== -1) continue;
+      if (ch.index !== -1) {
+        cityChunk(ch, sim);
+        continue;
+      }
       ch.road.visible = ch.walls.visible = ch.marks.visible = false;
+      ch.city.visible = false;
+    }
+    if (stage === "city") {
+      const now = performance.now() / 1000;
+      for (const ch of chunks) {
+        if (ch.index < 0) continue;
+        ch.city.visible = true;
+        if (!ch.lamp) continue;
+        const col = gateColor(now + ch.index);
+        ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
+        // boost gate: pass the sign_fork pair while green for a short speed boost (visual stage feature)
+        const gs = ch.index * CHUNK + CHUNK / 2;
+        const hero = sim.cars[0];
+        if (sim.phase === "playing" && hero.alive && hero.along > gs && hero.along - gs < 3 && gateBoost <= 0 && col === 0x33ff66) {
+          hero.speed = Math.min(hero.speed + 10, 60);
+          gateBoost = 2;
+        }
+      }
     }
     // set-piece warning boards
     const near: Piece[] = sim.track.pieces.filter((p) => p.signS > along - 40 && p.signS < along + AHEAD * CHUNK);
@@ -1291,6 +1357,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     ensureViews(sim);
     attachCar();
     const hero = sim.cars[0];
+    gateBoost -= dt;
     streamRoad(sim, hero.along);
     sea.position.set(hero.x, -1.6, hero.z);
     const k = 1 - Math.exp(-4.2 * Math.max(0.0001, dt));
@@ -1554,6 +1621,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     debugFade: () => views.map((v) => v.fade),
     carInfo: () => carInfo,
     setCar,
+    setStage(id: StageId) {
+      if (id === stage) return;
+      stage = id;
+      applyStage();
+    },
+    stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
     startRollout,
     skipRollout,
     rolloutState,

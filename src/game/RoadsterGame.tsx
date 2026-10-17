@@ -4,7 +4,7 @@ import { createAudio, type AudioBus } from "./audio";
 import { threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
-import { CARS, createWorld, type CarId } from "./world";
+import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 
 declare global {
   interface Window {
@@ -68,6 +68,14 @@ export function RoadsterGame() {
     return i >= 0 ? i : 0;
   });
   const carIdxRef = useRef(carIdx);
+  const [stageIdx, setStageIdx] = useState(0);
+  const stageIdxRef = useRef(0);
+  function pickStage(delta: number) {
+    const i = (stageIdxRef.current + delta + STAGES.length) % STAGES.length;
+    stageIdxRef.current = i;
+    setStageIdx(i);
+    if (STAGES[i].ready) worldRef.current?.setStage(STAGES[i].id as StageId);
+  }
   function pickCar(delta: number) {
     const i = (carIdxRef.current + delta + CARS.length) % CARS.length;
     carIdxRef.current = i;
@@ -419,6 +427,7 @@ export function RoadsterGame() {
     const sim = simRef.current;
     const audio = audioRef.current;
     if (!sim || !audio) return;
+    if (!STAGES[stageIdxRef.current].ready) return;
     audio.unlock();
     const coarse = window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 820;
     sim.autoGas = coarse;
@@ -593,8 +602,13 @@ export function RoadsterGame() {
               <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
               <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
             </div>
+            <div className="nf-carpick nf-stagepick" role="group" aria-label="Choose stage">
+              <button type="button" className="nf-carpick-arrow" aria-label="Previous stage" onClick={() => pickStage(-1)}>‹</button>
+              <span className="nf-carpick-name" data-stage={STAGES[stageIdx].id}>{STAGES[stageIdx].name}{STAGES[stageIdx].ready ? "" : " · Coming soon"}</span>
+              <button type="button" className="nf-carpick-arrow" aria-label="Next stage" onClick={() => pickStage(1)}>›</button>
+            </div>
             <div className="nf-launch">
-              <button type="button" className="nf-btn" onClick={startRace}>
+              <button type="button" className="nf-btn" disabled={!STAGES[stageIdx].ready} onClick={startRace}>
                 Start
               </button>
               <p className="nf-best">{best}</p>
