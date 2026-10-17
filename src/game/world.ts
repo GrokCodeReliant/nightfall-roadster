@@ -1034,8 +1034,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       if (slot < 0) break;
       buildChunk(slot, i, sim);
     }
+    let cityBudget = 1;
     for (const ch of chunks) {
       if (ch.index !== -1) {
+        if (!cityBudget && stage === "city" && !ch.built) continue;
+        if (!cityBudget) continue;
+        if (stage === "city" && !ch.built && cityReady()) cityBudget = 0;
         cityChunk(ch, sim);
         continue;
       }
