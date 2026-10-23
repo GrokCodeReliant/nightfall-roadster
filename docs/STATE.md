@@ -47,3 +47,8 @@ Publish a preview: `git clone --depth 1 -b main https://github.com/GrokCodeRelia
 
 ## Release hygiene (package.mjs)
 The public build ships runtime files only (html, js, css, glb, png, plus audio types if added) and one root CREDITS.txt. All .md/.txt notes, refs/ folders, INTERNAL_* files, .blend and .py are excluded by an allowlist. GLB asset.generator is set to 'Grok Code Reliant studio' and extras are stripped. PNG ancillary chunks (EXIF, text) are stripped. Zip has index.html at its root. Emblem check renders: v02_final/emblem_check/. Live root promoted; itch not yet updated.
+
+## After-reset backlog (David, via Sara)
+- Add the startup update check: fetch version.json with no-cache, show a "New version, tap to update" reload banner, and set no-cache headers or meta tags.
+- Move the center HUD readout (guns, thrust, mines) to the top or bottom edge so the car stays visible in the center.
+- Forced landscape is OK, but David prefers a portrait option if it's feasible.
