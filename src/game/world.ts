@@ -145,6 +145,8 @@ export type World = {
   sceneInfo: () => { objects: number; geometries: number; textures: number };
   rolloutState: () => { thrust: number; bayY: number; active: boolean; t: number; robots: number; idle: boolean };
   drawInfo: () => { draws: number; tris: number };
+  /** debug: NDC of a world point under the current camera (M1 hop-in-frame check) */
+  projectPoint: (x: number, y: number, z: number) => { x: number; y: number; inside: boolean };
   enemyInfo: () => Record<string, unknown>;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
@@ -1679,6 +1681,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     },
     rolloutState,
     drawInfo: () => ({ draws: renderer.info.render.calls, tris: renderer.info.render.triangles }),
+    projectPoint: (x: number, y: number, z: number) => {
+      const v = new THREE.Vector3(x, y, z).project(camera);
+      return { x: v.x, y: v.y, inside: Math.abs(v.x) < 1 && Math.abs(v.y) < 1 && v.z < 1 };
+    },
     enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),
   };
 }

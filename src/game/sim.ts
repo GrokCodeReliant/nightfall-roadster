@@ -160,6 +160,8 @@ export type TouchState = {
   fire: boolean;
   mine: boolean;
   thrust: boolean;
+  /** non-boost cars: the boost slot is a Brake button */
+  brake?: boolean;
 };
 
 export type Result = {
@@ -171,6 +173,13 @@ export type Result = {
 };
 
 export type Sim = {
+  /** hero car id (world.ts CARS); decides boost vs brake */
+  carId: string;
+  /** M1 boost state: deck height at take-off, cooldown after landing, air re-light used, floating */
+  boostDeck: number;
+  boostCd: number;
+  relit: boolean;
+  floating: boolean;
   track: Track;
   cars: Car[];
   shots: Shot[];
@@ -212,6 +221,23 @@ export type Sim = {
 const GRAVITY = 27;
 const THRUST_ACCEL = 40;
 const MAX_FUEL = 100;
+// M1 boost (Roadster only). BOOST_HOP_MAX = ~2x the Semi mesh height (rig_phone.glb Y max 3.84 m).
+export const BOOST_HOP_MAX = 7.5;
+export const BOOST_TAKEOFF_VY = 8;
+export const BOOST_ACCEL = 30;
+export const FLOAT_GRAVITY_SCALE = 0.45;
+export const FLOAT_VY_MIN = -9;
+export const RAMP_ASSIST = 1.25;
+export const BOOST_COOLDOWN = 1.2;
+export const BOOST_SPEED_BONUS = 10;
+export const BOOST_SPEED_CAP = 58;
+export type BoostSpec = { hopMax: number; accel: number };
+/** per-car boost table; a car missing here has no boost (M2 cars default to none) */
+export const BOOST: Record<string, BoostSpec | undefined> = {
+  roadster: { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL },
+  roadster2026: { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL },
+};
+export function hasBoost(carId: string) { return !!BOOST[carId]; }
 export const LIVES = 3;
 export const ENEMY_SLOTS = 8;
 const MAX_ALIVE = 8;
@@ -312,7 +338,12 @@ export function createSim(): Sim {
     events: [],
     keys: new Set(),
     keysOverride: null,
-    touch: { steer: 0, throttle: 0, fire: false, mine: false, thrust: false },
+    carId: "roadster",
+    boostDeck: 0,
+    boostCd: 0,
+    relit: false,
+    floating: false,
+    touch: { steer: 0, throttle: 0, fire: false, mine: false, thrust: false, brake: false },
     mouseFire: false,
     mouseMine: false,
     prevMine: false,
@@ -413,6 +444,7 @@ export function readInput(sim: Sim): Input {
   if (!sim.keysOverride) {
     steer += sim.touch.steer;
     if (Math.abs(sim.touch.throttle) > 0.08) throttle = sim.touch.throttle;
+    if (sim.touch.brake) throttle = -1;
     if (sim.autoGas && throttle > -0.25 && !keys.has("KeyS") && !keys.has("ArrowDown")) {
       throttle = Math.max(throttle, 1);
     }
@@ -420,11 +452,11 @@ export function readInput(sim: Sim): Input {
   const fire =
     keys.has("KeyF") || keys.has("KeyJ") || (!sim.keysOverride && (sim.touch.fire || sim.mouseFire));
   const mine = keys.has("KeyG") || keys.has("KeyQ") || (!sim.keysOverride && (sim.touch.mine || sim.mouseMine));
-  const thrust =
+  const thrust = hasBoost(sim.carId) && (
     keys.has("Space") ||
     keys.has("ShiftLeft") ||
     keys.has("ShiftRight") ||
-    (!sim.keysOverride && sim.touch.thrust);
+    (!sim.keysOverride && !!sim.touch.thrust));
   return {
     steer: clamp(steer, -1, 1),
     throttle: clamp(throttle, -1, 1),
@@ -651,7 +683,13 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     input = { ...input, steer: 0, throttle: Math.min(input.throttle, 0), thrust: false };
   }
 
-  const wantThrust = input.thrust && (infiniteFuel || car.fuel > 0.5);
+  const boost = car.hero ? BOOST[sim.carId] : undefined;
+  if (car.hero) sim.boostCd = Math.max(0, sim.boostCd - dt);
+  // ground take-off needs the post-landing cooldown; one air re-light per jump
+  let wantThrust = !!boost && input.thrust && (infiniteFuel || car.fuel > 0.5);
+  if (wantThrust && car.grounded && sim.boostCd > 0) wantThrust = false;
+  if (wantThrust && !car.grounded && !car.thrust && sim.relit) wantThrust = false;
+  if (wantThrust && !car.grounded && !car.thrust) sim.relit = true;
   car.thrust = wantThrust ? 1 : 0;
   if (wantThrust && !infiniteFuel) car.fuel = Math.max(0, car.fuel - 36 * dt);
   else if (!infiniteFuel) car.fuel = Math.min(car.maxFuel, car.fuel + 18 * dt);
@@ -665,21 +703,34 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   }
   const drag = input.throttle === 0 ? 1.15 : 0.28;
   car.speed -= car.speed * drag * dt;
-  if (wantThrust) car.speed += 18 * dt;
-  const cap = wantThrust ? 64 : 48;
+  if (wantThrust) car.speed += BOOST_SPEED_BONUS * dt;
+  const cap = wantThrust ? BOOST_SPEED_CAP : 48;
   car.speed = clamp(car.speed, -14, cap);
 
   if (wantThrust && car.grounded) {
     car.grounded = false;
-    car.vy = Math.max(car.vy, 10);
+    sim.boostDeck = car.y;
+    sim.relit = false;
+    car.vy = Math.max(car.vy, BOOST_TAKEOFF_VY);
   } else if (wantThrust && !car.grounded) {
-    car.vy += THRUST_ACCEL * dt;
+    car.vy += boost!.accel * dt;
   }
+  if (boost && !car.grounded) sim.floating = !wantThrust;
 
   if (!car.grounded) {
-    car.vy -= GRAVITY * dt;
-    car.vy = Math.max(-40, Math.min(28, car.vy));
-    car.y += car.vy * dt;
+    if (boost) {
+      car.vy -= GRAVITY * (wantThrust ? 1 : FLOAT_GRAVITY_SCALE) * dt;
+      car.vy = Math.max(FLOAT_VY_MIN, Math.min(28, car.vy));
+      // never above HOP_MAX over the deck under the car (or the take-off deck, whichever is higher)
+      const deck = Math.max(sim.boostDeck, queryTrack(sim.track, car.x, car.z, car.along).y);
+      const top = deck + boost.hopMax;
+      car.y += car.vy * dt;
+      if (car.y >= top) { car.y = top; if (car.vy > 0) car.vy = 0; }
+    } else {
+      car.vy -= GRAVITY * dt;
+      car.vy = Math.max(-40, Math.min(28, car.vy));
+      car.y += car.vy * dt;
+    }
   }
 
   const sp = Math.abs(car.speed);
@@ -725,14 +776,16 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   } else if (car.y <= q.y + 0.12 || car.grounded) {
     if (car.grounded && q.kicker && car.speed > 15 && !wantThrust) {
       car.grounded = false;
-      car.vy = Math.max(8, car.speed * 0.45);
+      car.vy = Math.max(8, car.speed * 0.45) * (boost ? RAMP_ASSIST : 1);
       car.y = q.y + 0.15;
+      if (boost) { sim.boostDeck = q.y; sim.relit = false; }
     } else if (wantThrust && car.vy > 0) {
       car.grounded = false;
       if (car.y < q.y) car.y = q.y;
     } else {
-      const hard = !car.grounded && car.vy < -10;
+      const hard = !boost && !car.grounded && car.vy < -10; // boosters always land soft
       const wasAir = !car.grounded;
+      if (wasAir && boost) { sim.boostCd = BOOST_COOLDOWN; sim.floating = false; }
       car.y = q.y;
       car.vy = 0;
       car.grounded = true;
@@ -751,7 +804,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     const p = nextPiece(sim.track, car.along);
     if (p && sim.hinted !== p.s && car.along > p.signS && car.along < p.s) {
       sim.hinted = p.s;
-      toast(sim, p.kind === "void" ? "Void ahead — hold thrust" : "Ramp — thrust if you want more air", true);
+      toast(sim, boost ? "Ramp — boost if you want more air" : "Ramp ahead", true);
     }
   }
 

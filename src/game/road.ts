@@ -79,7 +79,7 @@ function extendPieces(track: Track, upTo: number) {
     const s = last ? last.s + last.len + 420 + hash(n * 7 + track.seed * 13) * 380 : 760;
     const kind: Piece["kind"] = n % 2 === 0 ? "ramp" : "void";
     const len = kind === "ramp" ? 150 : 250;
-    last = { kind, s, len, signS: s - 130, label: kind === "ramp" ? "RAMP" : "VOID  —  THRUST" };
+    last = { kind, s, len, signS: s - 130, label: "RAMP" };
     track.pieces.push(last);
   }
 }
@@ -106,10 +106,11 @@ function profile(track: Track, s: number) {
     if (d <= 60) return { y: lerp(0, 5.4, d / 60), gap: false, kicker: d >= 48 };
     return { y: lerp(5.4, 0, (d - 60) / 90), gap: false, kicker: false };
   }
-  // void: climb to an elevated deck, a 50 m hole, deck, descent
+  // former void (M1, Sara's call): climb to an elevated deck that now runs solid across the old
+  // 50 m hole, then descent. Every car can drive it; the hole is gone (no thrust required).
   if (d <= 70) return { y: lerp(0, 7.4, d / 70), gap: false, kicker: false };
   if (d <= 100) return { y: 7.4, gap: false, kicker: false };
-  if (d <= 150) return { y: 7.4, gap: true, kicker: false };
+  if (d <= 150) return { y: 7.4, gap: false, kicker: false };
   if (d <= 180) return { y: 7.4, gap: false, kicker: false };
   return { y: lerp(7.4, 0, (d - 180) / 70), gap: false, kicker: false };
 }

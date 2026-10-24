@@ -15,11 +15,15 @@ const script: [number, string[]][] = [
   [0.35, ["KeyW", "KeyD"]],
   [0.25, ["KeyW", "ArrowLeft"]],
   [0.25, ["KeyW", "ArrowRight"]],
-  [0.5, ["KeyW", "Space"]],
+  // M1 fixture change (Sara's call 2): boost was retuned on purpose (Roadster-only, 7.5 m hop cap,
+  // float gravity, speed bonus 18->10), so held-Space frames can no longer match v0.1. Space is
+  // dropped from the shared script; the new boost feel is locked in thrust.test.ts instead.
+  [0.5, ["KeyW"]],
   [0.4, ["KeyW", "KeyF"]],
   [0.6, []],
   [0.45, ["KeyS"]],
-  [0.3, ["ArrowUp", "ShiftLeft"]],
+  // M1 fixture change: ShiftLeft is boost too (see above), so this segment is ArrowUp only.
+  [0.3, ["ArrowUp"]],
 ];
 
 function run(mod: typeof v1 | typeof v2, prep: (sim: any) => void): Frame[] {
@@ -75,9 +79,8 @@ test("v0.2 driving is frame-identical to v0.1 (handling constants, input, thrust
   }
   // sanity: the script actually exercised the car
   const maxSpeed = Math.max(...a.map((r) => r[0]));
-  const maxAir = Math.max(...a.map((r) => r[4]));
   assert.ok(maxSpeed > 40, `reached speed ${maxSpeed}`);
-  assert.ok(maxAir > 1, `thrust lifted the car ${maxAir}`);
+  // M1 fixture change: the "thrust lifted the car" sanity check moved to thrust.test.ts (no Space here now).
 });
 
 test("readInput maps the same keys as v0.1", () => {
@@ -90,7 +93,9 @@ test("readInput maps the same keys as v0.1", () => {
       s2.keys = new Set(c);
       s1.autoGas = s2.autoGas = autoGas;
       s1.touch = { steer: 0.3, throttle: 0, fire: false, mine: false, thrust: false };
-      s2.touch = { ...s1.touch };
+      // M1 fixture change: v0.2 touch has a Brake flag (non-boost cars); off here, so input is unchanged.
+      // The default sim car is the Roadster (a booster), so Space/Shift still map to thrust as in v0.1.
+      s2.touch = { ...s1.touch, brake: false };
       assert.deepEqual(v2.readInput(s2), v1.readInput(s1), c.join("+"));
     }
   }

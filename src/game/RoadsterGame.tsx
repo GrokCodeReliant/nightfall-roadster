@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
+import { hasBoost, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
+import { dismissBuild, useUpdateBanner } from "./update";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 
 declare global {
@@ -68,6 +69,9 @@ export function RoadsterGame() {
     return i >= 0 ? i : 0;
   });
   const carIdxRef = useRef(carIdx);
+  const boostCar = hasBoost(CARS[carIdx].id);
+  const updateReady = useUpdateBanner();
+  const [updateShown, setUpdateShown] = useState(true);
   const [stageIdx, setStageIdx] = useState(0);
   const stageIdxRef = useRef(0);
   function pickStage(delta: number) {
@@ -103,6 +107,7 @@ export function RoadsterGame() {
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
     const sim = createSim();
+    sim.carId = CARS[carIdxRef.current].id;
     let world: ReturnType<typeof createWorld>;
     try {
       world = createWorld(canvas);
@@ -163,6 +168,7 @@ export function RoadsterGame() {
         __nfRollout: () => world.rolloutState(),
         __nfSkipRollout: () => world.skipRollout(),
         __nfDraws: () => world.drawInfo(),
+        __nfHeroOnScreen: () => { const h = sim.cars[0]; const lo = world.projectPoint(h.x, h.y, h.z), hi = world.projectPoint(h.x, h.y + 1.2, h.z); return { inside: lo.inside && hi.inside, lo, hi }; },
         __nfStageInfo: () => world.stageInfo(),
         __nfScene: () => world.sceneInfo(),
         __nfAudio: () => audio.stats(),
@@ -468,6 +474,7 @@ export function RoadsterGame() {
     const coarse = window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 820;
     sim.autoGas = coarse;
     setCruise(coarse);
+    sim.carId = CARS[carIdxRef.current].id;
     begin(sim);
     worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
     worldRef.current?.startRollout(sim); // hauler rig rollout; the sim waits (skippable by tap/key)
@@ -492,7 +499,7 @@ export function RoadsterGame() {
     setMuted(next);
   }
 
-  function hold(flag: "fire" | "mine" | "thrust", down: boolean) {
+  function hold(flag: "fire" | "mine" | "thrust" | "brake", down: boolean) {
     const sim = simRef.current;
     if (!sim) return;
     sim.touch[flag] = down;
@@ -536,6 +543,12 @@ export function RoadsterGame() {
   return (
     <div className="nf-root" ref={wrapRef}>
       <canvas ref={canvasRef} className="nf-canvas" aria-label="Nightfall Roadster highway combat" />
+      {updateReady && updateShown && phase !== "playing" && (
+        <div className="nf-update" role="status">
+          <button type="button" className="nf-update-go" onClick={() => location.reload()}>New version — tap to update</button>
+          <button type="button" className="nf-update-x" aria-label="Dismiss" onClick={() => { dismissBuild(updateReady); setUpdateShown(false); }}>✕</button>
+        </div>
+      )}
       {showPlay && (
         <div className="nf-hud">
           <div className="nf-threats" ref={threatsRef} aria-hidden="true" />
@@ -556,22 +569,24 @@ export function RoadsterGame() {
               <p className="nf-sub" ref={timeRef}>0:00.00</p>
             </div>
           </div>
-          <div className="nf-center">
-            <p className="nf-speed">
-              <span ref={speedRef}>0</span>
-              <span className="unit">km/h</span>
-            </p>
-            <p className="nf-toast" ref={toastRef} />
-          </div>
+          <p className="nf-toast" ref={toastRef} />
           <div className="nf-cross" />
           <div className="nf-bottom">
-            <div className="nf-meter">
-              <p>Thrust <strong className="nf-keys">Space</strong></p>
-              <div className="nf-bar is-fuel"><div ref={fuelRef} /></div>
-            </div>
+            {boostCar && (
+              <div className="nf-meter is-boost">
+                <p>Boost <strong className="nf-keys">Space</strong></p>
+                <div className="nf-bar is-fuel"><div ref={fuelRef} /></div>
+              </div>
+            )}
             <div className="nf-meter">
               <p><span ref={gunLabelRef}>Guns</span> <strong ref={roundsRef}>24</strong></p>
               <p>Mines <strong ref={minesRef}>4</strong></p>
+            </div>
+            <div className="nf-meter nf-speed-box">
+              <p className="nf-speed">
+                <span ref={speedRef}>0</span>
+                <span className="unit">km/h</span>
+              </p>
             </div>
             <div className="nf-meter">
               <p>Hull <strong ref={livesRef}>×3</strong></p>
@@ -609,9 +624,15 @@ export function RoadsterGame() {
               <button type="button" onPointerDown={(e) => { e.preventDefault(); hold("mine", true); }} onPointerUp={() => hold("mine", false)} onPointerLeave={() => hold("mine", false)}>
                 Mine
               </button>
-              <button type="button" className="thrust" onPointerDown={(e) => { e.preventDefault(); hold("thrust", true); }} onPointerUp={() => hold("thrust", false)} onPointerLeave={() => hold("thrust", false)}>
-                Thrust
-              </button>
+              {boostCar ? (
+                <button type="button" className="thrust" onPointerDown={(e) => { e.preventDefault(); hold("thrust", true); }} onPointerUp={() => hold("thrust", false)} onPointerLeave={() => hold("thrust", false)}>
+                  Boost
+                </button>
+              ) : (
+                <button type="button" className="brake" onPointerDown={(e) => { e.preventDefault(); hold("brake", true); }} onPointerUp={() => hold("brake", false)} onPointerLeave={() => hold("brake", false)}>
+                  Brake
+                </button>
+              )}
             </div>
           </div>
         </div>

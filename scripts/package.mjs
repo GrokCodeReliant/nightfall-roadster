@@ -17,6 +17,8 @@ for (const f of fs.readdirSync(dist + "/assets")) {
 }
 // binary public assets (the Roadster GLBs) are copied byte for byte
 if (fs.existsSync(dist + "/assets/v02")) fs.cpSync(dist + "/assets/v02", folder + "/assets/v02", { recursive: true });
+// M1 update banner: version.json ships next to index.html (allowlisted runtime file)
+if (fs.existsSync(dist + "/version.json")) fs.copyFileSync(dist + "/version.json", folder + "/version.json");
 // release hygiene: no internal credit notes in the public build; sanitize GLB metadata (generator, extras)
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]));
 const stripExtras = (o) => {

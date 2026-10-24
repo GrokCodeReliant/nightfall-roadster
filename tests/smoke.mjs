@@ -1,6 +1,7 @@
 // Quick m5 smoke test (desktop + phone): boots, car pick, rollout plays + hands over, drive, fire, an enemy dies, draws, 0 errors.
 import { chromium, devices } from "playwright";
 import fs from "node:fs";
+import { drawGate } from "./draw_gate.mjs";
 const ROOT = "/workspace/studio/nightfall_roadster";
 const BUILD = process.env.NF_BUILD || `${ROOT}/v02_final/nightfall-roadster-v02-final.html`;
 const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_final/screenshots`;
@@ -82,6 +83,19 @@ for (const prof of profiles) {
   await page.evaluate(() => window.__nfSkipRollout());
   // drive
   const moved = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(3, ["KeyW"]); return window.__nf.cars[0].along - a; });
+  // M1 (b): HUD at the edges, no overlaps, inside the viewport, centre clear for the car
+  const rects = await page.evaluate(() => {
+    const r = (q) => { const e = document.querySelector(q); if (!e) return null; const b = e.getBoundingClientRect(); return b.width ? { l: b.left, t: b.top, r: b.right, b: b.bottom } : null; };
+    return { vw: innerWidth, vh: innerHeight, bottom: r(".nf-bottom"), top: r(".nf-readout"), map: r(".nf-map-wrap"), touch: r(".nf-touch.is-live .nf-actions"), stick: r(".nf-touch.is-live .nf-stick"), pl: r(".nf-icon-btn.left"), pr: r(".nf-icon-btn.right"), center: !!document.querySelector(".nf-center") };
+  });
+  {
+    const hit = (a, b) => a && b && a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+    const ins = (a) => !a || (a.l >= 0 && a.t >= 0 && a.r <= rects.vw && a.b <= rects.vh);
+    const tops = [rects.touch, rects.stick].filter(Boolean).map((x) => x.t);
+    const gapOk = !tops.length || rects.bottom.b <= Math.min(...tops) - 8;
+    const ok = !rects.center && rects.bottom && !hit(rects.bottom, rects.top) && !hit(rects.bottom, rects.touch) && !hit(rects.bottom, rects.stick) && ![rects.top, rects.map].some((t) => hit(t, rects.pl) || hit(t, rects.pr) || hit(t, rects.bottom)) && gapOk && [rects.bottom, rects.top, rects.map, rects.touch, rects.stick, rects.pl, rects.pr].every(ins);
+    check(P, "HUD on the edges: no overlaps, ≥8 px above touch row, inside viewport, centre clear", ok, JSON.stringify(rects));
+  }
   check(P, "drives after handover", moved > 20, `${moved.toFixed(1)} m (spawn along ${along0.toFixed(0)})`);
   const fired = await page.evaluate(() => { const r = window.__nf.cars[0].rounds; window.__nfAdvance(0.6, ["KeyW", "KeyF"]); return r - window.__nf.cars[0].rounds; });
   check(P, "fires", fired >= 3, `${fired.toFixed(0)} rounds`);
@@ -94,7 +108,7 @@ for (const prof of profiles) {
   const shown = await page.evaluate(() => window.__nfEnemies().shown.filter((s) => s));
   check(P, "enemies render GLBs", shown.length >= 4 && shown.every((s) => s.endsWith(":glb")), shown.join(","));
   const draws = await page.evaluate(() => window.__nfDraws());
-  check(P, `draws within budget (${P === "phone" ? "≤120" : "logged"})`, true, `draws ${draws.draws}, tris ${draws.tris}`);
+  check(P, `draws within budget (${P === "phone" ? "≤120" : "logged"})`, drawGate(P, draws.draws), `draws ${draws.draws}, tris ${draws.tris}`);
   await page.evaluate(() => { window.__nf.hitstop = 0; });
   const k0 = await page.evaluate(() => window.__nf.takedowns);
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
@@ -201,8 +215,9 @@ if (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ON
   const path = await import("node:path");
   const DIR = BUILD.replace(/[^/]+\.html$/, "nightfall-roadster");
   const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".glb": "model/gltf-binary", ".png": "image/png" };
-  const srv = http.createServer((q, r) => { let f = path.join(DIR, decodeURIComponent(q.url.split("?")[0])); if (f.endsWith("/")) f += "index.html"; fs.readFile(f, (e, d) => { if (e) { r.writeHead(404); r.end(); return; } r.writeHead(200, { "content-type": types[path.extname(f)] || "application/octet-stream" }); r.end(d); }); }).listen(0);
-  const port = srv.address().port;
+  const srv = http.createServer((q, r) => { let f = path.join(DIR, decodeURIComponent(q.url.split("?")[0])); if (f.endsWith("/")) f += "index.html"; fs.readFile(f, (e, d) => { if (e) { r.writeHead(404); r.end(); return; } r.writeHead(200, { "content-type": types[path.extname(f)] || "application/octet-stream" }); r.end(d); }); }).listen(4180, "127.0.0.1");
+  await new Promise((res) => srv.once("listening", res));
+  const port = 4180; // M1: fixed port (4173-4177 belong to other projects)
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await ctx.newPage();
   const errs = [];
