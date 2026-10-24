@@ -15,7 +15,9 @@ const profiles = [
   { name: "desktop", ctx: { viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 } },
   { name: "phone", ctx: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 } },
 ];
-const HUD = [".nf-top", ".nf-readout", ".nf-map-wrap", ".nf-center", ".nf-bottom", ".nf-icon-btn.left", ".nf-icon-btn.right", ".nf-stick", ".nf-actions"];
+// M1: .nf-center is gone (speed moved into .nf-bottom, toast to top-centre). Only boxes that did NOT move
+// in M1 are compared with v0.1; .nf-bottom/.nf-actions moved on purpose (M1_SPEC (b)) and are checked by smoke.mjs.
+const HUD = [".nf-top", ".nf-readout", ".nf-map-wrap", ".nf-icon-btn.left", ".nf-icon-btn.right", ".nf-stick"];
 
 const results = [];
 let failed = 0;
@@ -116,7 +118,7 @@ for (const prof of profiles.filter((p) => !ONLY || p.name === ONLY)) {
   const boxes = await hudBoxes(page);
   // same boxes within 3 px (labels changed text: "Lap" -> "Wave", "1st" -> "Kills 0"); toasts cleared on both
   const same = boxes.length === refBoxes.length && boxes.every((b, i) => b && refBoxes[i] && b[0] === refBoxes[i][0] && b.slice(1).every((v, k) => Math.abs(v - refBoxes[i][k + 1]) <= 3));
-  check(P, "HUD layout identical to v0.1", same, same ? `${boxes.filter(Boolean).length} boxes` : JSON.stringify({ boxes, refBoxes }));
+  check(P, "unmoved HUD boxes identical to v0.1 (M1 moved bottom bar/actions)", same, same ? `${boxes.filter(Boolean).length} boxes` : JSON.stringify({ boxes, refBoxes }));
   const labels = await page.evaluate(() => [document.querySelector(".nf-readout .nf-kicker")?.textContent, document.querySelector(".nf-readout .nf-sub")?.textContent]);
   check(P, "HUD shows Wave / Kills", labels[0] === "Wave" && /^Kills \d+$/.test(labels[1] || ""), labels.join(" | "));
 
