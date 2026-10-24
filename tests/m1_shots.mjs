@@ -51,6 +51,9 @@ async function run(vp, car) {
       }
       return { ok: false, along: window.__nf.cars[0].along };
     });
+    // city chunks stream one per frame: let the scenery around the deck build before the shot
+    await page.evaluate(() => { window.__nf.hitstop = 60; });
+    for (let i = 0, last = -1, same = 0; i < 60 && same < 4; i++) { await page.waitForTimeout(500); const c = await page.evaluate(() => window.__nfStageInfo().cityChunks); same = c === last && c >= 4 ? same + 1 : 0; last = c; }
     log(r.ok && r.grounded && r.y > 7, `${tag} Model 3 drives across the former void deck`, JSON.stringify(r));
     await shot("ramp-former-gap-model3");
   }

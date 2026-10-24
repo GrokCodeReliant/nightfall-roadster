@@ -138,6 +138,13 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   }
   // water barriers along the right kerb, sometimes a cone line
   if (rnd(index * 5 + 1) < 0.5) for (let k = 0; k < 6; k++) add("water_barrier_2m", at(Math.floor((k / 6) * seg)), -(half - 0.6), 0, 0, 0);
+  // M1: raised ramp deck (former void) reads as a deck: barriers on both kerbs at deck height
+  // wherever the road is elevated, so the ramp and the car on it are visible against the city
+  for (let k = 0; k < seg; k += 2) {
+    const p = at(k);
+    if (p.y < 0.6) continue;
+    for (const side of [1, -1]) add("water_barrier_2m", p, side * (half - 0.6), 0, 0, 0);
+  }
   if (index % 4 === 2) add("overpass_60x12", mid, 0, 0, 0, 0);
   else if (rnd(index * 9 + 2) < 0.3) add("billboard_pole_12x6", mid, (rnd(index) < 0.5 ? 1 : -1) * (half + 4), 0, 0, Math.PI);
   let lamp: THREE.Mesh | null = null;
