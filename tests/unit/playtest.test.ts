@@ -11,8 +11,20 @@ import {
   createSim,
   hasBoost,
   readInput,
+  ROLL_HAND,
+  ROLL_OUT1,
+  ROLL_RIG_CLEAR,
+  ROLL_RIG_ROADSTER,
+  ROLL_SETTLE,
+  ROLL_START_Z,
   rollDeckHeight,
+  rollLocalZ,
+  rollProgress,
+  rollRigBack,
+  rollRoadsterHeight,
+  rollSettleHeight,
   step,
+  stepNonRoadsterRoll,
   type GamepadSample,
 } from "../../src/game/sim.ts";
 
@@ -90,6 +102,73 @@ test("rollDeckHeight stays on the collider and never hops above the bay", () => 
   assert.equal(rollDeckHeight(0.4, 1.2, -0.4), 0);
   assert.equal(rollDeckHeight(0.9, 1.2, null), 1.2);
   assert.equal(rollDeckHeight(1, 1.2, 1.15), 1.15);
+});
+
+test("non-Roadster settle stays monotonic and is on the road at handoff when past the lip", () => {
+  const from = 1.1;
+  let prev = Infinity;
+  for (let i = 0; i <= 20; i++) {
+    const d = i / 20;
+    const y = rollSettleHeight(d, from, null);
+    assert.ok(y <= prev + 1e-9, `null surface rose ${prev} -> ${y}`);
+    prev = y;
+  }
+  assert.equal(rollSettleHeight(1, from, null), 0);
+  assert.equal(rollSettleHeight(1, from, 0), 0);
+  // Still over the lip: ride the collider. Do not sink through it.
+  assert.equal(rollSettleHeight(0.5, from, from), from);
+  assert.ok(rollSettleHeight(0.5, from, from) <= from);
+
+  const state = { exitY: null as number | null, poseY: null as number | null };
+  for (let t = 3.6; t < ROLL_OUT1 - 1e-9; t += 1 / 60) stepNonRoadsterRoll(t, 1.2, 1.05, state);
+  assert.ok(Math.abs((state.exitY ?? 99) - 1.05) < 1e-6, `exit ${state.exitY}`);
+  prev = Infinity;
+  let grounded = false;
+  for (let t = ROLL_OUT1; t <= ROLL_HAND + 1e-9; t += 1 / 60) {
+    const y = stepNonRoadsterRoll(t, 1.2, null, state);
+    assert.ok(y <= prev + 1e-9, `settle rose ${prev} -> ${y} at ${t}`);
+    prev = y;
+    if (t + 1e-9 >= ROLL_OUT1 + ROLL_SETTLE) {
+      assert.equal(y, 0, `t ${t}`);
+      grounded = true;
+    }
+  }
+  assert.equal(grounded, true);
+  assert.ok(ROLL_OUT1 + ROLL_SETTLE < ROLL_HAND);
+
+  // A lip that is still under the hull is not driven through before the grounded pose.
+  const onLip = { exitY: 1.1, poseY: 1.1 };
+  const mid = stepNonRoadsterRoll(ROLL_OUT1 + 0.12, 1.2, 1.1, onLip);
+  assert.ok(mid >= 1.1 - 1e-9, `sank through the lip ${mid}`);
+});
+
+test("non-Roadster roll clears the lip and lands on the sim spawn; Roadster hop is unchanged", () => {
+  assert.equal(rollRigBack(false), ROLL_RIG_CLEAR);
+  assert.equal(rollRigBack(true), ROLL_RIG_ROADSTER);
+  assert.equal(ROLL_RIG_ROADSTER, 14.6);
+  for (const boost of [false, true]) {
+    const back = rollRigBack(boost);
+    assert.equal(rollLocalZ(1, -back) + back, 0, `spawn offset boost=${boost}`);
+  }
+  assert.equal(rollLocalZ(0, -ROLL_RIG_CLEAR), ROLL_START_Z);
+  assert.equal(rollLocalZ(rollProgress(ROLL_OUT1), -ROLL_RIG_ROADSTER), -14.6);
+  // Lowered ramp foot is rig-local z ≈ -15.76. Longest nose is +2.85.
+  const end = rollLocalZ(1, -ROLL_RIG_CLEAR);
+  assert.ok(end + 2.85 < -15.76, `nose still over the foot at ${end + 2.85}`);
+
+  const legacyZ = (u: number) => -9.05 + (-14.6 + 9.05) * u;
+  const legacyHop = (d: number, bayY: number) =>
+    d < 0.45 ? bayY * (1 - (d / 0.45) ** 2) : 0.12 * Math.sin(((d - 0.45) / 0.55) * Math.PI) * (1 - d);
+  for (let i = 0; i <= 20; i++) {
+    const u = i / 20;
+    assert.equal(rollLocalZ(u, -14.6), legacyZ(u));
+    assert.equal(rollRoadsterHeight(u, 1.2), legacyHop(u, 1.2));
+  }
+  assert.ok(rollRoadsterHeight(0.725, 1.2) > rollRoadsterHeight(0.45, 1.2));
+  for (const id of ["model3", "model_y", "model_x", "model_s", "cybertruck"] as const) {
+    assert.equal(hasBoost(id), false, id);
+  }
+  assert.equal(hasBoost("roadster"), true);
 });
 
 test("mine spawns at the press pose, just behind the car, and arms in place", () => {

@@ -325,6 +325,107 @@ export function rollDeckHeight(_u: number, bayY: number, surface: number | null)
   return bayY;
 }
 
+/** Roll-off timeline. Shared with the rig so the drop and the handoff cannot drift. */
+export const ROLL_OUT0 = 3.6;
+export const ROLL_OUT1 = 5.3;
+export const ROLL_HAND = 5.8;
+/** Bay-floor local z the hero starts on (rig node `bay_floor`, before the hitch). */
+export const ROLL_START_Z = -9.05;
+/**
+ * Rig origin ahead of the sim spawn. The hero's end local z is the negation,
+ * so the mesh is handed over exactly where the sim is already sitting.
+ * Roadster keeps 14.6 — that hover path is not the lip fix.
+ */
+export const ROLL_RIG_ROADSTER = 14.6;
+/**
+ * Non-Roadster rig offset. With the ramp lowered, its foot is at rig-local
+ * z ≈ -15.76 and still about a metre above the road. The longest nose
+ * (Cybertruck, +2.85 m) has to be past that foot before y falls, with a
+ * small margin: 15.76 + 2.85 + 0.39 = 19.
+ */
+export const ROLL_RIG_CLEAR = 19;
+/** Seconds after OUT1 for the non-Roadster drop. Finishes before ROLL_HAND. */
+export const ROLL_SETTLE = 0.36;
+/** Probe distance along the nose. Cybertruck half-length is 2.85 m; nothing else is longer. */
+export const ROLL_NOSE = 2.85;
+
+export function rollRigBack(boost: boolean): number {
+  return boost ? ROLL_RIG_ROADSTER : ROLL_RIG_CLEAR;
+}
+
+/** Smoothstep from OUT0 to OUT1. 0 before the roll, 1 once the kinematic path is done. */
+export function rollProgress(t: number): number {
+  if (t <= ROLL_OUT0) return 0;
+  const x = (t - ROLL_OUT0) / (ROLL_OUT1 - ROLL_OUT0);
+  if (x >= 1) return 1;
+  return x * x * (3 - 2 * x);
+}
+
+/** Local z along the rig. `u` is `rollProgress` (already eased). `endZ` is negative. */
+export function rollLocalZ(u: number, endZ: number): number {
+  const x = u <= 0 ? 0 : u >= 1 ? 1 : u;
+  return ROLL_START_Z + (endZ - ROLL_START_Z) * x;
+}
+
+/**
+ * Roadster height after OUT1. `d` is 0 at OUT1 and 1 at handoff.
+ * The sine after the drop is the hop. Other cars must not use this.
+ */
+export function rollRoadsterHeight(d: number, bayY: number): number {
+  const u = d <= 0 ? 0 : d >= 1 ? 1 : d;
+  return u < 0.45 ? bayY * (1 - (u / 0.45) ** 2) : 0.12 * Math.sin(((u - 0.45) / 0.55) * Math.PI) * (1 - u);
+}
+
+/**
+ * Non-Roadster height after OUT1. `d` is 0 at OUT1 and 1 at the grounded pose
+ * (before handoff). `fromY` is the lip height captured when the drop starts.
+ * `surface` is the ramp or trailer still under the hull, or null / ≤0 once past it.
+ * While a lip is under the car, y stays on it. Past the lip, y eases to the road
+ * and is exactly 0 at d = 1. No hop.
+ */
+export function rollSettleHeight(d: number, fromY: number, surface: number | null): number {
+  const u = d <= 0 ? 0 : d >= 1 ? 1 : d;
+  if (u >= 1) return 0;
+  const from = Math.max(0, fromY);
+  const onLip = surface != null && Number.isFinite(surface) && surface > 0;
+  if (onLip) return Math.min(from, surface);
+  return from * (1 - u * u);
+}
+
+export type RollPoseState = { exitY: number | null; poseY: number | null };
+
+/**
+ * Non-Roadster rollout height. Stays on the bay, then the collider, then eases
+ * to the road after OUT1. y is monotonic non-increasing after OUT1, and 0 once
+ * the settle window completes — which is before handoff.
+ */
+export function stepNonRoadsterRoll(t: number, bayY: number, surface: number | null, state: RollPoseState): number {
+  if (t < ROLL_OUT0) {
+    state.poseY = bayY;
+    return bayY;
+  }
+  const lip = surface != null && Number.isFinite(surface) && surface > 0 ? surface : null;
+  if (t >= ROLL_OUT1) {
+    if (state.exitY == null) state.exitY = lip == null ? 0 : rollDeckHeight(1, bayY, lip);
+    const d = Math.min(1, (t - ROLL_OUT1) / ROLL_SETTLE);
+    let y = rollSettleHeight(d, state.exitY, lip);
+    if (state.poseY != null && y > state.poseY) y = state.poseY;
+    state.poseY = y;
+    return y;
+  }
+  let y: number;
+  if (lip != null) {
+    y = rollDeckHeight(rollProgress(t), bayY, lip);
+    state.exitY = y;
+  } else if (state.exitY != null) {
+    y = state.exitY;
+  } else {
+    y = rollDeckHeight(rollProgress(t), bayY, null);
+  }
+  state.poseY = y;
+  return y;
+}
+
 /** Mine lands just behind the press-time pose. The old 4.3 m offset was a trail. */
 export const MINE_DROP_BACK = 1.6;
 export const LIVES = 3;

@@ -3,7 +3,7 @@ import { loadCity, buildCityChunk, cityReady } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { hasBoost, rollDeckHeight, type Kind, type PickupKind, type Sim } from "./sim";
+import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -1269,14 +1269,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   } catch {
     /* rollout simply won't play */
   }
-  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; bay: THREE.Object3D | null; deck: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[]; bayY: number };
+  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; bay: THREE.Object3D | null; deck: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[]; bayY: number; back: number; exitY: number | null; poseY: number | null };
   let roll: Rollout | null = null;
   const deckRay = new THREE.Raycaster();
   const deckFrom = new THREE.Vector3();
   const deckDown = new THREE.Vector3(0, -1, 0);
   const reticleV = new THREE.Vector3();
-  const RIG_BACK = 14.6; // the car ends 14.6 m behind the rig origin (past the ramp foot)
-  const HAND = 5.8;
+  const HAND = ROLL_HAND;
+  const OUT0 = ROLL_OUT0;
+  const OUT1 = ROLL_OUT1;
   function startRollout(sim: Sim): boolean {
     stopRollout();
     if (!rigModel) return false;
@@ -1315,7 +1316,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     rig.updateMatrixWorld(true);
     const bayN = rig.getObjectByName("bay_floor");
     const bayY = bayN ? bayN.getWorldPosition(new THREE.Vector3()).y : 1.2;
-    roll = { bayY, t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, bay: bayN ?? null, deck: rig.getObjectByName("trailer_body") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
+    roll = { bayY, t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, bay: bayN ?? null, deck: rig.getObjectByName("trailer_body") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels, back: rollRigBack(hasBoost(sim.carId)), exitY: null, poseY: null };
     return true;
   }
   function stopRollout() {
@@ -1334,7 +1335,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
   const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
   function rigS(r: Rollout, t: number) {
-    const stop = r.spawnS + RIG_BACK;
+    const stop = r.spawnS + r.back;
     if (t < 2.2) return stop - 45 * (1 - ease(t / 2.2)); // drives in ahead and stops
     if (t < HAND) return stop;
     const u = t - HAND;
@@ -1362,7 +1363,6 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (t > HAND + 9) stopRollout();
   }
   /** while the rollout runs the hero car is posed by the timeline, not by the sim */
-  const OUT0 = 3.6, OUT1 = 5.3; // Roadster hover-out (thrusters lit); other cars roll the ramp
   function rollThrust(t: number) {
     return t >= OUT0 - 0.15 && t < OUT1 ? 1 : 0;
   }
@@ -1413,14 +1413,25 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     for (const n of view.thrusters) n.visible = allow;
     for (const n of view.nozzles) n.visible = allow;
   }
+  /** Highest deck or ramp under the nose, the origin, and the tail. Null once the hull is past the lip. */
+  function footprintSurface(sim: Sim, s: number): number | null {
+    let best: number | null = null;
+    for (const ds of [ROLL_NOSE, 0, -ROLL_NOSE]) {
+      const q = poseAt(sim.track, s + ds);
+      const h = rampSurface(q.x, q.z, q.y);
+      if (h == null || !Number.isFinite(h)) continue;
+      if (best == null || h > best) best = h;
+    }
+    return best;
+  }
   function poseHeroInRollout(sim: Sim) {
     if (!roll || roll.handed || !views[0]) return;
     const r = roll;
     const t = r.t;
-    const stop = r.spawnS + RIG_BACK;
-    // starts on bay_floor (local z -9.05). Roadster hovers out; every other car stays on the ramp.
-    const u = t < OUT0 ? 0 : ease((t - OUT0) / (OUT1 - OUT0));
-    const localZ = -9.05 + (-RIG_BACK + 9.05) * u;
+    const stop = r.spawnS + r.back;
+    // Starts on bay_floor. Roadster keeps the 14.6 m hover. Other cars extend `back`
+    // so the hull is past the ramp foot before the drop, and still finish on the sim spawn.
+    const localZ = rollLocalZ(rollProgress(t), -r.back);
     const sNow = (t < 2.2 ? rigS(r, t) : stop) + localZ;
     const p = poseAt(sim.track, sNow);
     const allow = hasBoost(sim.carId);
@@ -1428,17 +1439,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (allow) {
       if (t >= OUT1) {
         const d = Math.min(1, (t - OUT1) / (HAND - OUT1));
-        y = d < 0.45 ? r.bayY * (1 - (d / 0.45) ** 2) : 0.12 * Math.sin(((d - 0.45) / 0.55) * Math.PI) * (1 - d);
+        y = rollRoadsterHeight(d, r.bayY);
       }
-    } else if (t >= OUT1) {
-      // Lip is still under the car at the end of the kinematic path. Settle onto the road.
-      // Monotonic — the Roadster's post-drop sine is a hop, and these cars do not get it.
-      const d = Math.min(1, (t - OUT1) / (HAND - OUT1));
-      const lip = rampSurface(p.x, p.z, p.y);
-      const from = lip == null ? 0 : Math.max(0, Math.min(r.bayY, lip));
-      y = from * (1 - d * d);
-    } else if (t >= OUT0) {
-      y = rollDeckHeight(u, r.bayY, rampSurface(p.x, p.z, p.y));
+    } else {
+      // On the collider until the lip is behind the hull, then a monotonic drop to the road.
+      y = stepNonRoadsterRoll(t, r.bayY, t >= OUT0 ? footprintSurface(sim, sNow) : null, r);
     }
     const v = views[0];
     v.root.position.set(p.x, p.y + y, p.z);
