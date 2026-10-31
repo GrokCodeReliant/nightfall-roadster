@@ -773,6 +773,8 @@ function clearPad(sim: Sim) {
  *   buttons[8] View / Share → Track edge
  * Deadzone 0.18. No new verbs. Right stick is unused (aim stays the car's facing).
  * Ignored while keysOverride is set.
+ * Pause, title Start, and shop focus are stepPadUi (padui.ts), sampled on this
+ * same pad. They do not add thrust, and boost stays Roadster-only here.
  */
 export function applyGamepad(sim: Sim, sample: GamepadSample | null) {
   if (!sample || sim.keysOverride) {

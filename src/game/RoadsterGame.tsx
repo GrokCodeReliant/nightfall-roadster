@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { CAR_STATS, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
@@ -20,12 +21,19 @@ declare global {
 
 const SAVE_KEY = "nightfall-roadster-v2";
 
-/** Sample the first standard gamepad (Xbox, DualSense, DualShock) outside step() so unit tests stay pad-free. */
-function pollPads(sim: Sim) {
+/**
+ * Sample the first standard gamepad (Xbox, DualSense, DualShock) outside step()
+ * so unit tests stay pad-free. Combat mapping is applyGamepad. Pause, title Start,
+ * and shop focus are stepPadUi on the same sample.
+ *
+ * Title: Start begins the run when the selected stage is ready. Shop stays a
+ * mouse/touch open; once the catalog is up, the pad moves rows and A buys.
+ */
+function pollPads(sim: Sim): GamepadSample | null {
   const read = navigator.getGamepads?.bind(navigator);
   if (!read) {
     applyGamepad(sim, null);
-    return;
+    return null;
   }
   const list = read();
   let chosen: Gamepad | null = null;
@@ -38,6 +46,7 @@ function pollPads(sim: Sim) {
     if (!chosen) chosen = g;
   }
   applyGamepad(sim, chosen);
+  return chosen;
 }
 
 function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
@@ -172,6 +181,13 @@ export function RoadsterGame() {
   creditsRef.current = credits;
   const [shopOpen, setShopOpen] = useState(false);
   const [shopNote, setShopNote] = useState("");
+  const [padFocus, setPadFocus] = useState(0);
+  const padUiRef = useRef(emptyPadUi());
+  const padFocusShown = useRef(0);
+  const shopOpenRef = useRef(false);
+  const confirmRef = useRef(false);
+  const padActions = useRef<(ev: PadUiEvent) => void>(() => {});
+  shopOpenRef.current = shopOpen;
   const [muted, setMuted] = useState(false);
   const [cruise, setCruise] = useState(false);
   const [glError, setGlError] = useState(false);
@@ -353,7 +369,29 @@ export function RoadsterGame() {
       last = now;
       acc = Math.min(stepDt * 5, acc + dt);
       sim.events.length = 0;
-      pollPads(sim);
+      const padSample = pollPads(sim);
+      const shopNow = shopOpenRef.current && (sim.phase === "menu" || sim.phase === "finished");
+      const padMode: PadUiMode = shopNow
+        ? "shop"
+        : sim.phase === "playing"
+          ? "playing"
+          : sim.phase === "paused"
+            ? "paused"
+            : sim.phase === "menu"
+              ? "title"
+              : "other";
+      const padEv = stepPadUi(padSample, padUiRef.current, padMode, {
+        pauseCount: confirmRef.current ? 2 : devMode ? 4 : 3,
+        shopCount: SHOP_CATALOG.length,
+        canStart: !!STAGES[stageIdxRef.current]?.ready,
+        ignore: sim.keysOverride != null,
+      });
+      maskPadCombat(sim, padUiRef.current);
+      if (padEv) padActions.current(padEv);
+      if (padUiRef.current.focus !== padFocusShown.current) {
+        padFocusShown.current = padUiRef.current.focus;
+        setPadFocus(padUiRef.current.focus);
+      }
       let guard = 0;
       const rolling = world.rolloutState().active;
       if (rolling) sim.touchTrack = false;
@@ -533,11 +571,13 @@ export function RoadsterGame() {
   }
 
   const [confirmMenu, setConfirmMenu] = useState(false);
+  confirmRef.current = confirmMenu;
   /** tear down the current run: looping audio, rollout rig/robots/mixers, held input; sim state is reset by begin() */
   function cleanupRun() {
     const sim = simRef.current;
     audioRef.current?.stopLoops();
     worldRef.current?.stopRollout();
+    confirmRef.current = false;
     setConfirmMenu(false);
     if (!sim) return;
     sim.keys.clear();
@@ -559,6 +599,7 @@ export function RoadsterGame() {
     startRace();
   }
   function resumeRun() {
+    confirmRef.current = false;
     setConfirmMenu(false);
     const sim = simRef.current;
     if (sim && sim.phase === "paused") sim.phase = "playing";
@@ -572,6 +613,7 @@ export function RoadsterGame() {
 
   function openShop() {
     setShopNote("");
+    shopOpenRef.current = true;
     setShopOpen(true);
   }
   function onBuy(id: ShopId) {
@@ -604,6 +646,7 @@ export function RoadsterGame() {
     const nextShop = { ...sim.shop };
     shopRef.current = nextShop;
     setShop(nextShop);
+    shopOpenRef.current = false;
     setShopOpen(false);
     writeSave({ shop: nextShop, credits: creditsRef.current });
     worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
@@ -613,12 +656,43 @@ export function RoadsterGame() {
   }
 
   function togglePause() {
+    confirmRef.current = false;
     setConfirmMenu(false);
     const sim = simRef.current;
     if (!sim) return;
     if (sim.phase === "playing") sim.phase = "paused";
     else if (sim.phase === "paused") sim.phase = "playing";
   }
+
+  padActions.current = (ev) => {
+    if (ev.type === "pause") togglePause();
+    else if (ev.type === "resume") resumeRun();
+    else if (ev.type === "startRun") startRace();
+    else if (ev.type === "shopClose") {
+      shopOpenRef.current = false;
+      setShopOpen(false);
+    } else if (ev.type === "shopBuy") {
+      const row = SHOP_CATALOG[ev.index];
+      if (row) onBuy(row.id);
+    } else if (ev.type === "activate") {
+      if (confirmRef.current) {
+        if (ev.index === 0) toTitle();
+        else {
+          confirmRef.current = false;
+          setConfirmMenu(false);
+          padUiRef.current.focus = 0;
+        }
+        return;
+      }
+      if (ev.index === 0) resumeRun();
+      else if (ev.index === 1) restartRun();
+      else if (ev.index === 2) {
+        confirmRef.current = true;
+        setConfirmMenu(true);
+        padUiRef.current.focus = 0;
+      } else if (ev.index === 3 && devMode) onFullyUpgraded();
+    }
+  };
 
   function toggleMute() {
     const audio = audioRef.current;
@@ -669,6 +743,10 @@ export function RoadsterGame() {
   }
 
   const showPlay = phase === "playing" || phase === "paused";
+  const shopFocus = shopOpen && (phase === "menu" || phase === "finished") ? padFocus : -1;
+  function padBtn(index: number, base: string) {
+    return phase === "paused" && padFocus === index ? `${base} is-pad-focus` : base;
+  }
 
   return (
     <div className="nf-root" ref={wrapRef}>
@@ -848,18 +926,18 @@ export function RoadsterGame() {
             <div className="nf-pausemenu">
               {!confirmMenu ? (
                 <>
-                  <button type="button" className="nf-btn" onClick={resumeRun}>Resume</button>
-                  <button type="button" className="nf-btn nf-btn-ghost" onClick={restartRun}>Restart</button>
-                  <button type="button" className="nf-btn nf-btn-ghost" onClick={() => setConfirmMenu(true)}>Back to menu</button>
+                  <button type="button" className={padBtn(0, "nf-btn")} aria-current={padFocus === 0 ? "true" : undefined} onClick={resumeRun}>Resume</button>
+                  <button type="button" className={padBtn(1, "nf-btn nf-btn-ghost")} aria-current={padFocus === 1 ? "true" : undefined} onClick={restartRun}>Restart</button>
+                  <button type="button" className={padBtn(2, "nf-btn nf-btn-ghost")} aria-current={padFocus === 2 ? "true" : undefined} onClick={() => { confirmRef.current = true; setConfirmMenu(true); padUiRef.current.focus = 0; }}>Back to menu</button>
                   {devMode && (
-                    <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
+                    <button type="button" className={padBtn(3, "nf-dev-btn")} aria-current={padFocus === 3 ? "true" : undefined} onClick={onFullyUpgraded}>Fully upgraded</button>
                   )}
                 </>
               ) : (
                 <>
                   <p className="nf-confirm">Leave this run and go back to the menu?</p>
-                  <button type="button" className="nf-btn" onClick={toTitle}>Yes, back to menu</button>
-                  <button type="button" className="nf-btn nf-btn-ghost" onClick={() => setConfirmMenu(false)}>Cancel</button>
+                  <button type="button" className={padBtn(0, "nf-btn")} aria-current={padFocus === 0 ? "true" : undefined} onClick={toTitle}>Yes, back to menu</button>
+                  <button type="button" className={padBtn(1, "nf-btn nf-btn-ghost")} aria-current={padFocus === 1 ? "true" : undefined} onClick={() => { confirmRef.current = false; setConfirmMenu(false); padUiRef.current.focus = 0; }}>Cancel</button>
                 </>
               )}
             </div>
@@ -874,8 +952,8 @@ export function RoadsterGame() {
             <h2>Shop</h2>
             <p className="nf-credits">Credits {credits}</p>
             <ul className="nf-shop-list">
-              {SHOP_CATALOG.map((item) => (
-                <li className="nf-shop-row" key={item.id}>
+              {SHOP_CATALOG.map((item, index) => (
+                <li className={shopFocus === index ? "nf-shop-row is-pad-focus" : "nf-shop-row"} key={item.id} aria-current={shopFocus === index ? "true" : undefined}>
                   <span>{item.label}<small>{shopOwned(shop, item.id)}</small></span>
                   <span>{item.price}</span>
                   <button type="button" className="nf-shop-buy" onClick={() => onBuy(item.id)}>Buy</button>
@@ -883,7 +961,7 @@ export function RoadsterGame() {
               ))}
             </ul>
             <p className="nf-shop-note" role="status">{shopNote}</p>
-            <button type="button" className="nf-shop-close" onClick={() => setShopOpen(false)}>Close</button>
+            <button type="button" className="nf-shop-close" onClick={() => { shopOpenRef.current = false; setShopOpen(false); }}>Close</button>
           </div>
         </div>
       )}

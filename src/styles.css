@@ -404,6 +404,12 @@
   align-items: center;
   font-size: 0.86rem;
 }
+.nf-shop-row.is-pad-focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border-radius: var(--radius);
+}
 .nf-shop-row small {
   display: block;
   color: var(--color-muted);
@@ -699,6 +705,10 @@
   width: 100%;
   min-height: 52px;
   margin-top: 0;
+}
+.nf-pausemenu .is-pad-focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
 }
 .nf-confirm {
   margin: 0 0 4px;
