@@ -67,7 +67,13 @@ test("v0.2 driving is frame-identical to v0.1 (handling constants, input, thrust
     }
   });
   const b = run(v2, (sim) => {
-    sim.lull = 1e9; // no waves during the comparison
+    // M2 fixture: Roadster stats (accel 34, topSpeed 52, handling 1.10) are a deliberate
+    // divergence from v0.1. The lock stays on Model 3, the baseline row (48 / 24 / 1.0).
+    // Track mode is off and Model 3 has no track toggle, so the scripted frames stay identical.
+    sim.carId = "model3";
+    sim.trackOn = false;
+    v2.begin(sim);
+    sim.lull = 1e9; // begin() arms the first wave; keep the comparison clear of hunters
   });
   assert.equal(a.length, b.length);
   const names = ["speed", "yaw", "lat", "vy", "y", "fuel", "rounds", "grounded", "thrust", "path length"];

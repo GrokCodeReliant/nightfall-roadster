@@ -48,6 +48,7 @@
 .nf-canvas {
   position: absolute;
   inset: 0;
+  z-index: 0;
   width: 100%;
   height: 100%;
   display: block;
@@ -63,6 +64,7 @@
 }
 
 .nf-hud {
+  z-index: 2;
   padding:
     calc(0.75rem + env(safe-area-inset-top))
     calc(0.75rem + env(safe-area-inset-right))
@@ -159,24 +161,31 @@
   min-height: 1.2rem;
 }
 
+/* Aim reticle sits on the camera look point (hood / nose) and above the WebGL canvas.
+   The canvas composites over un-layered DOM, which hid the old cross behind the car. */
 .nf-cross {
   position: absolute;
   left: 50%;
-  top: 46%;
-  width: 0.9rem;
-  height: 0.9rem;
+  top: 50%;
+  z-index: 4;
+  width: 1.15rem;
+  height: 1.15rem;
   transform: translate(-50%, -50%);
-  border: 1px solid color-mix(in srgb, var(--color-fg) 70%, transparent);
+  border: 2px solid #fff6ea;
   border-radius: 999px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-bg) 50%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.92),
+    0 0 10px rgba(255, 64, 36, 0.95);
+  pointer-events: none;
 }
 
 .nf-cross::before,
 .nf-cross::after {
   content: "";
   position: absolute;
-  background: var(--color-fg);
-  opacity: 0.8;
+  background: #fff6ea;
+  opacity: 1;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
 }
 
 .nf-cross::before {
@@ -281,6 +290,11 @@
 
 .nf-icon-btn.left { left: calc(0.75rem + env(safe-area-inset-left)); }
 .nf-icon-btn.right { right: calc(0.75rem + env(safe-area-inset-right)); }
+
+.nf-menu,
+.nf-overlay {
+  z-index: 6;
+}
 
 .nf-menu {
   display: flex;
@@ -513,7 +527,8 @@
 }
 
 .nf-touch button.thrust.is-on,
-.nf-touch button.thrust:active {
+.nf-touch button.thrust:active,
+.nf-touch button.nf-track.is-on {
   background: var(--color-accent);
   color: var(--color-bg);
   border-color: var(--color-accent);
@@ -602,7 +617,8 @@
 
 /* m5: car pick on the title screen */
 .nf-carpick { display: flex; align-items: center; justify-content: center; gap: 0.6rem; margin: 0.4rem 0 0.9rem; }
-.nf-carpick-name { min-width: 10rem; text-align: center; font-family: var(--font-hud); letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.85rem; color: var(--color-fg); }
+.nf-carpick-name { min-width: 10rem; text-align: center; font-family: var(--font-hud); letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.85rem; color: var(--color-fg); display: flex; flex-direction: column; align-items: center; gap: 0.12rem; }
+.nf-carpick-sub { margin: -0.35rem 0 0.75rem; font-size: 0.68rem; letter-spacing: 0.12em; color: var(--color-accent); text-align: center; }
 .nf-carpick-arrow { width: 2.4rem; height: 2.4rem; border-radius: 999px; border: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-bg) 72%, transparent); color: var(--color-fg); font-size: 1.3rem; line-height: 1; cursor: pointer; }
 .nf-carpick-arrow:hover { border-color: #e23b2f; }
 
@@ -666,12 +682,21 @@
 }
 .nf-update button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0.25rem 0.4rem; }
 .nf-update-go { color: var(--color-accent); }
+/* Model S track toggle adds one compact row. The variable lives on .nf-hud so the
+   bottom bar (a sibling of .nf-touch) clears the taller action stack by ≥8 px. */
+.nf-hud.has-track { --nf-touch-h: 9.2rem; }
+.nf-touch button.nf-track { min-height: 2.35rem; }
+
 /* touch: the bottom bar stacks above the touch row (stick + action buttons) */
 @media (pointer: coarse), (max-width: 820px) {
+  .nf-hud .nf-meter p { font-size: 0.84rem; }
+  .nf-hud .nf-speed { font-size: 2.15rem; }
+  .nf-cross { width: 1.35rem; height: 1.35rem; border-width: 2px; }
   .nf-hud .nf-bottom {
     bottom: calc(var(--nf-touch-h, 7.5rem) + 0.55rem + 8px + env(safe-area-inset-bottom));
     top: auto;
   }
+  .nf-touch .nf-actions button.nf-track { grid-column: 1 / -1; min-width: 0; }
   .nf-hud .nf-toast { top: calc(7.1rem + env(safe-area-inset-top)); }
   /* M1: action buttons in a 2x2 block so the touch row is only stick-height (7.5rem) and the
      stacked HUD bar stays low, clear of the car in the middle of the screen */

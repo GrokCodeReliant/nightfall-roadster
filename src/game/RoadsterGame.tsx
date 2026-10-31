@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { hasBoost, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
@@ -18,6 +18,13 @@ declare global {
 }
 
 const SAVE_KEY = "nightfall-roadster-v2";
+
+function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
+  const st = CAR_STATS[id];
+  const bits = [st.roughTerrain ? "Rough ready" : "", st.trackMode ? "Track mode" : "", st.boost ? "Boost" : ""].filter(Boolean);
+  if (!bits.length) return null;
+  return <p className="nf-carpick-sub">{bits.join(" · ")}</p>;
+}
 
 type Save = { bestScore: number; bestWave: number; bestTime: number };
 
@@ -64,10 +71,25 @@ export function RoadsterGame() {
   const threatsRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<ReturnType<typeof createWorld> | null>(null);
   const [carIdx, setCarIdx] = useState(() => {
-    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("nf-car") : null;
-    const i = CARS.findIndex((c) => c.id === saved);
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("nf-car");
+    } catch {
+      saved = null;
+    }
+    const id = migrateCarId(saved);
+    if (saved !== id) {
+      try {
+        localStorage.setItem("nf-car", id);
+      } catch {
+        /* private mode */
+      }
+    }
+    const i = CARS.findIndex((c) => c.id === id);
     return i >= 0 ? i : 0;
   });
+  const [trackOn, setTrackOn] = useState(false);
+  const trackOnRef = useRef(false);
   const carIdxRef = useRef(carIdx);
   const boostCar = hasBoost(CARS[carIdx].id);
   const updateReady = useUpdateBanner();
@@ -303,6 +325,11 @@ export function RoadsterGame() {
         else if (e.t === "rocket") audio.gun();
         else if (e.t === "life") audio.fall();
         else if (e.t === "over") audio.finish();
+        else if (e.t === "track") audio.tick();
+      }
+      if (trackOnRef.current !== sim.trackOn) {
+        trackOnRef.current = sim.trackOn;
+        setTrackOn(sim.trackOn);
       }
       if (sim.phase !== phaseRef.current) {
         phaseRef.current = sim.phase;
@@ -418,6 +445,7 @@ export function RoadsterGame() {
     if (u.oilT > 0) chips.push([`Oil ${Math.ceil(u.oilT)}s`, "#7a5cff"]);
     if (u.magnetT > 0) chips.push([`Magnet ${Math.ceil(u.magnetT)}s`, "#ff4ad0"]);
     if (u.cluster) chips.push(["Cluster mines", "#e23b2f"]);
+    if (sim.trackOn) chips.push(["TRACK", "#e23b2f"]);
     if (hero.maxFuel > 100) chips.push([`Nitro +${hero.maxFuel - 100}`, "#38d6ff"]);
     const key = chips.map((c) => c[0]).join("|");
     if (chipsRef.current && key !== chipKey.current) {
@@ -475,6 +503,8 @@ export function RoadsterGame() {
     sim.autoGas = coarse;
     setCruise(coarse);
     sim.carId = CARS[carIdxRef.current].id;
+    trackOnRef.current = false;
+    setTrackOn(false);
     begin(sim);
     worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
     worldRef.current?.startRollout(sim); // hauler rig rollout; the sim waits (skippable by tap/key)
@@ -550,7 +580,7 @@ export function RoadsterGame() {
         </div>
       )}
       {showPlay && (
-        <div className="nf-hud">
+        <div className={`nf-hud${supportsTrackMode(CARS[carIdx].id) ? " has-track" : ""}`}>
           <div className="nf-threats" ref={threatsRef} aria-hidden="true" />
           <button type="button" className="nf-icon-btn left" onClick={togglePause} aria-label={phase === "paused" ? "Resume" : "Pause"}>
             {phase === "paused" ? <Play size={18} /> : <Pause size={18} />}
@@ -610,6 +640,20 @@ export function RoadsterGame() {
               <span className="nf-knob" ref={knobRef} />
             </div>
             <div className="nf-actions">
+              {supportsTrackMode(CARS[carIdx].id) && (
+                <button
+                  type="button"
+                  className={`nf-track${trackOn ? " is-on" : ""}`}
+                  aria-pressed={trackOn}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    const sim = simRef.current;
+                    if (sim && supportsTrackMode(sim.carId)) sim.touchTrack = true;
+                  }}
+                >
+                  Track
+                </button>
+              )}
               <button type="button" className={cruise ? "is-on" : ""} onClick={() => {
                 const sim = simRef.current;
                 if (!sim) return;
@@ -660,6 +704,7 @@ export function RoadsterGame() {
               <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
               <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
             </div>
+            <CarBlurb id={CARS[carIdx].id} />
             <div className="nf-carpick nf-stagepick" role="group" aria-label="Choose stage">
               <button type="button" className="nf-carpick-arrow" aria-label="Previous stage" onClick={() => pickStage(-1)}>‹</button>
               <span className="nf-carpick-name" data-stage={STAGES[stageIdx].id}>{STAGES[stageIdx].name}{STAGES[stageIdx].ready ? "" : " · Coming soon"}</span>
@@ -674,9 +719,10 @@ export function RoadsterGame() {
             <p className="nf-keysline nf-keys">
               <kbd>W/S</kbd> "gas" 😉
               <kbd>A/D</kbd> steer
-              <kbd>Space</kbd> thrust
+              <kbd>Space</kbd> boost
               <kbd>F</kbd> guns
               <kbd>G</kbd> mines
+              <kbd>T</kbd> track
               <kbd>Esc</kbd> pause
             </p>
             <p className="nf-credit" style={{ marginTop: "0.9rem", fontSize: "0.72rem", opacity: 0.6, letterSpacing: "0.04em" }}>

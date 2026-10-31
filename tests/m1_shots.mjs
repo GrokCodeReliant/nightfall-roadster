@@ -16,10 +16,11 @@ async function run(vp, car) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
-  await page.addInitScript((c) => { try { localStorage.setItem("nf-car", c); } catch {} }, car);
+  const id = ({ volt: "model3", volt_r: "model3", volt_rs: "model3", roadster2026: "roadster" })[car] || car;
+  await page.addInitScript((c) => { try { localStorage.setItem("nf-car", c); } catch {} }, id);
   await page.goto("file://" + BUILD + "?debug&enemylod=phone");
   await page.waitForSelector(".nf-btn");
-  await page.waitForFunction((id) => window.__nfCar && window.__nfCar().car === id && window.__nfCar().source !== "loading", car, { timeout: 90000 });
+  await page.waitForFunction((cid) => window.__nfCar && window.__nfCar().car === cid && window.__nfCar().source !== "loading", id, { timeout: 90000 });
   await page.waitForTimeout(1500);
   await page.click(".nf-btn");
   await page.waitForSelector(".nf-hud");
@@ -28,7 +29,7 @@ async function run(vp, car) {
   const shot = async (name) => { await page.evaluate(() => { window.__nf.hitstop = 60; }); await page.waitForTimeout(2500); const f = `${SHOTS}/${tag}-${name}.png`; await page.screenshot({ path: f }); await page.evaluate(() => { window.__nf.hitstop = 0; }); console.log("shot", f); };
   await page.evaluate(() => { window.__nf.lull = 1e9; window.__nfAdvance(2, ["KeyW"]); });
   const btn = await page.evaluate(() => [...document.querySelectorAll(".nf-actions button")].map((b) => b.textContent.trim()));
-  if (car === "roadster2026") {
+  if (id === "roadster") {
     log(btn.includes("Boost") && !btn.includes("Brake"), `${tag} Roadster has Boost button`, btn.join(","));
     await shot("hud-boost-roadster");
     // hop: hold boost on the flat until the 7.5 m cap, then freeze and let the chase cam settle

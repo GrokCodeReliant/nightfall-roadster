@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyPickup, begin, createSim, debugSpawn, debugStartWave, ENEMY, spawnPickup, step, waveRoster, DRONE_ALT } from "../../src/game/sim.ts";
+import { applyPickup, begin, createSim, debugSpawn, debugStartWave, ENEMY, resolvedStats, spawnPickup, step, waveRoster, DRONE_ALT } from "../../src/game/sim.ts";
 import { botKeys } from "../../src/game/bot.ts";
 
 function run(sim: any, secs: number, keys: string[] | "hunt" | null, until?: () => boolean) {
@@ -39,7 +39,13 @@ test("mine layer drops live enemy mines behind itself that hurt only the player"
 });
 
 test("spiker grinds alongside for chip damage, then peels out in front", () => {
-  const sim = fresh();
+  // M2: the default hero is the Roadster (accel 34), which leaves the grind window.
+  // This encounter was tuned on the Model 3 baseline (accel 24, cap 48).
+  const sim = createSim();
+  sim.carId = "model3";
+  begin(sim);
+  sim.lull = 1e9;
+  run(sim, 2, ["KeyW"]);
   const hero = sim.cars[0];
   const car = (debugSpawn as any)(sim, "spiker", -6, 3);
   const hp0 = hero.hp;
@@ -97,7 +103,8 @@ test("every pickup applies, and losing a life costs one upgrade tier", () => {
   assert.equal(hero.hp, 85);
   assert.equal(sim.up.gun, 3);
   assert.equal(sim.up.armor, 50);
-  assert.equal(hero.maxHp, 150);
+  const baseHp = resolvedStats(sim.carId, false).maxHp;
+  assert.equal(hero.maxHp, baseHp + 50);
   assert.equal(sim.up.rockets, 6);
   assert.ok(sim.up.cluster && sim.up.reserve === 4);
   assert.ok(sim.up.oilT > 0 && sim.up.shieldT > 0 && sim.up.magnetT > 0);
@@ -122,7 +129,7 @@ test("every pickup applies, and losing a life costs one upgrade tier", () => {
   assert.equal(sim.lives, 2);
   assert.equal(sim.up.gun, 2, "one gun tier lost");
   assert.equal(sim.up.armor, 25, "one armor plate lost");
-  assert.equal(hero.maxHp, 125);
+  assert.equal(hero.maxHp, baseHp + 25);
   assert.equal(sim.up.rockets, 0);
   assert.ok(!sim.up.cluster && sim.up.oilT === 0 && sim.up.shieldT === 0);
   void hp;

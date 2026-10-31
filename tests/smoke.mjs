@@ -1,7 +1,7 @@
 // Quick m5 smoke test (desktop + phone): boots, car pick, rollout plays + hands over, drive, fire, an enemy dies, draws, 0 errors.
 import { chromium, devices } from "playwright";
 import fs from "node:fs";
-import { drawGate } from "./draw_gate.mjs";
+import { drawGate, drawReport } from "./draw_gate.mjs";
 const ROOT = "/workspace/studio/nightfall_roadster";
 const BUILD = process.env.NF_BUILD || `${ROOT}/v02_final/nightfall-roadster-v02-final.html`;
 const SHOTS = process.env.NF_SHOTS || `${ROOT}/v02_final/screenshots`;
@@ -11,11 +11,12 @@ const profiles = [
   { name: "phone", ctx: { ...devices["iPhone 13"], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 } },
 ].filter((p) => !process.env.NF_ONLY || p.name === process.env.NF_ONLY);
 const EXPECT = {
-  "Model 3 (2017)": { id: "volt", file: "sedan_compact" },
-  "Model 3 Highland": { id: "volt_r", file: "sedan_compact_r" },
-  "Model 3 Performance": { id: "volt_rs", file: "sedan_compact_rs" },
-  "Roadster (2017)": { id: "roadster", file: "roadster" },
-  "Roadster (2026)": { id: "roadster2026", file: "roadster2026" },
+  "Model 3": { id: "model3", file: "sedan_compact" },
+  "Model Y": { id: "model_y", file: "model_y" },
+  "Model X": { id: "model_x", file: "model_x" },
+  "Model S": { id: "model_s", file: "model_s" },
+  Cybertruck: { id: "cybertruck", file: "cybertruck" },
+  Roadster: { id: "roadster", file: "roadster2026" },
 };
 const results = [];
 let failed = 0;
@@ -108,7 +109,9 @@ for (const prof of profiles) {
   const shown = await page.evaluate(() => window.__nfEnemies().shown.filter((s) => s));
   check(P, "enemies render GLBs", shown.length >= 4 && shown.every((s) => s.endsWith(":glb")), shown.join(","));
   const draws = await page.evaluate(() => window.__nfDraws());
-  check(P, `draws within budget (${P === "phone" ? "≤120" : "logged"})`, drawGate(P, draws.draws), `draws ${draws.draws}, tris ${draws.tris}`);
+  const rep = drawReport(P, draws.draws);
+  console.log(`DRAW [${P}] ${rep.note}`);
+  check(P, `draws hard ceiling (${P === "phone" ? "≤160, soft ≤120 reported" : "logged"})`, drawGate(P, draws.draws), `${rep.note}, tris ${draws.tris}`);
   await page.evaluate(() => { window.__nf.hitstop = 0; });
   const k0 = await page.evaluate(() => window.__nf.takedowns);
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });

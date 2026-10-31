@@ -13,6 +13,8 @@ export type AudioBus = {
   land: (hard: boolean) => void;
   fall: () => void;
   lap: () => void;
+  /** short UI confirm (track-mode toggle) */
+  tick: () => void;
   finish: () => void;
   stopLoops: () => void;
   stats: () => { loopNodes: number; state: string };
@@ -245,6 +247,9 @@ export function createAudio(): AudioBus {
     lap() {
       blip(520, 0.12, "sine", 0.06);
       blip(780, 0.16, "sine", 0.05);
+    },
+    tick() {
+      blip(880, 0.06, "square", 0.05);
     },
     finish() {
       blip(392, 0.18, "sine", 0.07);

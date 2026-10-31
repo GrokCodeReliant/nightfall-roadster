@@ -28,7 +28,8 @@ export type Fx =
   | { t: "rocket" }
   | { t: "emine" }
   | { t: "pickup"; kind: PickupKind }
-  | { t: "down" };
+  | { t: "down" }
+  | { t: "track"; on: boolean };
 
 export type Shot = {
   alive: boolean;
@@ -173,8 +174,14 @@ export type Result = {
 };
 
 export type Sim = {
-  /** hero car id (world.ts CARS); decides boost vs brake */
+  /** hero car id (world.ts CARS); stats, boost vs brake, track mode */
   carId: string;
+  /** Model S track mode. Always starts OFF. Ignored unless the car's trackMode flag is set. */
+  trackOn: boolean;
+  /** edge detect for keyboard T so a held key does not auto-enable track mode */
+  prevTrackKey: boolean;
+  /** one-shot from the touch Track button; consumed by step() */
+  touchTrack: boolean;
   /** M1 boost state: deck height at take-off, cooldown after landing, air re-light used, floating */
   boostDeck: number;
   boostCd: number;
@@ -232,12 +239,63 @@ export const BOOST_COOLDOWN = 1.2;
 export const BOOST_SPEED_BONUS = 10;
 export const BOOST_SPEED_CAP = 58;
 export type BoostSpec = { hopMax: number; accel: number };
-/** per-car boost table; a car missing here has no boost (M2 cars default to none) */
-export const BOOST: Record<string, BoostSpec | undefined> = {
-  roadster: { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL },
-  roadster2026: { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL },
+
+/**
+ * M2 lineup stats (game units). Baseline row is today's shipped feel: topSpeed 48, accel 24,
+ * maxHp 100, mineCap 4, handling 1.0. Model S "on" values apply only while trackOn is true.
+ * Model X side guns are not stock (M8). Rough terrain is a flag only until M6.
+ */
+export const CAR_IDS = ["model3", "model_y", "model_x", "model_s", "cybertruck", "roadster"] as const;
+export type LineupId = (typeof CAR_IDS)[number];
+export type CarStat = {
+  topSpeed: number;
+  accel: number;
+  maxHp: number;
+  mineCap: number;
+  handling: number;
+  boost: boolean;
+  trackMode: boolean;
+  roughTerrain: boolean;
+  track?: { topSpeed: number; accel: number; handling: number };
 };
-export function hasBoost(carId: string) { return !!BOOST[carId]; }
+export const CAR_STATS: Record<LineupId, CarStat> = {
+  model3: { topSpeed: 48, accel: 24, maxHp: 100, mineCap: 4, handling: 1, boost: false, trackMode: false, roughTerrain: false },
+  model_y: { topSpeed: 46, accel: 22, maxHp: 110, mineCap: 7, handling: 0.95, boost: false, trackMode: false, roughTerrain: false },
+  model_x: { topSpeed: 50, accel: 26, maxHp: 115, mineCap: 7, handling: 0.92, boost: false, trackMode: false, roughTerrain: false },
+  model_s: { topSpeed: 54, accel: 28, maxHp: 105, mineCap: 4, handling: 1.05, boost: false, trackMode: true, roughTerrain: false, track: { topSpeed: 64, accel: 30, handling: 1.15 } },
+  cybertruck: { topSpeed: 44, accel: 23, maxHp: 160, mineCap: 12, handling: 0.85, boost: false, trackMode: false, roughTerrain: true },
+  roadster: { topSpeed: 52, accel: 34, maxHp: 75, mineCap: 2, handling: 1.1, boost: true, trackMode: false, roughTerrain: false },
+};
+
+/** Save / picker ids from M1 map onto the locked lineup. Unknown ids start as Model 3. */
+export function migrateCarId(raw: string | null | undefined): LineupId {
+  if (raw === "volt" || raw === "volt_r" || raw === "volt_rs") return "model3";
+  if (raw === "roadster" || raw === "roadster2026") return "roadster";
+  if (raw && (CAR_IDS as readonly string[]).includes(raw)) return raw as LineupId;
+  return "model3";
+}
+
+export function resolvedStats(carId: string, trackOn: boolean): CarStat & { id: LineupId } {
+  const id = migrateCarId(carId);
+  const row = CAR_STATS[id];
+  const on = !!(trackOn && row.trackMode && row.track);
+  return {
+    ...row,
+    id,
+    topSpeed: on && row.track ? row.track.topSpeed : row.topSpeed,
+    accel: on && row.track ? row.track.accel : row.accel,
+    handling: on && row.track ? row.track.handling : row.handling,
+  };
+}
+
+export function supportsTrackMode(carId: string) {
+  return CAR_STATS[migrateCarId(carId)].trackMode;
+}
+
+/** Boost is Roadster-only. Legacy roadster2026 migrates before the lookup. */
+export function hasBoost(carId: string) {
+  return CAR_STATS[migrateCarId(carId)].boost;
+}
 export const LIVES = 3;
 export const ENEMY_SLOTS = 8;
 const MAX_ALIVE = 8;
@@ -339,6 +397,9 @@ export function createSim(): Sim {
     keys: new Set(),
     keysOverride: null,
     carId: "roadster",
+    trackOn: false,
+    prevTrackKey: false,
+    touchTrack: false,
     boostDeck: 0,
     boostCd: 0,
     relit: false,
@@ -380,14 +441,15 @@ function park(sim: Sim) {
   const hero = sim.cars[0];
   hero.lane = 0;
   place(sim, hero, START_S, 0);
-  hero.maxHp = 100;
+  const st = resolvedStats(sim.carId, sim.trackOn);
+  hero.maxHp = st.maxHp + sim.up.armor;
   hero.maxFuel = MAX_FUEL;
   hero.hp = hero.maxHp;
   hero.recover = 0;
   hero.flash = 0;
   hero.fuel = MAX_FUEL;
   hero.rounds = 24;
-  hero.mines = 4;
+  hero.mines = st.mineCap;
   hero.invuln = 0;
   for (let i = 1; i < sim.cars.length; i++) {
     const c = sim.cars[i];
@@ -401,6 +463,10 @@ export function begin(sim: Sim) {
   for (const m of sim.mines) m.alive = false;
   for (const p of sim.pickups) p.alive = false;
   sim.up = freshUpgrades();
+  // Track mode is a player toggle. Never auto-enable, even if T is already held.
+  sim.trackOn = false;
+  sim.prevTrackKey = (sim.keysOverride ?? sim.keys).has("KeyT");
+  sim.touchTrack = false;
   sim.nextCrate = START_S + 280;
   sim.recycled = 0;
   park(sim);
@@ -536,7 +602,7 @@ export function dropTier(sim: Sim) {
   const had = u.gun > 0 || u.armor > 0 || hero.maxFuel > MAX_FUEL || u.rockets > 0 || u.reserve > 0 || u.cluster;
   u.gun = Math.max(0, u.gun - 1);
   u.armor = Math.max(0, u.armor - 25);
-  hero.maxHp = 100 + u.armor;
+  hero.maxHp = resolvedStats(sim.carId, false).maxHp + u.armor;
   hero.maxFuel = Math.max(MAX_FUEL, hero.maxFuel - 20);
   hero.fuel = Math.min(hero.fuel, hero.maxFuel);
   u.rockets = 0;
@@ -683,7 +749,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     input = { ...input, steer: 0, throttle: Math.min(input.throttle, 0), thrust: false };
   }
 
-  const boost = car.hero ? BOOST[sim.carId] : undefined;
+  const boost = car.hero && hasBoost(sim.carId) ? { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL } : undefined;
+  const st = car.hero ? resolvedStats(sim.carId, sim.trackOn) : null;
   if (car.hero) sim.boostCd = Math.max(0, sim.boostCd - dt);
   // ground take-off needs the post-landing cooldown; one air re-light per jump
   let wantThrust = !!boost && input.thrust && (infiniteFuel || car.fuel > 0.5);
@@ -696,7 +763,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
 
   if (input.throttle > 0) {
     if (car.speed < 0) car.speed = Math.min(0, car.speed + 40 * dt);
-    else car.speed += 24 * input.throttle * dt;
+    else car.speed += (st ? st.accel : 24) * input.throttle * dt;
   } else if (input.throttle < 0) {
     if (car.speed > 2) car.speed = Math.max(0, car.speed - 42 * dt);
     else car.speed -= 16 * dt;
@@ -704,7 +771,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   const drag = input.throttle === 0 ? 1.15 : 0.28;
   car.speed -= car.speed * drag * dt;
   if (wantThrust) car.speed += BOOST_SPEED_BONUS * dt;
-  const cap = wantThrust ? BOOST_SPEED_CAP : 48;
+  // Enemies stay on the v0.1 48 cap. Hero uses the car row. In-boost cap stays BOOST_SPEED_CAP (58).
+  const cap = wantThrust ? BOOST_SPEED_CAP : (st ? st.topSpeed : 48);
   car.speed = clamp(car.speed, -14, cap);
 
   if (wantThrust && car.grounded) {
@@ -738,7 +806,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   const reverse = car.speed >= -0.4 ? 1 : -1;
   const air = car.grounded ? 1 : 0.7;
   // A → steer +1 → +yaw → nose left under the chase cam.
-  car.yaw += input.steer * 2.4 * speedFactor * reverse * air * dt;
+  car.yaw += input.steer * 2.4 * (st ? st.handling : 1) * speedFactor * reverse * air * dt;
 
   const grip = car.grounded ? 8 : 1.3;
   car.lat *= Math.exp(-grip * dt);
@@ -812,7 +880,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   car.mineCd = Math.max(0, car.mineCd - dt);
   car.flash = Math.max(0, car.flash - dt);
   if (car.hero && !input.fire) car.rounds = Math.min(24, car.rounds + 7 * dt);
-  if (car.hero) car.mines = Math.min(4, car.mines + dt / 3.1);
+  if (car.hero) car.mines = Math.min(resolvedStats(sim.carId, false).mineCap, car.mines + dt / 3.1);
 
   if (input.fire && car.alive && car.recover <= 0) fireShot(sim, car);
   if (car.hero && input.mine && !sim.prevMine && car.recover <= 0) dropMine(sim, car);
@@ -1032,7 +1100,7 @@ export function applyPickup(sim: Sim, kind: PickupKind) {
   else if (kind === "armor") {
     if (u.armor < 100) {
       u.armor += 25;
-      hero.maxHp = 100 + u.armor;
+      hero.maxHp = resolvedStats(sim.carId, false).maxHp + u.armor;
       hero.hp += 25;
     } else hero.hp = Math.min(hero.maxHp, hero.hp + 25);
   } else if (kind === "gun") {
@@ -1042,7 +1110,7 @@ export function applyPickup(sim: Sim, kind: PickupKind) {
   else if (kind === "minepack") {
     u.reserve = 4;
     u.cluster = true;
-    hero.mines = 4;
+    hero.mines = resolvedStats(sim.carId, false).mineCap;
   } else if (kind === "oil") u.oilT = 20;
   else if (kind === "nitro") {
     hero.maxFuel = Math.min(160, hero.maxFuel + 20);
@@ -1150,7 +1218,7 @@ function freshHeroMines(sim: Sim) {
     if (m.oil) m.life = 7;
     if (sim.up.reserve > 0) {
       sim.up.reserve -= 1;
-      hero.mines += 1;
+      hero.mines = Math.min(resolvedStats(sim.carId, false).mineCap, hero.mines + 1);
     }
     if (sim.up.cluster) {
       const { rx, rz } = fxDir(hero.yaw);
@@ -1677,8 +1745,27 @@ function stepMines(sim: Sim, dt: number) {
   }
 }
 
+/** Keyboard T (edge) and the touch Track pulse. Non-S cars ignore both and stay off. */
+function pollTrack(sim: Sim) {
+  if (!supportsTrackMode(sim.carId)) {
+    sim.trackOn = false;
+    sim.prevTrackKey = false;
+    sim.touchTrack = false;
+    return;
+  }
+  const keys = sim.keysOverride ?? sim.keys;
+  const down = keys.has("KeyT");
+  if ((down && !sim.prevTrackKey) || sim.touchTrack) {
+    sim.trackOn = !sim.trackOn;
+    sim.events.push({ t: "track", on: sim.trackOn });
+  }
+  sim.prevTrackKey = down;
+  sim.touchTrack = false;
+}
+
 export function step(sim: Sim, dt: number) {
   if (sim.phase !== "playing") return;
+  pollTrack(sim);
   if (sim.hitstop > 0) {
     sim.hitstop -= dt;
     return;

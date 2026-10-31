@@ -470,12 +470,19 @@ export const STAGES = [
   { id: "pass", name: "Mountain Pass", ready: false, sky: 0x10141c, fog: 0.008 },
 ] as const;
 export type StageId = (typeof STAGES)[number]["id"];
+/**
+ * Six-car lineup. GLB stems live in spa/public/assets/v02/car/<file>_{phone,hero}.glb.
+ * Model 3 keeps the shipped sedan_compact mesh. Roadster keeps roadster2026.
+ * Y / X / S / Cybertruck use Art's M2 meshes (no procedural stand-ins).
+ * Model X side-gun empties, if present, are visual only until M8.
+ */
 export const CARS = [
-  { id: "volt", name: "Model 3 (2017)", file: "sedan_compact" },
-  { id: "volt_r", name: "Model 3 Highland", file: "sedan_compact_r" },
-  { id: "volt_rs", name: "Model 3 Performance", file: "sedan_compact_rs" },
-  { id: "roadster", name: "Roadster (2017)", file: "roadster" },
-  { id: "roadster2026", name: "Roadster (2026)", file: "roadster2026" },
+  { id: "model3", name: "Model 3", file: "sedan_compact" },
+  { id: "model_y", name: "Model Y", file: "model_y" },
+  { id: "model_x", name: "Model X", file: "model_x" },
+  { id: "model_s", name: "Model S", file: "model_s" },
+  { id: "cybertruck", name: "Cybertruck", file: "cybertruck" },
+  { id: "roadster", name: "Roadster", file: "roadster2026" },
 ] as const;
 export type CarId = (typeof CARS)[number]["id"];
 
@@ -486,14 +493,14 @@ function inlineGlb(key: string) {
 
 /** the exact file key a car loads: <file>_<lod>, or the phone LOD when only that is inlined (single-file build) */
 function carFile(car: CarId, lod: "phone" | "hero") {
-  const file = CARS.find((c) => c.id === car)?.file ?? "roadster";
+  const file = CARS.find((c) => c.id === car)?.file ?? "sedan_compact";
   if (inlineGlb(`${file}_${lod}`)) return `${file}_${lod}`;
   if (inlineGlb(`${file}_phone`)) return `${file}_phone`;
   return `${file}_${lod}`;
 }
 function carUrl(car: CarId, lod: "phone" | "hero") {
-  const file = CARS.find((c) => c.id === car)?.file ?? "roadster";
-  const d = inlineGlb(`${file}_${lod}`) ?? inlineGlb(`${file}_phone`) ?? (file === "roadster" ? inlineGlb(lod) : undefined);
+  const file = CARS.find((c) => c.id === car)?.file ?? "sedan_compact";
+  const d = inlineGlb(`${file}_${lod}`) ?? inlineGlb(`${file}_phone`);
   if (d) return d;
   return `${import.meta.env.BASE_URL}assets/v02/car/${file}_${lod}.glb`;
 }
@@ -725,10 +732,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   const hull = hullGeometry();
   const carLod: "phone" | "hero" = coarse ? "phone" : "hero";
-  const carInfo: CarInfo = { source: "loading", car: "volt", lod: carLod, url: "", wheels: 4, nodes: [], missing: [] };
+  const carInfo: CarInfo = { source: "loading", car: "model3", lod: carLod, url: "", wheels: 4, nodes: [], missing: [] };
   const carModels: Partial<Record<CarId, THREE.Object3D>> = {};
   const carFailed: Partial<Record<CarId, string>> = {};
-  let carId: CarId = "volt";
+  let carId: CarId = "model3";
   function loadCar(id: CarId) {
     if (carModels[id] || carFailed[id]) return;
     try {
@@ -756,7 +763,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     carInfo.car = id;
     loadCar(id);
   }
-  loadCar("volt");
+  loadCar("model3");
   const views: CarView[] = [];
 
   const sea = new THREE.Mesh(
@@ -785,18 +792,28 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   shotGeo.setDrawRange(0, 0);
   const shots = new THREE.LineSegments(
     shotGeo,
-    new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }),
+    new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 1, toneMapped: false }),
   );
   scene.add(shots);
-  // enemy rounds get a glowing head so incoming fire reads at a glance (lines are 1 px)
-  const boltMesh = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.2, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xff4a32, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+  // enemy rounds: unlit streak so incoming fire reads at night without bloom
+  const boltMat = new THREE.MeshBasicMaterial({ color: 0xff5a32, toneMapped: false });
+  const boltMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), boltMat, 96);
+  boltMesh.renderOrder = 3;
+  // player bolts: unlit capsule (lines are 1 px and vanish on a phone at night)
+  const playerBoltGeo = new THREE.CylinderGeometry(0.11, 0.07, 1.15, 6);
+  playerBoltGeo.rotateX(Math.PI / 2);
+  const playerBoltMesh = new THREE.InstancedMesh(
+    playerBoltGeo,
+    new THREE.MeshBasicMaterial({ color: 0xfff3c4, toneMapped: false }),
     96,
   );
+  playerBoltMesh.frustumCulled = false;
+  playerBoltMesh.renderOrder = 3;
+  playerBoltMesh.count = 0;
+  scene.add(playerBoltMesh);
   const rocketMesh = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.11, 0.11, 0.9, 8).rotateX(Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0xffb15a }),
+    new THREE.MeshBasicMaterial({ color: 0xffc56a, toneMapped: false }),
     24,
   );
   rocketMesh.frustumCulled = false;
@@ -832,7 +849,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const boltDummy = new THREE.Object3D();
 
   const mineMeshes: THREE.Mesh[] = [];
-  const mineGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.12, 10);
+  const mineGeo = new THREE.CylinderGeometry(0.78, 0.62, 0.32, 12);
   const oilGeo = new THREE.CircleGeometry(2.6, 18);
   const oilMat = new THREE.MeshStandardMaterial({ color: 0x050508, roughness: 0.05, metalness: 0.9, emissive: 0x1a0f3a, emissiveIntensity: 0.6 });
   const oilMeshes: THREE.Mesh[] = [];
@@ -846,7 +863,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   for (let i = 0; i < 24; i++) {
     const m = new THREE.Mesh(
       mineGeo,
-      new THREE.MeshStandardMaterial({ color: 0x1a100e, emissive: 0xe23b2f, emissiveIntensity: 0.8, roughness: 0.5 }),
+      new THREE.MeshBasicMaterial({ color: 0xff2e18, toneMapped: false }),
     );
     m.visible = false;
     scene.add(m);
@@ -1458,7 +1475,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const pitch = car.grounded ? -Math.atan(q.slope) * 0.85 : clampPitch(car.vy);
       const targetSteer = car.hero ? readSteer(sim) : 0;
       view.steer += (targetSteer - view.steer) * k;
-      view.tilt.rotation.x = pitch;
+      // Model S track mode: cheap nose-down settle. Positive X pitches the +Z nose down.
+      view.tilt.rotation.x = pitch + (car.hero && sim.trackOn ? 0.05 : 0);
       view.tilt.rotation.z = view.steer * 0.07;
       view.spin += car.speed * dt * 2.6;
       for (const w of view.wheels) {
@@ -1494,9 +1512,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       arr[o + 5] = s.z;
       const enemy = s.owner !== 0;
       for (let v = 0; v < 2; v++) {
-        shotCol[o + v * 3] = enemy ? 1 : 1;
-        shotCol[o + v * 3 + 1] = enemy ? 0.25 : 0.89;
-        shotCol[o + v * 3 + 2] = enemy ? 0.18 : 0.69;
+        shotCol[o + v * 3] = 1;
+        shotCol[o + v * 3 + 1] = enemy ? 0.42 : 0.96;
+        shotCol[o + v * 3 + 2] = enemy ? 0.22 : 0.55;
       }
       count += 1;
     }
@@ -1536,18 +1554,28 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       (shield.material as THREE.MeshBasicMaterial).opacity = 0.14 + Math.sin(now * 8) * 0.05 + (sim.up.shieldT < 1.5 ? Math.sin(now * 30) * 0.08 : 0);
     }
     let bolts = 0;
+    let playerBolts = 0;
     for (const s of sim.shots) {
-      if (!s.alive || s.owner === 0) continue;
+      if (!s.alive || s.rocket) continue;
       const vx = s.x - s.px;
       const vz = s.z - s.pz;
       boltDummy.position.set(s.x, s.y, s.z);
-      boltDummy.rotation.set(0, Math.atan2(vx, vz), 0);
-      boltDummy.scale.set(1, 1, 3.2);
-      boltDummy.updateMatrix();
-      boltMesh.setMatrixAt(bolts++, boltDummy.matrix);
+      if (s.owner === 0) {
+        boltDummy.lookAt(s.x + (vx || s.vx), s.y, s.z + (vz || s.vz));
+        boltDummy.scale.set(1.45, 1.45, 1.7);
+        boltDummy.updateMatrix();
+        playerBoltMesh.setMatrixAt(playerBolts++, boltDummy.matrix);
+      } else {
+        boltDummy.rotation.set(0, Math.atan2(vx, vz), 0);
+        boltDummy.scale.set(1.7, 1.7, 4.4);
+        boltDummy.updateMatrix();
+        boltMesh.setMatrixAt(bolts++, boltDummy.matrix);
+      }
     }
     boltMesh.count = bolts;
     boltMesh.instanceMatrix.needsUpdate = true;
+    playerBoltMesh.count = playerBolts;
+    playerBoltMesh.instanceMatrix.needsUpdate = true;
     shotGeo.setDrawRange(0, count * 2);
     attr.needsUpdate = true;
     (shotGeo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
@@ -1560,9 +1588,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       oil.visible = !!m?.alive && m.oil;
       if (oil.visible) oil.position.set(m.x, m.y + 0.06, m.z);
       if (!mesh.visible) continue;
-      mesh.position.set(m.x, m.y + 0.08, m.z);
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissiveIntensity = m.arm > 0 ? 0.15 : 0.45 + Math.sin(performance.now() * 0.012) * 0.45;
+      mesh.position.set(m.x, m.y + 0.22, m.z);
+      const armed = m.arm <= 0;
+      const pulse = armed ? 1 + Math.sin(performance.now() * 0.012) * 0.12 : 0.72;
+      mesh.scale.setScalar(pulse);
+      (mesh.material as THREE.MeshBasicMaterial).color.setHex(armed ? 0xff3a1c : 0x6a2018);
     }
 
     for (const e of sim.events) {
