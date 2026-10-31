@@ -472,11 +472,11 @@ const CAR_NODES = ["body", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR", "thru
 export const STAGES = [
   { id: "city", name: "Night City", ready: true, sky: 0x0a0814, fog: 0.0075 },
   { id: "classic", name: "Classic Night", ready: true, sky: 0x07080e, fog: 0.0085 },
-  { id: "coast", name: "Coast Road", ready: false, sky: 0x2a1a24, fog: 0.006 },
-  { id: "woods", name: "Pine Woods", ready: false, sky: 0x0c1410, fog: 0.012 },
-  { id: "highway", name: "Open Highway", ready: false, sky: 0x1a140c, fog: 0.004 },
-  { id: "port", name: "Industrial Port", ready: false, sky: 0x0c1014, fog: 0.008 },
-  { id: "pass", name: "Mountain Pass", ready: false, sky: 0x10141c, fog: 0.008 },
+  { id: "coast", name: "Coast Road", ready: true, sky: 0x2a1a24, fog: 0.006 },
+  { id: "woods", name: "Pine Woods", ready: true, sky: 0x0c1410, fog: 0.012 },
+  { id: "highway", name: "Open Highway", ready: true, sky: 0x1a140c, fog: 0.004 },
+  { id: "port", name: "Industrial Port", ready: true, sky: 0x0c1014, fog: 0.008 },
+  { id: "pass", name: "Mountain Pass", ready: true, sky: 0x10141c, fog: 0.008 },
 ] as const;
 export type StageId = (typeof STAGES)[number]["id"];
 /**
@@ -932,7 +932,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     scene.add(city);
     chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null });
   }
-  // ---------------------------------------------------------------- stages (v0.2 final): Night City is the playable one
+  // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
   let stage: StageId = "city";
   let gateBoost = 0;
   function applyStage() {

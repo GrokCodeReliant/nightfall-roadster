@@ -49,6 +49,9 @@ function flatSim(carId: string) {
   sim.carId = carId;
   begin(sim);
   sim.lull = 1e9;
+  // The first crate sits ~2.56 m off the racing line and the open radius is 2.6,
+  // so a straight hop sometimes pays 4 hull. This stretch is about the landing.
+  sim.nextCrate = 1e9;
   for (const s of sim.track.samples ?? []) { s.y = 0; s.gap = false; s.kicker = false; }
   sim.track.width = 1000;
   return sim;

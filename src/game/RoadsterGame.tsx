@@ -5,6 +5,7 @@ import { CAR_STATS, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, su
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
+import { SHOP_CATALOG, bankRun, buyUpgrade, emptyShop, sanitizeShop, shopOwned, type ShopId, type ShopSave } from "./shop";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 
 declare global {
@@ -46,22 +47,42 @@ function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
   return <p className="nf-carpick-sub">{bits.join(" · ")}</p>;
 }
 
-type Save = { bestScore: number; bestWave: number; bestTime: number };
+type Save = { bestScore: number; bestWave: number; bestTime: number; credits: number; shop: ShopSave };
 
 function loadSave(): Save {
-  const empty = { bestScore: 0, bestWave: 0, bestTime: 0 };
+  const empty = { bestScore: 0, bestWave: 0, bestTime: 0, credits: 0, shop: emptyShop() };
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return empty;
     const p = JSON.parse(raw) as Partial<Save>;
+    const credits = typeof p.credits === "number" && Number.isFinite(p.credits) ? Math.max(0, Math.floor(p.credits)) : 0;
     return {
       bestScore: typeof p.bestScore === "number" ? p.bestScore : 0,
       bestWave: typeof p.bestWave === "number" ? p.bestWave : 0,
       bestTime: typeof p.bestTime === "number" ? p.bestTime : 0,
+      credits,
+      shop: sanitizeShop(p.shop),
     };
   } catch {
     return empty;
   }
+}
+
+function writeSave(patch: Partial<Save>) {
+  const prev = loadSave();
+  const next: Save = {
+    bestScore: patch.bestScore ?? prev.bestScore,
+    bestWave: patch.bestWave ?? prev.bestWave,
+    bestTime: patch.bestTime ?? prev.bestTime,
+    credits: patch.credits ?? prev.credits,
+    shop: patch.shop ?? prev.shop,
+  };
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(next));
+  } catch {
+    /* private mode */
+  }
+  return next;
 }
 
 function bestLine(save: Save) {
@@ -143,6 +164,14 @@ export function RoadsterGame() {
   const [phase, setPhase] = useState<Phase>("menu");
   const [result, setResult] = useState<Result | null>(null);
   const [best, setBest] = useState("Highway record loads with the night.");
+  const [credits, setCredits] = useState(() => loadSave().credits);
+  const [shop, setShop] = useState<ShopSave>(() => loadSave().shop);
+  const shopRef = useRef(shop);
+  shopRef.current = shop;
+  const creditsRef = useRef(credits);
+  creditsRef.current = credits;
+  const [shopOpen, setShopOpen] = useState(false);
+  const [shopNote, setShopNote] = useState("");
   const [muted, setMuted] = useState(false);
   const [cruise, setCruise] = useState(false);
   const [glError, setGlError] = useState(false);
@@ -153,6 +182,7 @@ export function RoadsterGame() {
     if (!canvas || !wrap) return;
     const sim = createSim();
     sim.carId = CARS[carIdxRef.current].id;
+    sim.shop = loadSave().shop;
     let world: ReturnType<typeof createWorld>;
     try {
       world = createWorld(canvas);
@@ -359,15 +389,19 @@ export function RoadsterGame() {
       if (sim.phase !== phaseRef.current) {
         phaseRef.current = sim.phase;
         setPhase(sim.phase);
-        if (sim.phase === "finished" && sim.result) {
+        if (sim.phase === "finished" && sim.result && !sim.banked) {
+          sim.banked = true;
           setResult(sim.result);
           const prev = loadSave();
-          const next: Save = {
+          const bank = bankRun(prev.credits, sim.result.score, false);
+          const next = writeSave({
             bestScore: Math.max(prev.bestScore, sim.result.score),
             bestWave: Math.max(prev.bestWave, sim.result.wave),
             bestTime: Math.max(prev.bestTime, sim.result.time),
-          };
-          localStorage.setItem(SAVE_KEY, JSON.stringify(next));
+            credits: bank.credits,
+            shop: sim.shop,
+          });
+          setCredits(next.credits);
           setBest(bestLine(next));
         }
       }
@@ -515,6 +549,7 @@ export function RoadsterGame() {
     if (!sim) return;
     cleanupRun();
     begin(sim); // clears enemies, shots, mines, pickups, score, wave, hull and timers
+    setShopOpen(false);
     sim.phase = "menu";
     phaseRef.current = "menu";
     setPhase("menu");
@@ -535,6 +570,22 @@ export function RoadsterGame() {
     setDevNote(sim.toast);
   }
 
+  function openShop() {
+    setShopNote("");
+    setShopOpen(true);
+  }
+  function onBuy(id: ShopId) {
+    const sim = simRef.current;
+    const result = buyUpgrade(shopRef.current, creditsRef.current, id);
+    shopRef.current = result.shop;
+    creditsRef.current = result.credits;
+    setShop(result.shop);
+    setCredits(result.credits);
+    setShopNote(result.toast);
+    if (sim) sim.shop = result.shop;
+    writeSave({ shop: result.shop, credits: result.credits });
+  }
+
   function startRace() {
     const sim = simRef.current;
     const audio = audioRef.current;
@@ -545,9 +596,16 @@ export function RoadsterGame() {
     sim.autoGas = coarse;
     setCruise(coarse);
     sim.carId = CARS[carIdxRef.current].id;
+    sim.shop = shopRef.current;
+    sim.deployCharges = true;
     trackOnRef.current = false;
     setTrackOn(false);
     begin(sim);
+    const nextShop = { ...sim.shop };
+    shopRef.current = nextShop;
+    setShop(nextShop);
+    setShopOpen(false);
+    writeSave({ shop: nextShop, credits: creditsRef.current });
     worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
     worldRef.current?.startRollout(sim); // hauler rig rollout; the sim waits (skippable by tap/key)
     phaseRef.current = "playing";
@@ -756,6 +814,8 @@ export function RoadsterGame() {
               <button type="button" className="nf-btn" disabled={!STAGES[stageIdx].ready} onClick={startRace}>
                 Start
               </button>
+              <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
+              <p className="nf-credits">Credits {credits}</p>
               <p className="nf-best">{best}</p>
             </div>
             <p className="nf-keysline nf-keys">
@@ -807,6 +867,27 @@ export function RoadsterGame() {
         </div>
       )}
 
+      {shopOpen && (phase === "menu" || phase === "finished") && (
+        <div className="nf-overlay nf-shop">
+          <div className="nf-card">
+            <p className="nf-kicker">Garage</p>
+            <h2>Shop</h2>
+            <p className="nf-credits">Credits {credits}</p>
+            <ul className="nf-shop-list">
+              {SHOP_CATALOG.map((item) => (
+                <li className="nf-shop-row" key={item.id}>
+                  <span>{item.label}<small>{shopOwned(shop, item.id)}</small></span>
+                  <span>{item.price}</span>
+                  <button type="button" className="nf-shop-buy" onClick={() => onBuy(item.id)}>Buy</button>
+                </li>
+              ))}
+            </ul>
+            <p className="nf-shop-note" role="status">{shopNote}</p>
+            <button type="button" className="nf-shop-close" onClick={() => setShopOpen(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
       {phase === "finished" && result && (
         <div className="nf-overlay">
           <div className="nf-card">
@@ -820,7 +901,9 @@ export function RoadsterGame() {
               <div><span>Score</span><strong>{result.score}</strong></div>
             </div>
             <button type="button" className="nf-btn" onClick={startRace}>Run it again</button>
+            <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
             <button type="button" className="nf-btn nf-btn-ghost" onClick={toTitle}>Title</button>
+            <p className="nf-credits">Credits {credits}</p>
             <p className="nf-best">{best}</p>
           </div>
         </div>

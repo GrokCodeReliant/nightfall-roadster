@@ -57,7 +57,7 @@ for (const prof of profiles) {
   const st = [];
   for (let i = 0; i < 7; i++) { st.push(await page.textContent(".nf-stagepick .nf-carpick-name")); if (i === 2) { await page.screenshot({ path: `${SHOTS}/${P}-stageselect.png` }); st.push("disabled=" + (await page.isDisabled(".nf-btn"))); } await page.click("[aria-label='Next stage']"); }
   const back = await page.textContent(".nf-stagepick .nf-carpick-name");
-  check(P, "stage select (Night City playable, others coming soon)", back === "Night City" && st.includes("disabled=true") && !(await page.isDisabled(".nf-btn")), st.join(" | "));
+  check(P, "stage select (all seven playable, no Coming soon)", back === "Night City" && !st.some((s) => String(s).includes("Coming soon") || s === "disabled=true") && !(await page.isDisabled(".nf-btn")), st.join(" | "));
   // start: rollout
   await page.waitForFunction(() => { const e = window.__nfEnemies(); return ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => e[k] !== "loading"); }, null, { timeout: 90000 });
   await page.waitForTimeout(1500); // let the rig GLB finish too

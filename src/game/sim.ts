@@ -11,6 +11,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
+import { emptyShop, type ShopSave } from "./shop";
 
 export type Fx =
   | { t: "shot" }
@@ -184,6 +185,12 @@ export type Sim = {
   touchTrack: boolean;
   /** DEV `?debug` Fully upgraded. begin() reapplies it after park so a title press sticks. */
   devFull: boolean;
+  /** Persisted meta shop. begin() copies it onto the hero. Not cleared between runs. */
+  shop: ShopSave;
+  /** Start of a real race spends one shield/magnet/oil charge. Menu resets leave this false. */
+  deployCharges: boolean;
+  /** This finished run already added Credits. begin() clears it. */
+  banked: boolean;
   /** previous frame's gamepad Track buttons, so a hold does not toggle every frame */
   prevPadTrack: boolean;
   /**
@@ -425,6 +432,9 @@ export function createSim(): Sim {
     prevTrackKey: false,
     touchTrack: false,
     devFull: false,
+    shop: emptyShop(),
+    deployCharges: false,
+    banked: false,
     prevPadTrack: false,
     pad: { steer: 0, throttle: 0, fire: false, mine: false, thrust: false, brake: false },
     boostDeck: 0,
@@ -498,6 +508,8 @@ export function begin(sim: Sim) {
   sim.recycled = 0;
   park(sim);
   sim.cars[0].speed = 0;
+  sim.banked = false;
+  applyPersistedShop(sim);
   if (sim.devFull) grantFullUpgrades(sim);
   sim.phase = "playing";
   sim.time = 0;
@@ -544,6 +556,36 @@ function grantFullUpgrades(sim: Sim) {
   hero.maxFuel = 160;
   hero.fuel = hero.maxFuel;
   hero.rounds = 24;
+}
+
+/** Copy the persisted shop onto this run. Charge cells arm the existing timers, then one charge is spent if this begin is a real start. */
+function applyPersistedShop(sim: Sim) {
+  const shop = sim.shop ?? emptyShop();
+  sim.shop = shop;
+  const hero = sim.cars[0];
+  const base = resolvedStats(sim.carId, false);
+  const u = sim.up;
+  u.armor = clamp(shop.armor, 0, 100);
+  u.gun = clamp(shop.gun, 0, 3);
+  u.rockets = clamp(shop.rockets, 0, 12);
+  u.reserve = clamp(shop.reserve, 0, 4);
+  u.cluster = u.reserve > 0;
+  hero.maxHp = base.maxHp + u.armor;
+  hero.hp = hero.maxHp;
+  hero.mines = base.mineCap;
+  hero.maxFuel = clamp(shop.maxFuel, MAX_FUEL, 160);
+  hero.fuel = hero.maxFuel;
+  const useShield = shop.shieldCharges > 0;
+  const useMagnet = shop.magnetCharges > 0;
+  const useOil = shop.oilCharges > 0;
+  if (useShield) u.shieldT = Math.max(u.shieldT, 6);
+  if (useMagnet) u.magnetT = Math.max(u.magnetT, 15);
+  if (useOil) u.oilT = Math.max(u.oilT, 20);
+  if (!sim.deployCharges) return;
+  if (useShield) shop.shieldCharges -= 1;
+  if (useMagnet) shop.magnetCharges -= 1;
+  if (useOil) shop.oilCharges -= 1;
+  sim.deployCharges = false;
 }
 
 /**

@@ -360,6 +360,65 @@
   margin: 0;
 }
 
+.nf-credits {
+  margin: 0;
+  font-family: var(--font-hud);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  color: var(--color-accent);
+}
+
+.nf-shop-open,
+.nf-shop-buy,
+.nf-shop-close {
+  pointer-events: auto;
+  font-family: var(--font-hud);
+  letter-spacing: 0.08em;
+  text-transform: none;
+  cursor: pointer;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-fg);
+}
+
+.nf-shop-open,
+.nf-shop-close {
+  padding: 0.55rem 0.9rem;
+}
+
+.nf-shop { z-index: 8; }
+.nf-shop-list {
+  list-style: none;
+  margin: 0.7rem 0 0.4rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.nf-shop-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.86rem;
+}
+.nf-shop-row small {
+  display: block;
+  color: var(--color-muted);
+  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+}
+.nf-shop-buy { padding: 0.3rem 0.65rem; }
+.nf-shop-note {
+  min-height: 1.2rem;
+  margin: 0.2rem 0 0.6rem;
+  font-family: var(--font-hud);
+  letter-spacing: 0.08em;
+  color: var(--color-accent);
+}
+
 .nf-keysline {
   margin: 0.65rem 0 0;
   color: var(--color-muted);
