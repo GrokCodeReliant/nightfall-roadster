@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { CAR_STATS, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type Phase, type Result, type Sim } from "./sim";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
@@ -18,6 +18,26 @@ declare global {
 }
 
 const SAVE_KEY = "nightfall-roadster-v2";
+
+/** Sample the first standard gamepad (Xbox, DualSense, DualShock) outside step() so unit tests stay pad-free. */
+function pollPads(sim: Sim) {
+  const read = navigator.getGamepads?.bind(navigator);
+  if (!read) {
+    applyGamepad(sim, null);
+    return;
+  }
+  const list = read();
+  let chosen: Gamepad | null = null;
+  for (const g of list) {
+    if (!g?.connected) continue;
+    if (g.mapping === "standard") {
+      chosen = g;
+      break;
+    }
+    if (!chosen) chosen = g;
+  }
+  applyGamepad(sim, chosen);
+}
 
 function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
   const st = CAR_STATS[id];
@@ -115,7 +135,10 @@ export function RoadsterGame() {
   }
   const chipKey = useRef("");
   const knobRef = useRef<HTMLSpanElement>(null);
+  const crossRef = useRef<HTMLDivElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
+  const [devMode] = useState(() => new URLSearchParams(window.location.search).has("debug"));
+  const [devNote, setDevNote] = useState("");
 
   const [phase, setPhase] = useState<Phase>("menu");
   const [result, setResult] = useState<Result | null>(null);
@@ -300,8 +323,10 @@ export function RoadsterGame() {
       last = now;
       acc = Math.min(stepDt * 5, acc + dt);
       sim.events.length = 0;
+      pollPads(sim);
       let guard = 0;
       const rolling = world.rolloutState().active;
+      if (rolling) sim.touchTrack = false;
       if (rolling) acc = 0;
       while (!rolling && acc >= stepDt && guard < 5) {
         step(sim, stepDt);
@@ -344,6 +369,16 @@ export function RoadsterGame() {
           };
           localStorage.setItem(SAVE_KEY, JSON.stringify(next));
           setBest(bestLine(next));
+        }
+      }
+      const cross = crossRef.current;
+      if (cross) {
+        const ndc = world.aimReticle(sim);
+        if (!ndc.inside) cross.style.visibility = "hidden";
+        else {
+          cross.style.visibility = "visible";
+          cross.style.left = `${((ndc.x + 1) * 50).toFixed(2)}%`;
+          cross.style.top = `${((1 - ndc.y) * 50).toFixed(2)}%`;
         }
       }
       if (live) paintHud(sim);
@@ -493,6 +528,13 @@ export function RoadsterGame() {
     const sim = simRef.current;
     if (sim && sim.phase === "paused") sim.phase = "playing";
   }
+  function onFullyUpgraded() {
+    const sim = simRef.current;
+    if (!sim) return;
+    applyFullyUpgraded(sim);
+    setDevNote(sim.toast);
+  }
+
   function startRace() {
     const sim = simRef.current;
     const audio = audioRef.current;
@@ -600,7 +642,7 @@ export function RoadsterGame() {
             </div>
           </div>
           <p className="nf-toast" ref={toastRef} />
-          <div className="nf-cross" />
+          <div className="nf-cross" ref={crossRef} />
           <div className="nf-bottom">
             {boostCar && (
               <div className="nf-meter is-boost">
@@ -725,6 +767,12 @@ export function RoadsterGame() {
               <kbd>T</kbd> track
               <kbd>Esc</kbd> pause
             </p>
+            {devMode && (
+              <div className="nf-dev">
+                <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
+                {devNote ? <p className="nf-dev-note">{devNote}</p> : null}
+              </div>
+            )}
             <p className="nf-credit" style={{ marginTop: "0.9rem", fontSize: "0.72rem", opacity: 0.6, letterSpacing: "0.04em" }}>
               An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.
             </p>
@@ -743,6 +791,9 @@ export function RoadsterGame() {
                   <button type="button" className="nf-btn" onClick={resumeRun}>Resume</button>
                   <button type="button" className="nf-btn nf-btn-ghost" onClick={restartRun}>Restart</button>
                   <button type="button" className="nf-btn nf-btn-ghost" onClick={() => setConfirmMenu(true)}>Back to menu</button>
+                  {devMode && (
+                    <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
+                  )}
                 </>
               ) : (
                 <>

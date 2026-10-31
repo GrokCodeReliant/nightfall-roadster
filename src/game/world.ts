@@ -3,7 +3,7 @@ import { loadCity, buildCityChunk, cityReady } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import type { Kind, PickupKind, Sim } from "./sim";
+import { hasBoost, rollDeckHeight, type Kind, type PickupKind, type Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -22,6 +22,10 @@ type CarView = {
   parts: Partial<Record<Kind, THREE.Group>>;
   mats: THREE.Material[];
   fade: number;
+  /** procedural cold-gas nozzles; hidden unless this hero is the Roadster */
+  nozzles: THREE.Object3D[];
+  /** GLB thruster_L / thruster_R. Hidden on every car except the Roadster. */
+  thrusters: THREE.Object3D[];
   glb?: THREE.Object3D;
   procWheels?: Wheel[];
   inst?: Partial<Record<Kind, EnemyInst>>;
@@ -147,6 +151,8 @@ export type World = {
   drawInfo: () => { draws: number; tris: number };
   /** debug: NDC of a world point under the current camera (M1 hop-in-frame check) */
   projectPoint: (x: number, y: number, z: number) => { x: number; y: number; inside: boolean };
+  /** NDC of a point in front of the hero nose. Visual only — aim sim stays on facing. */
+  aimReticle: (sim: Sim) => { x: number; y: number; inside: boolean };
   enemyInfo: () => Record<string, unknown>;
   project: (sim: Sim, id: number) => { x: number; y: number; on: boolean; w: number; h: number };
 };
@@ -302,12 +308,15 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
 
   const copper = new THREE.MeshStandardMaterial({ color: 0xb5834a, metalness: 0.85, roughness: 0.32 });
   const flames: THREE.Mesh[] = [];
+  const nozzles: THREE.Object3D[] = [];
   for (const side of [-1, 1]) {
     const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.26, 10), copper);
     pod.rotation.x = Math.PI / 2;
     pod.position.set(side * 0.42, 0.4, -2.18);
     pod.userData.proc = true;
+    pod.userData.nozzle = true;
     tilt.add(pod);
+    nozzles.push(pod);
     const flame = new THREE.Mesh(
       new THREE.ConeGeometry(0.13, 0.85, 8),
       new THREE.MeshBasicMaterial({
@@ -409,7 +418,7 @@ function buildCar(hero: boolean, hull: THREE.BufferGeometry): CarView {
       if (m && !mats.includes(m)) mats.push(m);
     });
   }
-  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0, kind: hero ? "hero" : "rammer", turret, chassis, parts, mats, fade: 1 };
+  return { root, tilt, body, flames, wheels, shadow, steer: 0, spin: 0, kind: hero ? "hero" : "rammer", turret, chassis, parts, mats, fade: 1, nozzles, thrusters: [] };
 }
 
 function signTexture(label: string) {
@@ -587,12 +596,15 @@ function applyCarGlb(view: CarView, model: THREE.Object3D): string[] {
   }
   if (wheels.length === 4) view.wheels = wheels;
   // thruster flames point -Z out of thruster_L / thruster_R
+  const thrusters: THREE.Object3D[] = [];
   view.flames.forEach((flame, i) => {
     const n = node(i === 0 ? "thruster_L" : "thruster_R");
     if (!n) return;
+    thrusters.push(n);
     n.add(flame);
     flame.position.set(0, 0, -0.37);
   });
+  view.thrusters = thrusters;
   // headlight spots ride on lamp_L / lamp_R
   for (const c of [...view.chassis.children]) {
     const key = c.userData.lamp as string | undefined;
@@ -863,8 +875,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   for (let i = 0; i < 24; i++) {
     const m = new THREE.Mesh(
       mineGeo,
-      new THREE.MeshBasicMaterial({ color: 0xff2e18, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ color: 0xffb03a, toneMapped: false }),
     );
+    m.renderOrder = 2;
     m.visible = false;
     scene.add(m);
     mineMeshes.push(m);
@@ -1256,8 +1269,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   } catch {
     /* rollout simply won't play */
   }
-  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[]; bayY: number };
+  type Rollout = { t: number; spawnS: number; rig: THREE.Object3D; ramp: THREE.Object3D | null; bay: THREE.Object3D | null; deck: THREE.Object3D | null; doorL: THREE.Object3D | null; doorR: THREE.Object3D | null; mixers: THREE.AnimationMixer[]; handed: boolean; robots: number; idle: boolean; wheels: THREE.Object3D[]; bayY: number };
   let roll: Rollout | null = null;
+  const deckRay = new THREE.Raycaster();
+  const deckFrom = new THREE.Vector3();
+  const deckDown = new THREE.Vector3(0, -1, 0);
+  const reticleV = new THREE.Vector3();
   const RIG_BACK = 14.6; // the car ends 14.6 m behind the rig origin (past the ramp foot)
   const HAND = 5.8;
   function startRollout(sim: Sim): boolean {
@@ -1298,7 +1315,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     rig.updateMatrixWorld(true);
     const bayN = rig.getObjectByName("bay_floor");
     const bayY = bayN ? bayN.getWorldPosition(new THREE.Vector3()).y : 1.2;
-    roll = { bayY, t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
+    roll = { bayY, t: 0, spawnS: sim.cars[0].along, rig, ramp: rig.getObjectByName("ramp") ?? null, bay: bayN ?? null, deck: rig.getObjectByName("trailer_body") ?? null, doorL: rig.getObjectByName("trailer_door_L") ?? null, doorR: rig.getObjectByName("trailer_door_R") ?? null, mixers, handed: false, robots, idle, wheels };
     return true;
   }
   function stopRollout() {
@@ -1345,35 +1362,89 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (t > HAND + 9) stopRollout();
   }
   /** while the rollout runs the hero car is posed by the timeline, not by the sim */
-  const OUT0 = 3.6, OUT1 = 5.3; // hover-out window (thrusters lit); then drop + bounce until HAND
+  const OUT0 = 3.6, OUT1 = 5.3; // Roadster hover-out (thrusters lit); other cars roll the ramp
   function rollThrust(t: number) {
     return t >= OUT0 - 0.15 && t < OUT1 ? 1 : 0;
+  }
+  /** Height of the bay or ramp under (x,z), relative to roadY. Faces are double-sided for the probe. */
+  function rampSurface(x: number, z: number, roadY: number): number | null {
+    const r = roll;
+    if (!r) return null;
+    const roots: THREE.Object3D[] = [];
+    if (r.deck) roots.push(r.deck);
+    if (r.ramp) roots.push(r.ramp);
+    if (!roots.length) return null;
+    r.rig.updateMatrixWorld(true);
+    deckFrom.set(x, roadY + 8, z);
+    deckRay.set(deckFrom, deckDown);
+    deckRay.far = 16;
+    const hits: THREE.Intersection[] = [];
+    for (const root of roots) {
+      root.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const prev = mats.map((mat) => mat.side);
+        for (const mat of mats) mat.side = THREE.DoubleSide;
+        mesh.raycast(deckRay, hits);
+        mats.forEach((mat, i) => {
+          mat.side = prev[i];
+        });
+      });
+    }
+    // Roof and walls are above the bay. Stand on the highest surface that is not over the deck.
+    const ceil = roadY + r.bayY + 0.45;
+    let best: THREE.Intersection | null = null;
+    for (const h of hits) {
+      if (h.point.y > ceil) continue;
+      if (!best || h.point.y > best.point.y) best = h;
+    }
+    return best ? best.point.y - roadY : null;
+  }
+  function applyThrusterVfx(view: CarView, amount: number, allow: boolean, hero: boolean) {
+    const lit = allow && amount > 0;
+    view.flames.forEach((f, idx) => {
+      const len = lit ? 0.7 + Math.sin(performance.now() * 0.03 + idx) * 0.15 : 0.02;
+      f.scale.set(lit ? 1 : 0.15, len, lit ? 1 : 0.15);
+      (f.material as THREE.MeshBasicMaterial).opacity = lit ? 0.85 : 0;
+      f.visible = !hero || allow;
+    });
+    if (!hero) return;
+    for (const n of view.thrusters) n.visible = allow;
+    for (const n of view.nozzles) n.visible = allow;
   }
   function poseHeroInRollout(sim: Sim) {
     if (!roll || roll.handed || !views[0]) return;
     const r = roll;
     const t = r.t;
     const stop = r.spawnS + RIG_BACK;
-    // starts on bay_floor (local z -9.05, bay height), backs out rearward HOVERING at bay height past the trailer end, then drops
+    // starts on bay_floor (local z -9.05). Roadster hovers out; every other car stays on the ramp.
     const u = t < OUT0 ? 0 : ease((t - OUT0) / (OUT1 - OUT0));
     const localZ = -9.05 + (-RIG_BACK + 9.05) * u;
     const sNow = (t < 2.2 ? rigS(r, t) : stop) + localZ;
     const p = poseAt(sim.track, sNow);
+    const allow = hasBoost(sim.carId);
     let y = r.bayY;
-    if (t >= OUT1) {
+    if (allow) {
+      if (t >= OUT1) {
+        const d = Math.min(1, (t - OUT1) / (HAND - OUT1));
+        y = d < 0.45 ? r.bayY * (1 - (d / 0.45) ** 2) : 0.12 * Math.sin(((d - 0.45) / 0.55) * Math.PI) * (1 - d);
+      }
+    } else if (t >= OUT1) {
+      // Lip is still under the car at the end of the kinematic path. Settle onto the road.
+      // Monotonic — the Roadster's post-drop sine is a hop, and these cars do not get it.
       const d = Math.min(1, (t - OUT1) / (HAND - OUT1));
-      y = d < 0.45 ? r.bayY * (1 - (d / 0.45) ** 2) : 0.12 * Math.sin(((d - 0.45) / 0.55) * Math.PI) * (1 - d);
+      const lip = rampSurface(p.x, p.z, p.y);
+      const from = lip == null ? 0 : Math.max(0, Math.min(r.bayY, lip));
+      y = from * (1 - d * d);
+    } else if (t >= OUT0) {
+      y = rollDeckHeight(u, r.bayY, rampSurface(p.x, p.z, p.y));
     }
     const v = views[0];
     v.root.position.set(p.x, p.y + y, p.z);
     v.root.rotation.set(0, yawFromDir(p.tx, p.tz) + Math.PI, 0);
     v.shadow.position.set(p.x, p.y + 0.08, p.z);
-    const th = rollThrust(t);
-    v.flames.forEach((f, idx) => {
-      const len = th ? 0.7 + Math.sin(performance.now() * 0.03 + idx) * 0.15 : 0.02;
-      f.scale.set(th ? 1 : 0.15, len, th ? 1 : 0.15);
-      (f.material as THREE.MeshBasicMaterial).opacity = th ? 0.85 : 0;
-    });
+    applyThrusterVfx(v, allow ? rollThrust(t) : 0, allow, true);
     // rear three-quarter camera: behind and above the trailer's rear-left corner, pulled back for phone portrait
     const cs = poseAt(sim.track, stop - 11.6 - 15);
     const narrow = camera.aspect < 0.8;
@@ -1391,7 +1462,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     lookPos.set(lx, ly, lz);
   }
   function rolloutState() {
-    return roll ? { thrust: roll.handed ? 0 : rollThrust(roll.t), bayY: roll.bayY, active: !roll.handed, t: roll.t, robots: roll.robots, idle: roll.idle } : { thrust: 0, bayY: 0, active: false, t: -1, robots: 0, idle: false };
+    const lit = !!roll && !roll.handed && hasBoost(carId) && rollThrust(roll.t) > 0;
+    return roll ? { thrust: lit ? 1 : 0, bayY: roll.bayY, active: !roll.handed, t: roll.t, robots: roll.robots, idle: roll.idle } : { thrust: 0, bayY: 0, active: false, t: -1, robots: 0, idle: false };
   }
 
 
@@ -1483,12 +1555,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         if (w.pivot.userData.front) w.pivot.rotation.y = view.steer * 0.28;
         w.spin.rotation.x = view.spin;
       }
-      const thrust = car.hero ? car.thrust : 0; // only the Roadster has thrusters
-      view.flames.forEach((f, idx) => {
-        const len = thrust > 0 ? 0.7 + Math.sin(performance.now() * 0.03 + idx) * 0.15 : 0.02;
-        f.scale.set(thrust > 0 ? 1 : 0.15, len, thrust > 0 ? 1 : 0.15);
-        (f.material as THREE.MeshBasicMaterial).opacity = thrust > 0 ? 0.85 : 0;
-      });
+      const allowThrust = car.hero && hasBoost(sim.carId);
+      applyThrusterVfx(view, allowThrust ? car.thrust : 0, allowThrust, car.hero);
       view.body.emissiveIntensity = car.flash > 0 ? 1.6 : i === 0 ? 0.35 : 0.2;
       const deck = q.gap ? q.y : car.grounded ? car.y : q.y;
       const airH = Math.max(0, car.y - deck);
@@ -1590,9 +1658,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       if (!mesh.visible) continue;
       mesh.position.set(m.x, m.y + 0.22, m.z);
       const armed = m.arm <= 0;
-      const pulse = armed ? 1 + Math.sin(performance.now() * 0.012) * 0.12 : 0.72;
+      const pulse = armed ? 1 + Math.sin(performance.now() * 0.012) * 0.12 : 1;
       mesh.scale.setScalar(pulse);
-      (mesh.material as THREE.MeshBasicMaterial).color.setHex(armed ? 0xff3a1c : 0x6a2018);
+      (mesh.material as THREE.MeshBasicMaterial).color.setHex(armed ? 0xff3a1c : 0xffb03a);
     }
 
     for (const e of sim.events) {
@@ -1715,6 +1783,35 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const v = new THREE.Vector3(x, y, z).project(camera);
       return { x: v.x, y: v.y, inside: Math.abs(v.x) < 1 && Math.abs(v.y) < 1 && v.z < 1 };
     },
+    aimReticle: (sim: Sim) => {
+      const view = views[0];
+      let x: number;
+      let y: number;
+      let z: number;
+      let yaw: number;
+      if (roll && !roll.handed && view) {
+        x = view.root.position.x;
+        y = view.root.position.y;
+        z = view.root.position.z;
+        yaw = view.root.rotation.y - Math.PI;
+      } else {
+        const h = sim.cars[0];
+        x = h.x;
+        y = h.y;
+        z = h.z;
+        yaw = h.yaw;
+      }
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+      // Past the nose (Cybertruck half-length ~2.85). Does not move the shot origin.
+      reticleV.set(x + fx * 4.15, y + 0.9, z + fz * 4.15);
+      reticleV.project(camera);
+      return {
+        x: reticleV.x,
+        y: reticleV.y,
+        inside: reticleV.z < 1 && Math.abs(reticleV.x) <= 1.05 && Math.abs(reticleV.y) <= 1.05,
+      };
+    },
     enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),
   };
 }
@@ -1732,6 +1829,9 @@ function readSteer(sim: Sim) {
   let steer = 0;
   if (keys.has("KeyA") || keys.has("ArrowLeft")) steer += 1;
   if (keys.has("KeyD") || keys.has("ArrowRight")) steer -= 1;
-  if (!sim.keysOverride) steer += sim.touch.steer;
+  if (!sim.keysOverride) {
+    if (Math.abs(sim.touch.steer) > 0.02) steer += sim.touch.steer;
+    else steer += sim.pad.steer;
+  }
   return Math.max(-1, Math.min(1, steer));
 }

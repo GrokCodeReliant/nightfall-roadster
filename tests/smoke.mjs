@@ -69,8 +69,9 @@ for (const prof of profiles) {
   await page.waitForFunction(() => window.__nfRollout().t > 1.5 || !window.__nfRollout().active, null, { timeout: 120000 });
   await page.evaluate(() => window.__nfRolloutSet(4.35));
   await page.waitForFunction(() => window.__nfRollout().t > 4.4, null, { timeout: 120000 });
-  const hov = await page.evaluate(() => window.__nfRollout());
-  check(P, "hover-out: thrusters lit mid rollout", hov.thrust === 1, JSON.stringify(hov));
+  const hov = await page.evaluate(() => ({ roll: window.__nfRollout(), car: window.__nf.carId }));
+  const wantThrust = hov.car === "roadster" ? 1 : 0;
+  check(P, "hover-out: thrusters only if Roadster", hov.roll.thrust === wantThrust, JSON.stringify(hov));
   await page.screenshot({ path: `${SHOTS}/${P}-rollout.png` });
   const rr = await page.evaluate(() => window.__nfRollout());
   check(P, "robots placed at robot spawn nodes with idle clip", rr.robots === 2 && rr.idle, JSON.stringify(rr));

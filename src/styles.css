@@ -161,8 +161,8 @@
   min-height: 1.2rem;
 }
 
-/* Aim reticle sits on the camera look point (hood / nose) and above the WebGL canvas.
-   The canvas composites over un-layered DOM, which hid the old cross behind the car. */
+/* Aim reticle is placed every frame on a point in front of the nose (NDC → left/top).
+   It stays above the WebGL canvas so the mesh cannot cover it. */
 .nf-cross {
   position: absolute;
   left: 50%;
@@ -646,6 +646,34 @@
   font-size: 0.95rem;
   opacity: 0.85;
 }
+
+.nf-dev {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.85rem;
+}
+.nf-dev-btn {
+  pointer-events: auto;
+  font-family: var(--font-hud);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: none;
+  color: var(--color-muted);
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+}
+.nf-dev-note {
+  margin: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--color-accent);
+}
+.nf-pausemenu .nf-dev-btn { align-self: center; }
 
 /* ---- M1 (b): HUD to the edges. Center keeps only .nf-cross; speed is the middle item of the
    bottom bar; toast sits top-center under .nf-top. Edge offsets = 0.75rem + safe-area inset. */

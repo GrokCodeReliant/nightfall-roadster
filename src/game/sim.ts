@@ -180,8 +180,17 @@ export type Sim = {
   trackOn: boolean;
   /** edge detect for keyboard T so a held key does not auto-enable track mode */
   prevTrackKey: boolean;
-  /** one-shot from the touch Track button; consumed by step() */
+  /** one-shot from the touch Track button or a gamepad Track edge; consumed by step() */
   touchTrack: boolean;
+  /** DEV `?debug` Fully upgraded. begin() reapplies it after park so a title press sticks. */
+  devFull: boolean;
+  /** previous frame's gamepad Track buttons, so a hold does not toggle every frame */
+  prevPadTrack: boolean;
+  /**
+   * Last HTML5 gamepad sample. Zeros unless applyGamepad ran.
+   * Ignored while keysOverride is set (scripted tests).
+   */
+  pad: { steer: number; throttle: number; fire: boolean; mine: boolean; thrust: boolean; brake: boolean };
   /** M1 boost state: deck height at take-off, cooldown after landing, air re-light used, floating */
   boostDeck: number;
   boostCd: number;
@@ -292,10 +301,25 @@ export function supportsTrackMode(carId: string) {
   return CAR_STATS[migrateCarId(carId)].trackMode;
 }
 
-/** Boost is Roadster-only. Legacy roadster2026 migrates before the lookup. */
+/** Boost, hop, takeoff, and thrusters exist only when the migrated id is `roadster`. */
 export function hasBoost(carId: string) {
-  return CAR_STATS[migrateCarId(carId)].boost;
+  return migrateCarId(carId) === "roadster";
 }
+
+/**
+ * Non-Roadster semi exit: height above the road while backing off the trailer.
+ * `surface` is the deck or ramp collider height above the road, or null on a miss.
+ * A hit stays on that collider and is clamped to the bay — never a hop above it.
+ * A miss stays on the bay. The settle from the lip down to the road is separate
+ * and only runs after the car has reached the end of the ramp.
+ */
+export function rollDeckHeight(_u: number, bayY: number, surface: number | null): number {
+  if (surface != null && Number.isFinite(surface)) return Math.max(0, Math.min(bayY, surface));
+  return bayY;
+}
+
+/** Mine lands just behind the press-time pose. The old 4.3 m offset was a trail. */
+export const MINE_DROP_BACK = 1.6;
 export const LIVES = 3;
 export const ENEMY_SLOTS = 8;
 const MAX_ALIVE = 8;
@@ -400,6 +424,9 @@ export function createSim(): Sim {
     trackOn: false,
     prevTrackKey: false,
     touchTrack: false,
+    devFull: false,
+    prevPadTrack: false,
+    pad: { steer: 0, throttle: 0, fire: false, mine: false, thrust: false, brake: false },
     boostDeck: 0,
     boostCd: 0,
     relit: false,
@@ -471,6 +498,7 @@ export function begin(sim: Sim) {
   sim.recycled = 0;
   park(sim);
   sim.cars[0].speed = 0;
+  if (sim.devFull) grantFullUpgrades(sim);
   sim.phase = "playing";
   sim.time = 0;
   sim.score = 0;
@@ -497,6 +525,38 @@ function toast(sim: Sim, text: string, force = false) {
   sim.toastT = 2.4;
 }
 
+/** Max the upgrade fields that exist today. Does not touch CAR_STATS. */
+function grantFullUpgrades(sim: Sim) {
+  const hero = sim.cars[0];
+  const base = resolvedStats(sim.carId, false);
+  const u = sim.up;
+  u.gun = 3;
+  u.armor = 100;
+  u.rockets = 12;
+  u.reserve = 4;
+  u.cluster = true;
+  u.oilT = 20;
+  u.shieldT = 6;
+  u.magnetT = 15;
+  hero.maxHp = base.maxHp + u.armor;
+  hero.hp = hero.maxHp;
+  hero.mines = base.mineCap;
+  hero.maxFuel = 160;
+  hero.fuel = hero.maxFuel;
+  hero.rounds = 24;
+}
+
+/**
+ * DEV cheat. Idempotent. Reapplied by begin() while devFull stays set.
+ * Upgrade hooks exist (armor, gun, rockets, mine pack, oil, shield, magnet, nitro),
+ * so this does not toast "No upgrades wired yet".
+ */
+export function applyFullyUpgraded(sim: Sim) {
+  sim.devFull = true;
+  grantFullUpgrades(sim);
+  toast(sim, "Fully upgraded", true);
+}
+
 export type Input = { steer: number; throttle: number; fire: boolean; mine: boolean; thrust: boolean };
 
 export function readInput(sim: Sim): Input {
@@ -508,21 +568,28 @@ export function readInput(sim: Sim): Input {
   if (keys.has("KeyW") || keys.has("ArrowUp")) throttle += 1;
   if (keys.has("KeyS") || keys.has("ArrowDown")) throttle -= 1;
   if (!sim.keysOverride) {
-    steer += sim.touch.steer;
-    if (Math.abs(sim.touch.throttle) > 0.08) throttle = sim.touch.throttle;
-    if (sim.touch.brake) throttle = -1;
+    // Touch wins while the stick is off-center so a pad cannot clobber it.
+    const touchDrive = Math.abs(sim.touch.steer) > 0.02 || Math.abs(sim.touch.throttle) > 0.08;
+    if (touchDrive) {
+      steer += sim.touch.steer;
+      if (Math.abs(sim.touch.throttle) > 0.08) throttle = sim.touch.throttle;
+    } else {
+      steer += sim.pad.steer;
+      if (Math.abs(sim.pad.throttle) > 0.08) throttle = sim.pad.throttle;
+    }
+    if (sim.touch.brake || sim.pad.brake) throttle = -1;
     if (sim.autoGas && throttle > -0.25 && !keys.has("KeyS") && !keys.has("ArrowDown")) {
       throttle = Math.max(throttle, 1);
     }
   }
   const fire =
-    keys.has("KeyF") || keys.has("KeyJ") || (!sim.keysOverride && (sim.touch.fire || sim.mouseFire));
-  const mine = keys.has("KeyG") || keys.has("KeyQ") || (!sim.keysOverride && (sim.touch.mine || sim.mouseMine));
+    keys.has("KeyF") || keys.has("KeyJ") || (!sim.keysOverride && (sim.touch.fire || sim.mouseFire || sim.pad.fire));
+  const mine = keys.has("KeyG") || keys.has("KeyQ") || (!sim.keysOverride && (sim.touch.mine || sim.mouseMine || sim.pad.mine));
   const thrust = hasBoost(sim.carId) && (
     keys.has("Space") ||
     keys.has("ShiftLeft") ||
     keys.has("ShiftRight") ||
-    (!sim.keysOverride && !!sim.touch.thrust));
+    (!sim.keysOverride && (!!sim.touch.thrust || sim.pad.thrust)));
   return {
     steer: clamp(steer, -1, 1),
     throttle: clamp(throttle, -1, 1),
@@ -530,6 +597,69 @@ export function readInput(sim: Sim): Input {
     mine,
     thrust,
   };
+}
+
+export type GamepadSample = {
+  axes: ArrayLike<number>;
+  buttons: ArrayLike<{ pressed: boolean; value: number }>;
+};
+
+const PAD_DEAD = 0.18;
+
+function clearPad(sim: Sim) {
+  const p = sim.pad;
+  p.steer = 0;
+  p.throttle = 0;
+  p.fire = false;
+  p.mine = false;
+  p.thrust = false;
+  p.brake = false;
+}
+
+/**
+ * Standard HTML5 mapping. Xbox first; DualSense and DualShock use the same indices.
+ *   axes[0] left stick X → steer (stick right is +, negated so it matches A = +steer)
+ *   axes[1] left stick Y → throttle (stick up is −, negated)
+ *   buttons[0] A / Cross → fire
+ *   buttons[1] B / Circle → mine
+ *   buttons[2] X / Square → boost if roadster, else Brake
+ *   buttons[3] Y / Triangle → Track edge (Model S only; pollTrack ignores the rest)
+ *   buttons[4] LB / L1 → mine
+ *   buttons[5] RB / R1 → mine
+ *   buttons[7] RT / R2 → boost if roadster, else Brake
+ *   buttons[8] View / Share → Track edge
+ * Deadzone 0.18. No new verbs. Right stick is unused (aim stays the car's facing).
+ * Ignored while keysOverride is set.
+ */
+export function applyGamepad(sim: Sim, sample: GamepadSample | null) {
+  if (!sample || sim.keysOverride) {
+    clearPad(sim);
+    if (!sample) sim.prevPadTrack = false;
+    return;
+  }
+  const axis = (i: number) => {
+    const v = sample.axes[i] ?? 0;
+    if (!Number.isFinite(v)) return 0;
+    const a = Math.abs(v);
+    if (a < PAD_DEAD) return 0;
+    return Math.sign(v) * Math.min(1, (a - PAD_DEAD) / (1 - PAD_DEAD));
+  };
+  const down = (i: number) => {
+    const b = sample.buttons[i];
+    return !!b && (b.pressed || b.value > 0.5);
+  };
+  const boost = hasBoost(sim.carId);
+  const thrustOrBrake = down(2) || down(7);
+  const trackDown = down(3) || down(8);
+  const p = sim.pad;
+  p.steer = -axis(0);
+  p.throttle = -axis(1);
+  p.fire = down(0);
+  p.mine = down(1) || down(4) || down(5);
+  p.thrust = boost && thrustOrBrake;
+  p.brake = !boost && thrustOrBrake;
+  if (trackDown && !sim.prevPadTrack) sim.touchTrack = true;
+  sim.prevPadTrack = trackDown;
 }
 
 
@@ -725,13 +855,15 @@ function dropMine(sim: Sim, car: Car) {
   const slot = sim.mines.find((m) => !m.alive);
   if (!slot) return;
   const { fx, fz } = fxDir(car.yaw);
-  const q = queryTrack(sim.track, car.x - fx * 4.3, car.z - fz * 4.3, car.along);
+  const x = car.x - fx * MINE_DROP_BACK;
+  const z = car.z - fz * MINE_DROP_BACK;
+  const q = queryTrack(sim.track, x, z, car.along);
   slot.alive = true;
-  slot.x = car.x - fx * 4.3;
-  slot.z = car.z - fz * 4.3;
+  slot.x = x;
+  slot.z = z;
   slot.y = q.gap ? car.y : q.y + 0.15;
   slot.life = 9;
-  slot.arm = 0.38;
+  slot.arm = 0.38; // freshHeroMines keys off 0.38; keep it under the ~0.8–1.2s cap
   car.mines -= 1;
   car.mineCd = 0.45;
   sim.events.push({ t: "mine" });
