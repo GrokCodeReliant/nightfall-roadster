@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { CAR_STATS, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, GAP_DNF, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
@@ -181,13 +182,24 @@ export function RoadsterGame() {
   creditsRef.current = credits;
   const [shopOpen, setShopOpen] = useState(false);
   const [shopNote, setShopNote] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [steerSens, setSteerSens] = useState(() => loadSettings().steerSens);
+  const steerRef = useRef(steerSens);
+  steerRef.current = steerSens;
+  const settingsOpenRef = useRef(false);
+  const applySteerRef = useRef<(raw: number) => void>(() => {});
   const [padFocus, setPadFocus] = useState(0);
   const padUiRef = useRef(emptyPadUi());
   const padFocusShown = useRef(0);
   const shopOpenRef = useRef(false);
   const confirmRef = useRef(false);
+  const raceRef = useRef<HTMLDivElement>(null);
+  const raceGapRef = useRef<HTMLParagraphElement>(null);
+  const raceWarnRef = useRef<HTMLParagraphElement>(null);
+  const raceBarRef = useRef<HTMLSpanElement>(null);
   const padActions = useRef<(ev: PadUiEvent) => void>(() => {});
   shopOpenRef.current = shopOpen;
+  settingsOpenRef.current = settingsOpen;
   const [muted, setMuted] = useState(false);
   const [cruise, setCruise] = useState(false);
   const [glError, setGlError] = useState(false);
@@ -199,6 +211,7 @@ export function RoadsterGame() {
     const sim = createSim();
     sim.carId = CARS[carIdxRef.current].id;
     sim.shop = loadSave().shop;
+    sim.steerSens = loadSettings().steerSens;
     let world: ReturnType<typeof createWorld>;
     try {
       world = createWorld(canvas);
@@ -294,6 +307,18 @@ export function RoadsterGame() {
         world.skipRollout(); // any key skips the rig rollout
         return;
       }
+      if (settingsOpenRef.current && (e.code === "Escape" || e.code === "ArrowLeft" || e.code === "ArrowRight")) {
+        if (e.code === "Escape") {
+          if (!e.repeat) {
+            settingsOpenRef.current = false;
+            setSettingsOpen(false);
+          }
+          return;
+        }
+        const dir = e.code === "ArrowLeft" ? -1 : 1;
+        applySteerRef.current(steerRef.current + dir * STEER_SENS_STEP);
+        return;
+      }
       if (sim.phase === "menu" && !e.repeat && (e.code === "ArrowLeft" || e.code === "ArrowRight")) pickCar(e.code === "ArrowLeft" ? -1 : 1);
       sim.keys.add(e.code);
       if (e.repeat) return;
@@ -371,18 +396,21 @@ export function RoadsterGame() {
       sim.events.length = 0;
       const padSample = pollPads(sim);
       const shopNow = shopOpenRef.current && (sim.phase === "menu" || sim.phase === "finished");
-      const padMode: PadUiMode = shopNow
-        ? "shop"
-        : sim.phase === "playing"
-          ? "playing"
-          : sim.phase === "paused"
-            ? "paused"
-            : sim.phase === "menu"
-              ? "title"
-              : "other";
+      const padMode: PadUiMode = settingsOpenRef.current
+        ? "settings"
+        : shopNow
+          ? "shop"
+          : sim.phase === "playing"
+            ? "playing"
+            : sim.phase === "paused"
+              ? "paused"
+              : sim.phase === "menu"
+                ? "title"
+                : "other";
       const padEv = stepPadUi(padSample, padUiRef.current, padMode, {
-        pauseCount: confirmRef.current ? 2 : devMode ? 4 : 3,
+        pauseCount: confirmRef.current ? 2 : devMode ? 5 : 4,
         shopCount: SHOP_CATALOG.length,
+        settingsCount: 2,
         canStart: !!STAGES[stageIdxRef.current]?.ready,
         ignore: sim.keysOverride != null,
       });
@@ -539,6 +567,28 @@ export function RoadsterGame() {
     if (livesRef.current) livesRef.current.textContent = `×${Math.max(0, sim.lives)}`;
     if (timeRef.current) timeRef.current.textContent = formatTime(sim.time);
     if (toastRef.current) toastRef.current.textContent = sim.toastT > 0 ? sim.toast : "";
+    const raceEl = raceRef.current;
+    if (raceEl) {
+      const race = sim.race;
+      if (!race.armed) raceEl.hidden = true;
+      else {
+        raceEl.hidden = false;
+        const gap = hero.along - race.paceAlong;
+        if (raceGapRef.current) {
+          const metres = Math.abs(Math.round(gap));
+          raceGapRef.current.textContent = `${gap >= 0 ? "AHEAD" : "BEHIND"} ${metres} m`;
+        }
+        const span = raceBarRef.current;
+        if (span) {
+          const t = Math.max(-1, Math.min(1, gap / GAP_DNF));
+          span.style.left = t >= 0 ? "50%" : `${(50 + t * 50).toFixed(1)}%`;
+          span.style.width = `${(Math.abs(t) * 50).toFixed(1)}%`;
+          span.style.background = t >= 0 ? "#c6a36a" : "#e23b2f";
+        }
+        if (raceWarnRef.current) raceWarnRef.current.textContent = race.warning ? "Falling behind" : "";
+        raceEl.classList.toggle("is-warn", race.warning);
+      }
+    }
     if (fuelRef.current) fuelRef.current.style.transform = `scaleX(${hero.fuel / hero.maxFuel})`;
     if (hullRef.current) hullRef.current.style.transform = `scaleX(${Math.max(0, hero.hp) / hero.maxHp})`;
     if (roundsRef.current) roundsRef.current.textContent = String(Math.floor(hero.rounds));
@@ -589,6 +639,8 @@ export function RoadsterGame() {
     if (!sim) return;
     cleanupRun();
     begin(sim); // clears enemies, shots, mines, pickups, score, wave, hull and timers
+    settingsOpenRef.current = false;
+    setSettingsOpen(false);
     setShopOpen(false);
     sim.phase = "menu";
     phaseRef.current = "menu";
@@ -638,6 +690,8 @@ export function RoadsterGame() {
     sim.autoGas = coarse;
     setCruise(coarse);
     sim.carId = CARS[carIdxRef.current].id;
+    sim.stageId = STAGES[stageIdxRef.current].id;
+    sim.steerSens = steerRef.current;
     sim.shop = shopRef.current;
     sim.deployCharges = true;
     trackOnRef.current = false;
@@ -648,6 +702,8 @@ export function RoadsterGame() {
     setShop(nextShop);
     shopOpenRef.current = false;
     setShopOpen(false);
+    settingsOpenRef.current = false;
+    setSettingsOpen(false);
     writeSave({ shop: nextShop, credits: creditsRef.current });
     worldRef.current?.setCar(CARS[carIdxRef.current].id as CarId);
     worldRef.current?.startRollout(sim); // hauler rig rollout; the sim waits (skippable by tap/key)
@@ -671,7 +727,9 @@ export function RoadsterGame() {
     else if (ev.type === "shopClose") {
       shopOpenRef.current = false;
       setShopOpen(false);
-    } else if (ev.type === "shopBuy") {
+    } else if (ev.type === "settingsClose") closeSettings();
+    else if (ev.type === "settingsStep") applySteerRef.current(steerRef.current + ev.delta * STEER_SENS_STEP);
+    else if (ev.type === "shopBuy") {
       const row = SHOP_CATALOG[ev.index];
       if (row) onBuy(row.id);
     } else if (ev.type === "activate") {
@@ -690,9 +748,33 @@ export function RoadsterGame() {
         confirmRef.current = true;
         setConfirmMenu(true);
         padUiRef.current.focus = 0;
-      } else if (ev.index === 3 && devMode) onFullyUpgraded();
+      } else if (ev.index === 3) openSettings();
+      else if (ev.index === 4 && devMode) onFullyUpgraded();
     }
   };
+
+  function applySteerSens(raw: number) {
+    const next = clampSteerSens(raw);
+    steerRef.current = next;
+    setSteerSens(next);
+    const sim = simRef.current;
+    if (sim) sim.steerSens = next;
+    writeSettings({ steerSens: next });
+  }
+  applySteerRef.current = applySteerSens;
+
+  function openSettings() {
+    shopOpenRef.current = false;
+    setShopOpen(false);
+    settingsOpenRef.current = true;
+    setSettingsOpen(true);
+    padUiRef.current.focus = 0;
+    setPadFocus(0);
+  }
+  function closeSettings() {
+    settingsOpenRef.current = false;
+    setSettingsOpen(false);
+  }
 
   function toggleMute() {
     const audio = audioRef.current;
@@ -745,8 +827,10 @@ export function RoadsterGame() {
   const showPlay = phase === "playing" || phase === "paused";
   const shopFocus = shopOpen && (phase === "menu" || phase === "finished") ? padFocus : -1;
   function padBtn(index: number, base: string) {
+    if (settingsOpen) return base;
     return phase === "paused" && padFocus === index ? `${base} is-pad-focus` : base;
   }
+  const settingsFocus = settingsOpen ? padFocus : -1;
 
   return (
     <div className="nf-root" ref={wrapRef}>
@@ -771,6 +855,11 @@ export function RoadsterGame() {
               <p className="nf-kicker">Wave</p>
               <p className="nf-stat" ref={lapRef}>1</p>
               <p className="nf-sub" ref={posRef}>Kills 0</p>
+              <div className="nf-race" ref={raceRef} hidden>
+                <p className="nf-race-gap" ref={raceGapRef}>AHEAD 0 m</p>
+                <div className="nf-race-track" aria-hidden="true"><span ref={raceBarRef} /></div>
+                <p className="nf-race-warn" ref={raceWarnRef} />
+              </div>
             </div>
             <div className="nf-map-wrap">
               <canvas ref={mapRef} className="nf-map" width={160} height={160} />
@@ -893,6 +982,7 @@ export function RoadsterGame() {
                 Start
               </button>
               <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
+              <button type="button" className="nf-shop-open" onClick={openSettings}>Settings</button>
               <p className="nf-credits">Credits {credits}</p>
               <p className="nf-best">{best}</p>
             </div>
@@ -929,8 +1019,9 @@ export function RoadsterGame() {
                   <button type="button" className={padBtn(0, "nf-btn")} aria-current={padFocus === 0 ? "true" : undefined} onClick={resumeRun}>Resume</button>
                   <button type="button" className={padBtn(1, "nf-btn nf-btn-ghost")} aria-current={padFocus === 1 ? "true" : undefined} onClick={restartRun}>Restart</button>
                   <button type="button" className={padBtn(2, "nf-btn nf-btn-ghost")} aria-current={padFocus === 2 ? "true" : undefined} onClick={() => { confirmRef.current = true; setConfirmMenu(true); padUiRef.current.focus = 0; }}>Back to menu</button>
+                  <button type="button" className={padBtn(3, "nf-btn nf-btn-ghost")} aria-current={!settingsOpen && padFocus === 3 ? "true" : undefined} onClick={openSettings}>Settings</button>
                   {devMode && (
-                    <button type="button" className={padBtn(3, "nf-dev-btn")} aria-current={padFocus === 3 ? "true" : undefined} onClick={onFullyUpgraded}>Fully upgraded</button>
+                    <button type="button" className={padBtn(4, "nf-dev-btn")} aria-current={padFocus === 4 ? "true" : undefined} onClick={onFullyUpgraded}>Fully upgraded</button>
                   )}
                 </>
               ) : (
@@ -941,6 +1032,34 @@ export function RoadsterGame() {
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div className="nf-overlay nf-settings">
+          <div className="nf-card" role="dialog" aria-labelledby="nf-settings-title">
+            <h2 id="nf-settings-title">Settings</h2>
+            <ul className="nf-settings-list">
+              <li className={settingsFocus === 0 ? "nf-settings-row is-pad-focus" : "nf-settings-row"}>
+                <span id="nf-steer-label">Steering sensitivity</span>
+                <div className="nf-sens">
+                  <button type="button" aria-label="Decrease steering sensitivity" onClick={() => applySteerSens(steerSens - STEER_SENS_STEP)}>−</button>
+                  <input
+                    type="range"
+                    min={STEER_SENS_MIN}
+                    max={STEER_SENS_MAX}
+                    step={STEER_SENS_STEP}
+                    value={steerSens}
+                    aria-labelledby="nf-steer-label"
+                    onChange={(e) => applySteerSens(Number(e.target.value))}
+                  />
+                  <button type="button" aria-label="Increase steering sensitivity" onClick={() => applySteerSens(steerSens + STEER_SENS_STEP)}>+</button>
+                  <strong>{steerSens.toFixed(2)}</strong>
+                </div>
+              </li>
+            </ul>
+            <button type="button" className={settingsFocus === 1 ? "nf-btn is-pad-focus" : "nf-btn"} onClick={closeSettings}>Close</button>
           </div>
         </div>
       )}
@@ -970,7 +1089,7 @@ export function RoadsterGame() {
         <div className="nf-overlay">
           <div className="nf-card">
             <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
-            <h2 className="nf-title-sm">Wrecked</h2>
+            <h2 className="nf-title-sm">{result.reason ?? "Wrecked"}</h2>
             <div className="nf-rows">
               <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
               <div><span>Wave reached</span><strong>{result.wave}</strong></div>
@@ -1034,5 +1153,13 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
     ctx.beginPath();
     ctx.arc(X(c.x, c.z), Y(c.x, c.z), c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();
+  }
+  if (sim.race.armed) {
+    const p = poseAt(sim.track, sim.race.paceAlong);
+    ctx.strokeStyle = "#c6a36a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(X(p.x, p.z), Y(p.x, p.z), 6.5, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }

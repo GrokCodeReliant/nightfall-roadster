@@ -74,6 +74,8 @@ test("v0.2 driving is frame-identical to v0.1 (handling constants, input, thrust
     sim.trackOn = false;
     v2.begin(sim);
     sim.lull = 1e9; // begin() arms the first wave; keep the comparison clear of hunters
+    // Player default steerSens is 0.75. This lock is the v0.1 yaw rate, which is sensitivity 1.
+    sim.steerSens = 1;
   });
   assert.equal(a.length, b.length);
   const names = ["speed", "yaw", "lat", "vy", "y", "fuel", "rounds", "grounded", "thrust", "path length"];

@@ -12,6 +12,7 @@ import {
   type Track,
 } from "./road";
 import { emptyShop, type ShopSave } from "./shop";
+import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
 export type Fx =
   | { t: "shot" }
@@ -172,7 +173,32 @@ export type Result = {
   wave: number;
   takedowns: number;
   falls: number;
+  /** RaceTrial headline. Absent on a normal wreck. */
+  reason?: string;
 };
+
+/** Highway RaceTrial. Other stage ids leave `armed` false. */
+export const PACE_SPEED = 30;
+export const GAP_WARN = 80;
+export const GAP_WARN_HOLD = 2;
+export const GAP_DNF = 140;
+export const GAP_DNF_HOLD = 3;
+export const RACE_DIST = 2200;
+export const PACK_HELD_BONUS = 800;
+
+export type RaceTrial = {
+  armed: boolean;
+  paceAlong: number;
+  originAlong: number;
+  warnT: number;
+  dnfT: number;
+  warning: boolean;
+  held: boolean;
+};
+
+function freshRace(): RaceTrial {
+  return { armed: false, paceAlong: 0, originAlong: 0, warnT: 0, dnfT: 0, warning: false, held: false };
+}
 
 export type Sim = {
   /** hero car id (world.ts CARS); stats, boost vs brake, track mode */
@@ -235,6 +261,11 @@ export type Sim = {
   prevMine: boolean;
   autoGas: boolean;
   result: Result | null;
+  /** Stage picker id. RaceTrial arms only for `highway`. */
+  stageId: string;
+  /** Multiplier on hero steer → yaw. Keyboard, touch, and pad share it. */
+  steerSens: number;
+  race: RaceTrial;
   hinted: number;
   idleT: number;
   scrapeCd: number;
@@ -548,6 +579,9 @@ export function createSim(): Sim {
     prevMine: false,
     autoGas: false,
     result: null,
+    stageId: "",
+    steerSens: STEER_SENS_DEFAULT,
+    race: freshRace(),
     hinted: -1,
     idleT: 0,
     scrapeCd: 0,
@@ -629,7 +663,23 @@ export function begin(sim: Sim) {
   sim.idleT = 0;
   sim.prevMine = false;
   sim.events.length = 0;
+  armRace(sim);
   toast(sim, "Hunters inbound. Survive.", true);
+}
+
+function armRace(sim: Sim) {
+  const along = sim.cars[0].along;
+  sim.race.warnT = 0;
+  sim.race.dnfT = 0;
+  sim.race.warning = false;
+  sim.race.held = false;
+  if (sim.stageId === "highway") {
+    sim.race.armed = true;
+    sim.race.paceAlong = along;
+    sim.race.originAlong = along;
+    return;
+  }
+  sim.race.armed = false;
 }
 
 function toast(sim: Sim, text: string, force = false) {
@@ -1083,7 +1133,9 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   const reverse = car.speed >= -0.4 ? 1 : -1;
   const air = car.grounded ? 1 : 0.7;
   // A → steer +1 → +yaw → nose left under the chase cam.
-  car.yaw += input.steer * 2.4 * (st ? st.handling : 1) * speedFactor * reverse * air * dt;
+  // steerSens scales keyboard, touch, and pad equally (they share input.steer).
+  const sens = car.hero ? clampSteerSens(sim.steerSens) : 1;
+  car.yaw += input.steer * 2.4 * (st ? st.handling : 1) * sens * speedFactor * reverse * air * dt;
 
   const grip = car.grounded ? 8 : 1.3;
   car.lat *= Math.exp(-grip * dt);
@@ -1175,6 +1227,45 @@ function gameOver(sim: Sim) {
   };
   sim.events.push({ t: "over" });
   toast(sim, "Wrecked for good", true);
+}
+
+function finishRace(sim: Sim, headline: string) {
+  sim.phase = "finished";
+  sim.result = {
+    time: sim.time,
+    score: Math.round(sim.score),
+    wave: sim.wave,
+    takedowns: sim.takedowns,
+    falls: sim.falls,
+    reason: headline,
+  };
+  sim.events.push({ t: "over" });
+  toast(sim, headline, true);
+}
+
+/** Highway pace ghost. Combat waves are untouched. Idle peel is not the punish. */
+function stepRace(sim: Sim, dt: number) {
+  const race = sim.race;
+  if (!race.armed || sim.phase !== "playing") return;
+  race.paceAlong += PACE_SPEED * dt;
+  const hero = sim.cars[0];
+  const gap = hero.along - race.paceAlong;
+  if (gap < -GAP_WARN) race.warnT += dt;
+  else race.warnT = 0;
+  if (gap < -GAP_DNF) race.dnfT += dt;
+  else race.dnfT = 0;
+  const warn = race.warnT >= GAP_WARN_HOLD;
+  if (warn && !race.warning) toast(sim, "Falling behind", true);
+  race.warning = warn;
+  if (race.dnfT >= GAP_DNF_HOLD) {
+    finishRace(sim, "Fell behind the pack");
+    return;
+  }
+  if (!race.held && hero.along - race.originAlong >= RACE_DIST) {
+    race.held = true;
+    sim.score += PACK_HELD_BONUS;
+    finishRace(sim, "Pack held");
+  }
 }
 
 // ---------------------------------------------------------------- waves
@@ -2080,6 +2171,7 @@ export function step(sim: Sim, dt: number) {
   stepMines(sim, dt);
   stepPickups(sim, dt);
   if (sim.phase === "playing") stepWaves(sim, dt);
+  if (sim.phase === "playing") stepRace(sim, dt);
 }
 
 // ---------------------------------------------------------------- debug/test staging (used by ?debug and tests)

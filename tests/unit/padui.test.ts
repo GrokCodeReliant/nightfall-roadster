@@ -29,7 +29,7 @@ const opts = (extra?: Partial<PadUiOpts>): PadUiOpts => ({
   ...extra,
 });
 
-function release(state: PadUiState, mode: "playing" | "paused" | "shop" | "title" | "other", extra?: Partial<PadUiOpts>) {
+function release(state: PadUiState, mode: "playing" | "paused" | "shop" | "title" | "settings" | "other", extra?: Partial<PadUiOpts>) {
   stepPadUi(pad([0, 0], []), state, mode, opts(extra));
 }
 
@@ -222,4 +222,44 @@ test("menu pad sampling does not grant boost to a non-Roadster", () => {
   assert.equal(ev, null);
   assert.equal(readInput(roadster).thrust, true);
   assert.equal(readInput(roadster).throttle, 0);
+});
+
+test("settings pad focuses rows, steps the slider, and B or A on Close dismisses", () => {
+  const state = emptyPadUi();
+  const menu = opts({ settingsCount: 2 });
+  release(state, "paused");
+  release(state, "settings", { settingsCount: 2 });
+  assert.equal(state.focus, 0);
+
+  let ev = stepPadUi(pad([0, 0], [15]), state, "settings", menu);
+  assert.deepEqual(ev, { type: "settingsStep", delta: 1 });
+  ev = stepPadUi(pad([0, 0], [15]), state, "settings", menu);
+  assert.equal(ev, null);
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([-0.9, 0], []), state, "settings", menu);
+  assert.deepEqual(ev, { type: "settingsStep", delta: -1 });
+
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([0, 0], [0]), state, "settings", menu);
+  assert.deepEqual(ev, { type: "settingsStep", delta: 1 });
+
+  release(state, "settings", { settingsCount: 2 });
+  stepPadUi(pad([0, 0], [13]), state, "settings", menu);
+  assert.equal(state.focus, 1);
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([0.9, 0], []), state, "settings", menu);
+  assert.equal(ev, null);
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([0, 0], [0]), state, "settings", menu);
+  assert.equal(ev?.type, "settingsClose");
+
+  const sim = flatSim("model3");
+  applyGamepad(sim, pad([0, 0], [1]));
+  release(state, "paused");
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([0, 0], [1]), state, "settings", menu);
+  maskPadCombat(sim, state);
+  assert.equal(ev?.type, "settingsClose");
+  assert.equal(readInput(sim).mine, false);
+  assert.equal(readInput(sim).thrust, false);
 });
