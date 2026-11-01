@@ -11,7 +11,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { emptyShop, type ShopSave } from "./shop";
+import { emptyShop, heroMineArm, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
 export type Fx =
@@ -60,6 +60,8 @@ export type Mine = {
   arm: number;
   owner: number;
   oil: boolean;
+  /** Set on a hero drop. freshHeroMines consumes it so cluster/oil/reserve do not key off 0.38. */
+  fresh: boolean;
 };
 
 export type PickupKind = "repair" | "armor" | "gun" | "rockets" | "minepack" | "oil" | "nitro" | "shield" | "magnet";
@@ -185,6 +187,10 @@ export const GAP_DNF = 140;
 export const GAP_DNF_HOLD = 3;
 export const RACE_DIST = 2200;
 export const PACK_HELD_BONUS = 800;
+/** Shown once when a highway RaceTrial begins. GAP_WARN / GAP_DNF stay put. */
+export const RACE_HOLD_TOAST = "Hold the pack — don’t fall behind";
+/** Enemy mine fuse. Hero drops use MINE_ARM. */
+export const ENEMY_MINE_ARM = 0.6;
 
 export type RaceTrial = {
   armed: boolean;
@@ -517,7 +523,7 @@ function emptyShot(): Shot {
 }
 
 function emptyMine(): Mine {
-  return { alive: false, x: 0, y: 0, z: 0, life: 0, arm: 0, owner: -1, oil: false };
+  return { alive: false, x: 0, y: 0, z: 0, life: 0, arm: 0, owner: -1, oil: false, fresh: false };
 }
 
 function emptyPickup(): Pickup {
@@ -664,7 +670,8 @@ export function begin(sim: Sim) {
   sim.prevMine = false;
   sim.events.length = 0;
   armRace(sim);
-  toast(sim, "Hunters inbound. Survive.", true);
+  if (sim.race.armed) toast(sim, RACE_HOLD_TOAST, true);
+  else toast(sim, "Hunters inbound. Survive.", true);
 }
 
 function armRace(sim: Sim) {
@@ -707,6 +714,7 @@ function grantFullUpgrades(sim: Sim) {
   hero.maxFuel = 160;
   hero.fuel = hero.maxFuel;
   hero.rounds = 24;
+  sim.shop.mineArm = 2;
 }
 
 /** Copy the persisted shop onto this run. Charge cells arm the existing timers, then one charge is spent if this begin is a real start. */
@@ -1058,7 +1066,8 @@ function dropMine(sim: Sim, car: Car) {
   slot.z = z;
   slot.y = q.gap ? car.y : q.y + 0.15;
   slot.life = 9;
-  slot.arm = 0.38; // freshHeroMines keys off 0.38; keep it under the ~0.8–1.2s cap
+  slot.arm = heroMineArm(sim.shop?.mineArm);
+  slot.fresh = true;
   car.mines -= 1;
   car.mineCd = 0.45;
   sim.events.push({ t: "mine" });
@@ -1579,7 +1588,11 @@ function upgradeFreshShots(sim: Sim) {
 function freshHeroMines(sim: Sim) {
   const hero = sim.cars[0];
   for (const m of sim.mines) {
-    if (!m.alive || m.arm !== 0.38 || m.life !== 9) continue;
+    // Just-dropped hero mine. Cluster copies clear `fresh` before they are written,
+    // so oil / cluster / reserve still run once after a fuse upgrade.
+    if (!m.alive || !m.fresh) continue;
+    m.fresh = false;
+    if (m.life !== 9) continue;
     m.life = 8.9999;
     m.owner = 0;
     m.oil = sim.up.oilT > 0;
@@ -1594,6 +1607,7 @@ function freshHeroMines(sim: Sim) {
         const c = sim.mines.find((o) => !o.alive);
         if (!c) break;
         Object.assign(c, m);
+        c.fresh = false;
         c.x = m.x + rx * side;
         c.z = m.z + rz * side;
       }
@@ -1732,7 +1746,8 @@ function enemyMine(sim: Sim, car: Car) {
   slot.z = car.z - fz * back;
   slot.y = q.y + 0.15;
   slot.life = 12;
-  slot.arm = 0.6;
+  slot.arm = ENEMY_MINE_ARM;
+  slot.fresh = false;
   sim.events.push({ t: "emine" });
 }
 

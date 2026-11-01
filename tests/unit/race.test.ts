@@ -9,6 +9,7 @@ import {
   PACK_HELD_BONUS,
   PACE_SPEED,
   RACE_DIST,
+  RACE_HOLD_TOAST,
   begin,
   createSim,
   step,
@@ -37,6 +38,7 @@ test("highway begin arms a 30 m/s pace; other stage ids do not", () => {
   const highway = createSim();
   highway.stageId = "highway";
   begin(highway);
+  assert.equal(highway.toast, RACE_HOLD_TOAST);
   assert.equal(highway.race.armed, true);
   assert.equal(highway.lull, 2.2);
   const origin = highway.cars[0].along;
@@ -55,6 +57,7 @@ test("highway begin arms a 30 m/s pace; other stage ids do not", () => {
     const sim = createSim();
     sim.stageId = id;
     begin(sim);
+    assert.equal(sim.toast, "Hunters inbound. Survive.", id);
     assert.equal(sim.race.armed, false, id);
     assert.equal(sim.lull, 2.2, id);
     sim.lull = 1e9;

@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { CAR_STATS, GAP_DNF, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, GAP_DNF, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
 import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
-import { SHOP_CATALOG, bankRun, buyUpgrade, emptyShop, sanitizeShop, shopOwned, type ShopId, type ShopSave } from "./shop";
+import { SHOP_CATALOG, bankRun, buyUpgrade, emptyShop, highwayPurse, sanitizeShop, shopComing, shopOwned, shopPrice, type ShopId, type ShopSave } from "./shop";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 
 declare global {
@@ -459,7 +459,13 @@ export function RoadsterGame() {
           sim.banked = true;
           setResult(sim.result);
           const prev = loadSave();
-          const bank = bankRun(prev.credits, sim.result.score, false);
+          const highway = sim.stageId === "highway" && sim.race.armed;
+          const bank = bankRun(
+            prev.credits,
+            sim.result.score,
+            false,
+            highway ? { highway: true, purse: highwayPurse(sim.result.reason) } : null,
+          );
           const next = writeSave({
             bestScore: Math.max(prev.bestScore, sim.result.score),
             bestWave: Math.max(prev.bestWave, sim.result.wave),
@@ -587,6 +593,7 @@ export function RoadsterGame() {
         }
         if (raceWarnRef.current) raceWarnRef.current.textContent = race.warning ? "Falling behind" : "";
         raceEl.classList.toggle("is-warn", race.warning);
+        raceEl.classList.toggle("is-behind", gap < -GAP_WARN);
       }
     }
     if (fuelRef.current) fuelRef.current.style.transform = `scaleX(${hero.fuel / hero.maxFuel})`;
@@ -660,6 +667,11 @@ export function RoadsterGame() {
     const sim = simRef.current;
     if (!sim) return;
     applyFullyUpgraded(sim);
+    const next = { ...shopRef.current, mineArm: 2 as const };
+    sim.shop = next;
+    shopRef.current = next;
+    setShop(next);
+    writeSave({ shop: next });
     setDevNote(sim.toast);
   }
 
@@ -961,49 +973,53 @@ export function RoadsterGame() {
       {phase === "menu" && !glError && (
         <div className="nf-menu">
           <div className="nf-panel">
-            <p className="nf-kicker">Night run · Côte Noire highway</p>
-            <h1 className="nf-title">Nightfall <em>Roadster</em></h1>
-            <p className="nf-lede">
-              Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
-            </p>
-            <div className="nf-carpick" role="group" aria-label="Choose car">
-              <button type="button" className="nf-carpick-arrow" aria-label="Previous car" onClick={() => pickCar(-1)}>‹</button>
-              <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
-              <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
-            </div>
-            <CarBlurb id={CARS[carIdx].id} />
-            <div className="nf-carpick nf-stagepick" role="group" aria-label="Choose stage">
-              <button type="button" className="nf-carpick-arrow" aria-label="Previous stage" onClick={() => pickStage(-1)}>‹</button>
-              <span className="nf-carpick-name" data-stage={STAGES[stageIdx].id}>{STAGES[stageIdx].name}{STAGES[stageIdx].ready ? "" : " · Coming soon"}</span>
-              <button type="button" className="nf-carpick-arrow" aria-label="Next stage" onClick={() => pickStage(1)}>›</button>
-            </div>
-            <div className="nf-launch">
-              <button type="button" className="nf-btn" disabled={!STAGES[stageIdx].ready} onClick={startRace}>
-                Start
-              </button>
-              <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
-              <button type="button" className="nf-shop-open" onClick={openSettings}>Settings</button>
-              <p className="nf-credits">Credits {credits}</p>
-              <p className="nf-best">{best}</p>
-            </div>
-            <p className="nf-keysline nf-keys">
-              <kbd>W/S</kbd> "gas" 😉
-              <kbd>A/D</kbd> steer
-              <kbd>Space</kbd> boost
-              <kbd>F</kbd> guns
-              <kbd>G</kbd> mines
-              <kbd>T</kbd> track
-              <kbd>Esc</kbd> pause
-            </p>
-            {devMode && (
-              <div className="nf-dev">
-                <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
-                {devNote ? <p className="nf-dev-note">{devNote}</p> : null}
+            <div className="nf-scroll">
+              <p className="nf-kicker">Night run · Côte Noire highway</p>
+              <h1 className="nf-title">Nightfall <em>Roadster</em></h1>
+              <p className="nf-lede">
+                Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
+              </p>
+              <div className="nf-carpick" role="group" aria-label="Choose car">
+                <button type="button" className="nf-carpick-arrow" aria-label="Previous car" onClick={() => pickCar(-1)}>‹</button>
+                <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
+                <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
               </div>
-            )}
-            <p className="nf-credit" style={{ marginTop: "0.9rem", fontSize: "0.72rem", opacity: 0.6, letterSpacing: "0.04em" }}>
-              An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.
-            </p>
+              <CarBlurb id={CARS[carIdx].id} />
+              <div className="nf-carpick nf-stagepick" role="group" aria-label="Choose stage">
+                <button type="button" className="nf-carpick-arrow" aria-label="Previous stage" onClick={() => pickStage(-1)}>‹</button>
+                <span className="nf-carpick-name" data-stage={STAGES[stageIdx].id}>{STAGES[stageIdx].name}{STAGES[stageIdx].ready ? "" : " · Coming soon"}</span>
+                <button type="button" className="nf-carpick-arrow" aria-label="Next stage" onClick={() => pickStage(1)}>›</button>
+              </div>
+              <p className="nf-keysline nf-keys">
+                <kbd>W/S</kbd> "gas" 😉
+                <kbd>A/D</kbd> steer
+                <kbd>Space</kbd> boost
+                <kbd>F</kbd> guns
+                <kbd>G</kbd> mines
+                <kbd>T</kbd> track
+                <kbd>Esc</kbd> pause
+              </p>
+              {devMode && (
+                <div className="nf-dev">
+                  <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
+                  {devNote ? <p className="nf-dev-note">{devNote}</p> : null}
+                </div>
+              )}
+              <p className="nf-credit" style={{ marginTop: "0.9rem", fontSize: "0.72rem", opacity: 0.6, letterSpacing: "0.04em" }}>
+                An unofficial fan tribute by Grok Code Reliant studio. Not affiliated with or endorsed by Tesla, Inc.
+              </p>
+            </div>
+            <div className="nf-foot">
+              <div className="nf-launch">
+                <button type="button" className="nf-btn" disabled={!STAGES[stageIdx].ready} onClick={startRace}>
+                  Start
+                </button>
+                <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
+                <button type="button" className="nf-shop-open" onClick={openSettings}>Settings</button>
+                <p className="nf-credits">Credits {credits}</p>
+                <p className="nf-best">{best}</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1011,8 +1027,11 @@ export function RoadsterGame() {
       {phase === "paused" && (
         <div className="nf-overlay">
           <div className="nf-card">
-            <p className="nf-kicker">Hold position</p>
-            <h2>Paused</h2>
+            <div className="nf-scroll">
+              <p className="nf-kicker">Hold position</p>
+              <h2>Paused</h2>
+            </div>
+            <div className="nf-foot">
             <div className="nf-pausemenu">
               {!confirmMenu ? (
                 <>
@@ -1032,6 +1051,7 @@ export function RoadsterGame() {
                 </>
               )}
             </div>
+            </div>
           </div>
         </div>
       )}
@@ -1039,6 +1059,7 @@ export function RoadsterGame() {
       {settingsOpen && (
         <div className="nf-overlay nf-settings">
           <div className="nf-card" role="dialog" aria-labelledby="nf-settings-title">
+            <div className="nf-scroll">
             <h2 id="nf-settings-title">Settings</h2>
             <ul className="nf-settings-list">
               <li className={settingsFocus === 0 ? "nf-settings-row is-pad-focus" : "nf-settings-row"}>
@@ -1059,7 +1080,10 @@ export function RoadsterGame() {
                 </div>
               </li>
             </ul>
-            <button type="button" className={settingsFocus === 1 ? "nf-btn is-pad-focus" : "nf-btn"} onClick={closeSettings}>Close</button>
+            </div>
+            <div className="nf-foot">
+              <button type="button" className={settingsFocus === 1 ? "nf-btn is-pad-focus" : "nf-btn"} onClick={closeSettings}>Close</button>
+            </div>
           </div>
         </div>
       )}
@@ -1067,20 +1091,28 @@ export function RoadsterGame() {
       {shopOpen && (phase === "menu" || phase === "finished") && (
         <div className="nf-overlay nf-shop">
           <div className="nf-card">
-            <p className="nf-kicker">Garage</p>
-            <h2>Shop</h2>
-            <p className="nf-credits">Credits {credits}</p>
-            <ul className="nf-shop-list">
-              {SHOP_CATALOG.map((item, index) => (
-                <li className={shopFocus === index ? "nf-shop-row is-pad-focus" : "nf-shop-row"} key={item.id} aria-current={shopFocus === index ? "true" : undefined}>
-                  <span>{item.label}<small>{shopOwned(shop, item.id)}</small></span>
-                  <span>{item.price}</span>
-                  <button type="button" className="nf-shop-buy" onClick={() => onBuy(item.id)}>Buy</button>
-                </li>
-              ))}
-            </ul>
-            <p className="nf-shop-note" role="status">{shopNote}</p>
-            <button type="button" className="nf-shop-close" onClick={() => { shopOpenRef.current = false; setShopOpen(false); }}>Close</button>
+            <div className="nf-scroll">
+              <p className="nf-kicker">Garage</p>
+              <h2>Shop</h2>
+              <p className="nf-credits">Credits {credits}</p>
+              <ul className="nf-shop-list">
+                {SHOP_CATALOG.map((item, index) => {
+                  const coming = shopComing(item.id);
+                  const owned = item.id === "minepack" && "note" in item ? `${item.note} · ${shopOwned(shop, item.id)}` : shopOwned(shop, item.id);
+                  return (
+                    <li className={`${shopFocus === index ? "nf-shop-row is-pad-focus" : "nf-shop-row"}${coming ? " is-coming" : ""}`} key={item.id} aria-current={shopFocus === index ? "true" : undefined}>
+                      <span>{item.label}<small>{owned}</small></span>
+                      <span>{coming ? "—" : shopPrice(shop, item.id)}</span>
+                      <button type="button" className="nf-shop-buy" disabled={coming} onClick={() => onBuy(item.id)}>{coming ? "Coming" : "Buy"}</button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="nf-shop-note" role="status">{shopNote}</p>
+            </div>
+            <div className="nf-foot">
+              <button type="button" className="nf-btn nf-shop-close" onClick={() => { shopOpenRef.current = false; setShopOpen(false); }}>Close</button>
+            </div>
           </div>
         </div>
       )}
@@ -1088,20 +1120,24 @@ export function RoadsterGame() {
       {phase === "finished" && result && (
         <div className="nf-overlay">
           <div className="nf-card">
-            <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
-            <h2 className="nf-title-sm">{result.reason ?? "Wrecked"}</h2>
-            <div className="nf-rows">
-              <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
-              <div><span>Wave reached</span><strong>{result.wave}</strong></div>
-              <div><span>Kills</span><strong>{result.takedowns}</strong></div>
-              <div><span>Falls</span><strong>{result.falls}</strong></div>
-              <div><span>Score</span><strong>{result.score}</strong></div>
+            <div className="nf-scroll">
+              <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
+              <h2 className={result.reason ? "nf-title-sm nf-race-headline" : "nf-title-sm"}>{result.reason ?? "Wrecked"}</h2>
+              <div className="nf-rows">
+                <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
+                <div><span>Wave reached</span><strong>{result.wave}</strong></div>
+                <div><span>Kills</span><strong>{result.takedowns}</strong></div>
+                <div><span>Falls</span><strong>{result.falls}</strong></div>
+                <div><span>Score</span><strong>{result.score}</strong></div>
+              </div>
             </div>
-            <button type="button" className="nf-btn" onClick={startRace}>Run it again</button>
-            <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
-            <button type="button" className="nf-btn nf-btn-ghost" onClick={toTitle}>Title</button>
-            <p className="nf-credits">Credits {credits}</p>
-            <p className="nf-best">{best}</p>
+            <div className="nf-foot">
+              <button type="button" className="nf-btn" onClick={startRace}>Run it again</button>
+              <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
+              <button type="button" className="nf-btn nf-btn-ghost" onClick={toTitle}>Title</button>
+              <p className="nf-credits">Credits {credits}</p>
+              <p className="nf-best">{best}</p>
+            </div>
           </div>
         </div>
       )}

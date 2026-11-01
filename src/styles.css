@@ -296,10 +296,17 @@
   z-index: 6;
 }
 
-.nf-menu {
+.nf-menu,
+.nf-overlay {
+  box-sizing: border-box;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  overflow: hidden;
+  height: 100%;
+  max-height: 100dvh;
+  max-height: 100svh;
   padding:
     calc(0.75rem + env(safe-area-inset-top))
     calc(0.85rem + env(safe-area-inset-right))
@@ -310,14 +317,48 @@
 .nf-panel,
 .nf-card {
   pointer-events: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   width: min(38rem, 100%);
+  min-height: 0;
   max-height: 100%;
-  overflow: auto;
+  overflow: hidden;
   background: color-mix(in srgb, var(--color-surface) 92%, transparent);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) + 0.15rem);
-  padding: 1.15rem 1.2rem 1rem;
+  padding: 1.15rem 1.2rem max(1rem, env(safe-area-inset-bottom));
   box-shadow: 0 18px 50px color-mix(in srgb, var(--color-bg) 55%, transparent);
+}
+
+.nf-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.nf-foot {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 0.35rem;
+  padding-top: 0.65rem;
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+}
+
+.nf-foot > .nf-btn,
+.nf-foot > .nf-shop-open {
+  display: block;
+  width: 100%;
+  margin-top: 0.45rem;
+}
+
+.nf-foot > .nf-btn:first-child,
+.nf-foot > .nf-shop-open:first-child {
+  margin-top: 0;
 }
 
 .nf-title {
@@ -417,6 +458,11 @@
   font-size: 0.68rem;
 }
 .nf-shop-buy { padding: 0.3rem 0.65rem; }
+.nf-shop-buy:disabled { opacity: 0.55; cursor: not-allowed; }
+.nf-shop-row.is-coming {
+  opacity: 0.48;
+}
+.nf-shop-row.is-coming small { letter-spacing: 0.08em; text-transform: uppercase; }
 .nf-shop-note {
   min-height: 1.2rem;
   margin: 0.2rem 0 0.6rem;
@@ -496,10 +542,6 @@
 }
 
 .nf-overlay {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
   background: color-mix(in srgb, var(--color-bg) 46%, transparent);
 }
 
@@ -515,6 +557,13 @@
   font-family: var(--font-display);
   font-size: 2rem;
   margin: 0.1rem 0 0.6rem;
+}
+.nf-card .nf-title-sm.nf-race-headline {
+  font-size: clamp(2.7rem, 8vw, 3.7rem);
+  line-height: 0.86;
+  letter-spacing: -0.03em;
+  margin: 0.05rem 0 0.85rem;
+  color: var(--color-fg);
 }
 
 .nf-rows { margin: 0 0 0.8rem; }
@@ -622,6 +671,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .nf-btn, .nf-icon-btn, .nf-touch button { transition: none; }
+  .nf-race.is-behind .nf-race-gap { animation: none; opacity: 1; }
 }
 
 .nf-keysline kbd { margin-left: 0.7em; margin-right: 0.25em; }
@@ -750,13 +800,6 @@
 .nf-settings {
   z-index: 9;
   pointer-events: auto;
-  display: grid;
-  place-items: center;
-  padding:
-    calc(0.75rem + env(safe-area-inset-top))
-    calc(0.85rem + env(safe-area-inset-right))
-    calc(0.85rem + env(safe-area-inset-bottom))
-    calc(0.85rem + env(safe-area-inset-left));
   background: color-mix(in srgb, var(--color-bg) 35%, transparent);
 }
 .nf-settings-list {
@@ -816,28 +859,32 @@
   position: relative;
   z-index: 3;
   margin-top: 0.45rem;
-  min-width: 8.5rem;
+  min-width: 11rem;
   max-width: 46vw;
-  padding: 0.35rem 0.55rem 0.4rem;
-  background: color-mix(in srgb, var(--color-bg) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  padding: 0.45rem 0.65rem 0.5rem;
+  background: color-mix(in srgb, #07080c 90%, transparent);
+  border: 2px solid color-mix(in srgb, var(--color-accent) 80%, #fff);
   border-radius: 0.55rem;
   pointer-events: none;
   font-family: var(--font-hud);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
 }
 .nf-race[hidden] { display: none; }
 .nf-race-gap {
   margin: 0;
-  font-size: 0.92rem;
-  color: var(--color-fg);
+  font-size: 1.28rem;
+  font-weight: 700;
+  line-height: 1.05;
+  color: #fff8ee;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 .nf-race-track {
   position: relative;
-  height: 0.28rem;
-  margin-top: 0.28rem;
-  background: #2c2a28;
+  height: 0.42rem;
+  margin-top: 0.35rem;
+  background: #3a3834;
   border-radius: 999px;
   overflow: hidden;
 }
@@ -849,12 +896,28 @@
   background: var(--color-accent);
 }
 .nf-race-warn {
-  margin: 0.22rem 0 0;
-  font-size: 0.78rem;
-  color: var(--color-primary);
+  margin: 0.28rem 0 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #ff5c4e;
+  text-shadow: 0 0 10px rgba(226, 59, 47, 0.85);
 }
 .nf-race-warn:empty { display: none; }
-.nf-race.is-warn { border-color: var(--color-primary); }
+.nf-race.is-warn {
+  border-color: #ff3a2a;
+  border-width: 3px;
+  background: color-mix(in srgb, #e23b2f 28%, #07080c);
+  box-shadow: 0 0 0 1px #ff3a2a, 0 0 18px rgba(226, 59, 47, 0.9);
+}
+.nf-race.is-behind .nf-race-gap {
+  color: #ff4d3d;
+  animation: nf-gap-pulse 0.7s ease-in-out infinite alternate;
+}
+@keyframes nf-gap-pulse {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
 
 /* ---- M1 (b): HUD to the edges. Center keeps only .nf-cross; speed is the middle item of the
    bottom bar; toast sits top-center under .nf-top. Edge offsets = 0.75rem + safe-area inset. */
@@ -915,4 +978,45 @@
 @media (max-width: 420px) {
   .nf-hud .nf-bottom { flex-wrap: wrap; }
   .nf-hud .nf-bottom .nf-meter { flex: 1 1 40%; }
+}
+
+/* Desktop meters sit on the bottom edge. Lift them so upgrade chips stay in the viewport. */
+@media (pointer: fine) and (min-width: 821px) {
+  .nf-hud .nf-bottom {
+    bottom: calc(2rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-height: 760px) {
+  .nf-launch {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .nf-launch .nf-btn,
+  .nf-launch .nf-shop-open {
+    width: 100%;
+  }
+  .nf-title { font-size: clamp(1.8rem, 5vw, 2.6rem); }
+  .nf-hud .nf-chips {
+    position: static;
+    flex: 1 1 100%;
+    order: 5;
+  }
+  .nf-hud .nf-bottom { gap: 0.35rem; flex-wrap: wrap; }
+  .nf-hud .nf-speed { font-size: 1.5rem; }
+  .nf-hud .nf-meter { padding: 0.22rem 0.4rem 0.28rem; }
+}
+
+/* Short desktop fullscreen: meters sit in the viewport. Phones keep the touch-bar offset. */
+@media (max-height: 760px) and (pointer: fine) and (min-width: 821px) {
+  .nf-hud .nf-bottom {
+    bottom: calc(0.45rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-height: 420px) {
+  .nf-stick { width: 5.2rem; height: 5.2rem; }
+  .nf-touch button { min-height: 2.15rem; font-size: 0.85rem; }
+  .nf-hud.has-track { --nf-touch-h: 6.2rem; }
+  .nf-hud .nf-bottom { gap: 0.25rem; }
 }
