@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { begin, createSim, step, waveRoster, ENEMY } from "../../src/game/sim.ts";
+import { begin, createSim, debugSpawn, step, waveRoster, ENEMY } from "../../src/game/sim.ts";
 import { botKeys } from "../../src/game/bot.ts";
 import { poseAt, queryTrack, buildTrack, ensureTrack, trimTrack } from "../../src/game/road.ts";
 
@@ -44,9 +44,25 @@ test("bot clears waves: kills happen and the wave advances", () => {
 test("idle player loses lives, then the run ends and restarts clean", () => {
   const sim: any = createSim();
   begin(sim);
-  advance(sim, 30, "idle");
+  advance(sim, 45, "idle");
   assert.ok(sim.lives < 3, `lives ${sim.lives}`);
-  advance(sim, 300, "idle");
+  // No-input driving holds SCROLL_MIN, so a parked side-swipe is no longer what ends the run.
+  // One overlapping ram on the last life still wrecks it, and begin() comes back clean.
+  sim.lives = 1;
+  const hero = sim.cars[0];
+  hero.hp = 1;
+  hero.invuln = 0;
+  const slot = sim.cars.find((c: any) => !c.hero);
+  slot.alive = false;
+  const foe = debugSpawn(sim, "rammer", 0, hero.lane);
+  assert.ok(foe);
+  foe.x = hero.x;
+  foe.y = hero.y;
+  foe.z = hero.z;
+  foe.along = hero.along;
+  foe.ramCd = 0;
+  foe.alive = true;
+  advance(sim, 2, "idle");
   assert.equal(sim.phase, "finished");
   assert.equal(sim.lives, 0);
   assert.ok(sim.result && sim.result.wave >= 1);

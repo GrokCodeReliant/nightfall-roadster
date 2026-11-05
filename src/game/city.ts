@@ -11,7 +11,7 @@ const PIECES: [string, string][] = [
   ["city", "bldg_mid_12x12"], ["city", "bldg_mid_24x12"], ["city", "bldg_mid_24x24"],
   ["city", "bldg_top_12x12"], ["city", "bldg_top_24x12"], ["city", "bldg_top_24x24"],
   ["city", "sidewalk_12x40"], ["city", "overpass_60x12"], ["city", "billboard_pole_12x6"], ["city", "water_barrier_2m"], ["city", "traffic_cone"],
-  ["kit", "sign_fork"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"], ["city", "ramp_launch_2p5m"], ["city", "ramp_kicker_1m"],
+  ["kit", "sign_fork"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
 ];
 const lib: Record<string, THREE.Object3D> = {};
@@ -151,9 +151,9 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   if (index % 6 === 3) {
     // boost gate: sign_fork on both kerbs, status_lamp tinted green/amber/red in code
     for (const side of [1, -1]) add("sign_fork", mid, side * (half - 1.4), 0, 0, Math.PI);
-    // set dressing on the sidewalk beside the gate (no jump physics)
-    add("ramp_launch_2p5m", at(2), half + 6.3, 0.22, 0, 0);
-    add("ramp_kicker_1m", at(seg - 3), -(half + 6.3), 0.22, 0, 0);
+    // H2c OUT: ramp_launch / ramp_kicker used to sit on the sidewalk, outside the
+    // driveable road, and read as a jump the sim would not drive. Dropped. The
+    // sidewalk stays flat. No new ramp art.
     const src = lib.sign_fork?.getObjectByName("status_lamp") as THREE.Mesh | undefined;
     if (src) {
       const gate = new THREE.Group();

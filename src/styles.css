@@ -731,7 +731,14 @@
 @media (prefers-reduced-motion: reduce) { .nf-threat.is-hot span { animation: none; transform: scale(1.15); } }
 
 /* m5: car pick on the title screen */
-.nf-carpick { display: flex; align-items: center; justify-content: center; gap: 0.6rem; margin: 0.4rem 0 0.9rem; }
+.nf-carpick { display: flex; align-items: center; justify-content: center; gap: 0.6rem; margin: 0.4rem 0 0.9rem; border-radius: var(--radius); }
+.nf-carpick.is-pad-focus,
+.nf-launch .nf-btn.is-pad-focus,
+.nf-launch .nf-shop-open.is-pad-focus,
+.nf-dev .nf-dev-btn.is-pad-focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
 .nf-carpick-name { min-width: 10rem; text-align: center; font-family: var(--font-hud); letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.85rem; color: var(--color-fg); display: flex; flex-direction: column; align-items: center; gap: 0.12rem; }
 .nf-carpick-sub { margin: -0.35rem 0 0.75rem; font-size: 0.68rem; letter-spacing: 0.12em; color: var(--color-accent); text-align: center; }
 .nf-carpick-arrow { width: 2.4rem; height: 2.4rem; border-radius: 999px; border: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-bg) 72%, transparent); color: var(--color-fg); font-size: 1.3rem; line-height: 1; cursor: pointer; }

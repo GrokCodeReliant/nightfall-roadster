@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyGamepad, begin, createSim, hasBoost, readInput, step, type GamepadSample } from "../../src/game/sim.ts";
-import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiOpts, type PadUiState } from "../../src/game/padui.ts";
+import { TITLE_FULL, TITLE_SETTINGS, TITLE_SHOP, TITLE_START, emptyPadUi, maskPadCombat, stepPadUi, type PadUiOpts, type PadUiState } from "../../src/game/padui.ts";
 import { SHOP_CATALOG, buyUpgrade, emptyShop } from "../../src/game/shop.ts";
 
 function flatSim(carId: string) {
@@ -188,6 +188,93 @@ test("shop pad focus buys the focused row and B, View, or Start closes", () => {
   assert.equal(ev?.type, "shopClose");
   assert.equal(modelS.touchTrack, false);
   assert.equal(readInput(modelS).thrust, false);
+});
+
+test("title hub pad snaps to Start, cycles pickers, and opens shop and settings", () => {
+  const state = emptyPadUi();
+  const menu = opts();
+  release(state, "title");
+  assert.equal(state.focus, TITLE_START);
+  assert.equal(state.padSeen, true);
+
+  let ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
+  assert.equal(ev?.type, "startRun");
+  release(state, "title");
+
+  stepPadUi(pad([0, 0], [12]), state, "title", menu);
+  assert.equal(state.focus, 1);
+  release(state, "title");
+  ev = stepPadUi(pad([0, 0], [14]), state, "title", menu);
+  assert.deepEqual(ev, { type: "cycleStage", delta: -1 });
+  release(state, "title");
+  stepPadUi(pad([0, 0], [12]), state, "title", menu);
+  assert.equal(state.focus, 0);
+  release(state, "title");
+  ev = stepPadUi(pad([0.9, 0], []), state, "title", menu);
+  assert.deepEqual(ev, { type: "cycleCar", delta: 1 });
+  release(state, "title");
+  ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
+  assert.deepEqual(ev, { type: "cycleCar", delta: 1 });
+
+  release(state, "title");
+  stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, 1);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, 2);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SHOP);
+  release(state, "title");
+  ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
+  assert.equal(ev?.type, "openShop");
+
+  release(state, "shop");
+  assert.equal(state.focus, 0);
+  ev = stepPadUi(pad([0, 0], [1]), state, "shop", menu);
+  assert.equal(ev?.type, "shopClose");
+  release(state, "title");
+  assert.equal(state.focus, TITLE_SHOP);
+
+  release(state, "title");
+  stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SETTINGS);
+  release(state, "title");
+  ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
+  assert.equal(ev?.type, "openSettings");
+  release(state, "settings", { settingsCount: 2 });
+  ev = stepPadUi(pad([0, 0], [1]), state, "settings", menu);
+  assert.equal(ev?.type, "settingsClose");
+  release(state, "title");
+  assert.equal(state.focus, TITLE_SETTINGS);
+
+  const full = emptyPadUi();
+  release(full, "title", { titleCount: 6 });
+  assert.equal(full.focus, TITLE_START);
+  for (let i = 0; i < 3; i++) {
+    stepPadUi(pad([0, 0], [13]), full, "title", opts({ titleCount: 6 }));
+    release(full, "title", { titleCount: 6 });
+  }
+  assert.equal(full.focus, TITLE_FULL);
+  ev = stepPadUi(pad([0, 0], [0]), full, "title", opts({ titleCount: 6 }));
+  assert.equal(ev?.type, "fullyUpgraded");
+
+  const sim = flatSim("model3");
+  applyGamepad(sim, pad([0, 0], [0, 1]));
+  const masked = emptyPadUi();
+  release(masked, "title");
+  ev = stepPadUi(pad([0, 0], [0, 1]), masked, "title", menu);
+  maskPadCombat(sim, masked);
+  assert.equal(ev?.type, "startRun");
+  assert.equal(readInput(sim).fire, false);
+  assert.equal(readInput(sim).mine, false);
+  assert.equal(readInput(sim).thrust, false);
+
+  release(masked, "title", { canStart: false });
+  masked.focus = TITLE_START;
+  ev = stepPadUi(pad([0, 0], [0]), masked, "title", opts({ canStart: false }));
+  assert.equal(ev, null);
+  assert.equal(masked.focus, TITLE_START);
 });
 
 test("title Start begins the run only when a stage can start", () => {

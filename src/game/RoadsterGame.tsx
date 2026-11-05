@@ -24,11 +24,13 @@ const SAVE_KEY = "nightfall-roadster-v2";
 
 /**
  * Sample the first standard gamepad (Xbox, DualSense, DualShock) outside step()
- * so unit tests stay pad-free. Combat mapping is applyGamepad. Pause, title Start,
- * and shop focus are stepPadUi on the same sample.
+ * so unit tests stay pad-free. Combat mapping is applyGamepad. Pause, the title
+ * hub, shop, and Settings are stepPadUi on the same sample.
  *
- * Title: Start begins the run when the selected stage is ready. Shop stays a
- * mouse/touch open; once the catalog is up, the pad moves rows and A buys.
+ * Title hub: D-pad / stick moves car, stage, Start, Shop, Settings (and Fully
+ * upgraded when ?debug). Left/right cycles the focused picker. A confirms.
+ * The first pad on the title snaps to Start. B closes Shop / Settings back
+ * here and restores that row. Mouse clicks stay live beside the pad.
  */
 function pollPads(sim: Sim): GamepadSample | null {
   const read = navigator.getGamepads?.bind(navigator);
@@ -411,6 +413,7 @@ export function RoadsterGame() {
         pauseCount: confirmRef.current ? 2 : devMode ? 5 : 4,
         shopCount: SHOP_CATALOG.length,
         settingsCount: 2,
+        titleCount: devMode ? 6 : 5,
         canStart: !!STAGES[stageIdxRef.current]?.ready,
         ignore: sim.keysOverride != null,
       });
@@ -733,6 +736,11 @@ export function RoadsterGame() {
     if (ev.type === "pause") togglePause();
     else if (ev.type === "resume") resumeRun();
     else if (ev.type === "startRun") startRace();
+    else if (ev.type === "cycleCar") pickCar(ev.delta);
+    else if (ev.type === "cycleStage") pickStage(ev.delta);
+    else if (ev.type === "openShop") openShop();
+    else if (ev.type === "openSettings") openSettings();
+    else if (ev.type === "fullyUpgraded") onFullyUpgraded();
     else if (ev.type === "shopClose") {
       shopOpenRef.current = false;
       setShopOpen(false);
@@ -834,7 +842,11 @@ export function RoadsterGame() {
   }
 
   const showPlay = phase === "playing" || phase === "paused";
+  const hubPad = phase === "menu" && !shopOpen && !settingsOpen;
   const shopFocus = shopOpen && (phase === "menu" || phase === "finished") ? padFocus : -1;
+  function hubRow(index: number, base: string) {
+    return hubPad && padFocus === index ? `${base} is-pad-focus` : base;
+  }
   function padBtn(index: number, base: string) {
     if (settingsOpen) return base;
     return phase === "paused" && padFocus === index ? `${base} is-pad-focus` : base;
@@ -976,13 +988,13 @@ export function RoadsterGame() {
               <p className="nf-lede">
                 Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
               </p>
-              <div className="nf-carpick" role="group" aria-label="Choose car">
+              <div className={hubRow(0, "nf-carpick")} role="group" aria-label="Choose car" aria-current={hubPad && padFocus === 0 ? "true" : undefined}>
                 <button type="button" className="nf-carpick-arrow" aria-label="Previous car" onClick={() => pickCar(-1)}>‹</button>
                 <span className="nf-carpick-name" data-car={CARS[carIdx].id}>{CARS[carIdx].name}</span>
                 <button type="button" className="nf-carpick-arrow" aria-label="Next car" onClick={() => pickCar(1)}>›</button>
               </div>
               <CarBlurb id={CARS[carIdx].id} />
-              <div className="nf-carpick nf-stagepick" role="group" aria-label="Choose stage">
+              <div className={hubRow(1, "nf-carpick nf-stagepick")} role="group" aria-label="Choose stage" aria-current={hubPad && padFocus === 1 ? "true" : undefined}>
                 <button type="button" className="nf-carpick-arrow" aria-label="Previous stage" onClick={() => pickStage(-1)}>‹</button>
                 <span className="nf-carpick-name" data-stage={STAGES[stageIdx].id}>{STAGES[stageIdx].name}{STAGES[stageIdx].ready ? "" : " · Coming soon"}</span>
                 <button type="button" className="nf-carpick-arrow" aria-label="Next stage" onClick={() => pickStage(1)}>›</button>
@@ -998,7 +1010,7 @@ export function RoadsterGame() {
               </p>
               {devMode && (
                 <div className="nf-dev">
-                  <button type="button" className="nf-dev-btn" onClick={onFullyUpgraded}>Fully upgraded</button>
+                  <button type="button" className={hubRow(5, "nf-dev-btn")} aria-current={hubPad && padFocus === 5 ? "true" : undefined} onClick={onFullyUpgraded}>Fully upgraded</button>
                   {devNote ? <p className="nf-dev-note">{devNote}</p> : null}
                 </div>
               )}
@@ -1008,11 +1020,11 @@ export function RoadsterGame() {
             </div>
             <div className="nf-foot">
               <div className="nf-launch">
-                <button type="button" className="nf-btn" disabled={!STAGES[stageIdx].ready} onClick={startRace}>
+                <button type="button" className={hubRow(2, "nf-btn")} disabled={!STAGES[stageIdx].ready} aria-current={hubPad && padFocus === 2 ? "true" : undefined} onClick={startRace}>
                   Start
                 </button>
-                <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
-                <button type="button" className="nf-shop-open" onClick={openSettings}>Settings</button>
+                <button type="button" className={hubRow(3, "nf-shop-open")} aria-current={hubPad && padFocus === 3 ? "true" : undefined} onClick={openShop}>Shop</button>
+                <button type="button" className={hubRow(4, "nf-shop-open")} aria-current={hubPad && padFocus === 4 ? "true" : undefined} onClick={openSettings}>Settings</button>
                 <p className="nf-credits">Credits {credits}</p>
                 <p className="nf-best">{best}</p>
               </div>

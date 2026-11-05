@@ -21,9 +21,8 @@ const script: [number, string[]][] = [
   [0.5, ["KeyW"]],
   [0.4, ["KeyW", "KeyF"]],
   [0.6, []],
-  [0.45, ["KeyS"]],
-  // M1 fixture change: ShiftLeft is boost too (see above), so this segment is ArrowUp only.
-  [0.3, ["ArrowUp"]],
+  // H2 scroll-lock floors along-speed at 22, so a brake-to-stop no longer matches v0.1.
+  // That floor is locked in scroll.test.ts. This tape stays in the band above 22.
 ];
 
 function run(mod: typeof v1 | typeof v2, prep: (sim: any) => void): Frame[] {
@@ -33,6 +32,10 @@ function run(mod: typeof v1 | typeof v2, prep: (sim: any) => void): Frame[] {
   // Walls are road geometry, not handling (v0.1 circuit is 16 m and curved, v0.2 is 24 m):
   // open both roads up so the comparison isolates the car itself.
   sim.track.width = 1000;
+  // H2 floors speed at 22 from a standstill, so the launch no longer matches v0.1.
+  // Both cars are brought up to the Model 3 cap first; the tape below stays above that floor.
+  sim.keysOverride = new Set(["KeyW"]);
+  for (let i = 0; i < 180; i++) mod.step(sim, 1 / 60);
   const hero = sim.cars[0];
   let path = 0;
   let px = hero.x;

@@ -4,9 +4,13 @@
  * returns one UI event per sample. Sample it outside step(), and pass
  * ignore while keysOverride is set.
  *
- * Title path: Start (buttons[9]) begins the run when the selected stage is
- * ready. The title Shop button stays mouse/touch — there is no title focus
- * list. In-shop pad nav is wired (rows, A buy, B / View / Start close).
+ * Title hub rows (same Confirm / Back as the in-race menus): car, stage,
+ * Start, Shop, Settings, and Fully upgraded when that row is in the count.
+ * Left/right cycles the focused picker. A cycles the car, starts, or opens
+ * Shop / Settings. B on the title is a no-op. The first standard pad sample
+ * on the title snaps focus to Start. Shop / Settings opened from the title
+ * restore that row when they close. In-shop pad nav is unchanged (rows, A
+ * buy, B / View / Start close).
  * Pause focus is the existing menu: Resume, Restart, Back to menu, Settings
  * (and Fully upgraded when ?debug draws it). Shop is not on the pause menu.
  * Settings: D-pad / stick moves rows, left/right steps the focused slider,
@@ -19,6 +23,14 @@ const PAD_DEAD = 0.18;
 
 export type PadUiMode = "playing" | "paused" | "shop" | "title" | "settings" | "other";
 
+/** Title hub row order. Fully upgraded is appended only when the count includes it. */
+export const TITLE_CAR = 0;
+export const TITLE_STAGE = 1;
+export const TITLE_START = 2;
+export const TITLE_SHOP = 3;
+export const TITLE_SETTINGS = 4;
+export const TITLE_FULL = 5;
+
 export type PadUiEvent =
   | { type: "pause" }
   | { type: "resume" }
@@ -27,7 +39,12 @@ export type PadUiEvent =
   | { type: "shopBuy"; index: number }
   | { type: "shopClose" }
   | { type: "settingsClose" }
-  | { type: "settingsStep"; delta: number };
+  | { type: "settingsStep"; delta: number }
+  | { type: "cycleCar"; delta: number }
+  | { type: "cycleStage"; delta: number }
+  | { type: "openShop" }
+  | { type: "openSettings" }
+  | { type: "fullyUpgraded" };
 
 export type PadUiState = {
   /** Last mode we sampled, so opening pause/shop snaps focus to the first row. */
@@ -39,6 +56,10 @@ export type PadUiState = {
   prevNav: number;
   prevHoriz: number;
   focus: number;
+  /** True after the first live sample, so the title snap happens once. */
+  padSeen: boolean;
+  /** Title row to restore when Shop or Settings closes back to the hub. */
+  titleFocus: number;
   /** Held after the UI ate A, so the press does not also fire. */
   holdFire: boolean;
   /** Held after the UI ate B, so the press does not also drop a mine. */
@@ -52,6 +73,8 @@ export type PadUiOpts = {
   shopCount: number;
   /** Settings rows, including the Close row. Defaults to 2. */
   settingsCount?: number;
+  /** Title hub rows. Defaults to 5 (car, stage, Start, Shop, Settings). */
+  titleCount?: number;
   canStart: boolean;
   ignore: boolean;
 };
@@ -66,6 +89,8 @@ export function emptyPadUi(): PadUiState {
     prevNav: 0,
     prevHoriz: 0,
     focus: 0,
+    padSeen: false,
+    titleFocus: TITLE_START,
     holdFire: false,
     holdMine: false,
     holdView: false,
@@ -111,8 +136,12 @@ function remember(state: PadUiState, start: boolean, a: boolean, b: boolean, vie
  * Playing: Start toggles to pause. Paused: Start or B resumes, A activates
  * the focused row, D-pad / left stick Y moves focus. Shop: stick or D-pad
  * moves rows, A buys, B or View or Start closes. Settings: rows, A steps the
- * slider or closes, left/right steps the slider, B closes. Title: Start begins
- * the run when canStart. `ignore` (keysOverride) updates edges and does nothing else.
+ * slider or closes, left/right steps the slider, B closes. Title: D-pad / stick
+ * moves the hub rows, left/right cycles car and stage, A confirms the focused
+ * row, B is a no-op, Start (buttons[9]) begins the run when canStart. The first
+ * sample on the title snaps focus to Start. `ignore` (keysOverride) updates
+ * edges and does nothing else. A and B are masked while title, shop, or
+ * settings are up so they cannot fire or mine.
  */
 export function stepPadUi(
   sample: GamepadSample | null,
@@ -154,18 +183,38 @@ export function stepPadUi(
     return null;
   }
 
-  const entered = state.mode !== mode;
+  const prevMode = state.mode;
+  const entered = prevMode !== mode;
   state.mode = mode;
-  if (entered && (mode === "paused" || mode === "shop" || mode === "settings")) state.focus = 0;
+  const titleCount = Math.max(1, opts.titleCount ?? 5);
+  const restoringTitle = entered && mode === "title" && (prevMode === "shop" || prevMode === "settings");
+  if (restoringTitle) state.focus = Math.max(0, Math.min(titleCount - 1, state.titleFocus));
+  else if (entered && (mode === "paused" || mode === "shop" || mode === "settings")) state.focus = 0;
+
+  let snapped = false;
+  if (!state.padSeen) {
+    state.padSeen = true;
+    if (mode === "title" && !restoringTitle) {
+      const startRow = Math.min(TITLE_START, titleCount - 1);
+      state.focus = opts.canStart ? startRow : Math.min(TITLE_SHOP, titleCount - 1);
+      snapped = true;
+    }
+  }
 
   const count =
-    mode === "shop" ? opts.shopCount : mode === "paused" ? opts.pauseCount : mode === "settings" ? (opts.settingsCount ?? 2) : 0;
-  if (!entered && (mode === "paused" || mode === "shop" || mode === "settings") && nav !== 0 && nav !== state.prevNav && count > 0) {
-    state.focus += nav;
-  }
+    mode === "shop" ? opts.shopCount
+    : mode === "paused" ? opts.pauseCount
+    : mode === "settings" ? (opts.settingsCount ?? 2)
+    : mode === "title" ? titleCount
+    : 0;
+  const menuNav = mode === "paused" || mode === "shop" || mode === "settings" || mode === "title";
+  if (!entered && !snapped && menuNav && nav !== 0 && nav !== state.prevNav && count > 0) state.focus += nav;
   if (count > 0) state.focus = Math.max(0, Math.min(count - 1, state.focus));
   const horizEdge = horiz !== 0 && horiz !== state.prevHoriz;
   remember(state, start, a, b, view, nav, horiz);
+
+  if ((mode === "title" || mode === "shop" || mode === "settings") && a) state.holdFire = true;
+  if ((mode === "title" || mode === "shop" || mode === "settings") && b) state.holdMine = true;
 
   if (mode === "playing") {
     if (startEdge) {
@@ -214,7 +263,24 @@ export function stepPadUi(
     return null;
   }
 
-  if (mode === "title" && startEdge && opts.canStart) return { type: "startRun" };
+  if (mode === "title") {
+    state.titleFocus = state.focus;
+    if (startEdge && opts.canStart) return { type: "startRun" };
+    if (horizEdge && !snapped) {
+      if (state.focus === TITLE_CAR) return { type: "cycleCar", delta: horiz };
+      if (state.focus === TITLE_STAGE) return { type: "cycleStage", delta: horiz };
+    }
+    if (aEdge) {
+      const row = state.focus;
+      if (row === TITLE_CAR) return { type: "cycleCar", delta: 1 };
+      if (row === TITLE_START && opts.canStart) return { type: "startRun" };
+      if (row === TITLE_SHOP) return { type: "openShop" };
+      if (row === TITLE_SETTINGS) return { type: "openSettings" };
+      if (row === TITLE_FULL) return { type: "fullyUpgraded" };
+      return null;
+    }
+    return null;
+  }
   return null;
 }
 

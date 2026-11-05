@@ -159,6 +159,10 @@ export type Car = {
   racer: boolean;
   /** Cruise speed while `racer` is set. Ignored for wave hunters. */
   raceSpeed: number;
+  /** Seconds of sidewall slide / steer assist still to run. */
+  slideT: number;
+  /** Continuous seconds spent more than OFFROAD_M past the road edge. */
+  offT: number;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -200,6 +204,18 @@ export const RACE_DIST = 2200;
 export const RIVAL_COUNT = 3;
 export const RIVAL_SPEED = 30;
 export const RIVAL_OFFSETS = [-40, 20, 60] as const;
+/** Forward pace while playing. Brake and reverse cannot go under this. */
+export const SCROLL_MIN = 22;
+/** Meters past the asphalt edge before an off-road fail can start. */
+export const OFFROAD_M = 6;
+/** Seconds that far off the road before the mid-track reset. */
+export const OFFROAD_T = 0.85;
+/** How far back the off-road reset places the car, in meters. */
+export const OFFROAD_BACK = 12;
+/** Invulnerability after an off-road reset. Lives and upgrades stay. */
+export const OFFROAD_INVULN = 1;
+/** Sidewall glance steer assist. Long enough to peel off, short of a full turn. */
+export const WALL_SLIDE = 0.28;
 /** Shown once when a highway RaceTrial begins. */
 export const RACE_FIELD_TOAST = "Race the field — place pays";
 export const FIELD_DNF = "Fell behind the field";
@@ -535,6 +551,8 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     leaveT: 0,
     racer: false,
     raceSpeed: 0,
+    slideT: 0,
+    offT: 0,
   };
 }
 
@@ -632,6 +650,8 @@ function place(sim: Sim, car: Car, along: number, speed: number) {
   car.alive = true;
   car.spin = 0;
   car.thrust = 0;
+  car.slideT = 0;
+  car.offT = 0;
 }
 
 function park(sim: Sim) {
@@ -902,6 +922,30 @@ function safeSpawnS(sim: Sim, s: number) {
   return Math.max(sim.track.first * 2 + 2, s - back);
 }
 
+function scrollFloor(car: Car) {
+  if (car.alive && car.speed < SCROLL_MIN) car.speed = SCROLL_MIN;
+}
+
+/** Tire-blow, then back to lane center a short way behind. One fail does not end the race. */
+function offroadReset(sim: Sim, car: Car) {
+  const hp = car.hp;
+  const speed = Math.max(SCROLL_MIN, car.speed);
+  const back = Math.min(15, OFFROAD_BACK);
+  let s = Math.max(sim.track.first * 2 + 2, car.along - back);
+  if (poseAt(sim.track, s).gap || gapAhead(sim.track, s, 20)) s = safeSpawnS(sim, car.along - back);
+  car.lane = 0;
+  place(sim, car, s, speed);
+  car.hp = hp;
+  car.invuln = OFFROAD_INVULN;
+  car.spin = 0.4;
+  car.flash = 0.45;
+  car.offT = 0;
+  car.slideT = 0;
+  sim.events.push({ t: "hit", x: car.x, y: car.y + 0.5, z: car.z, big: true });
+  sim.events.push({ t: "scrape" });
+  toast(sim, "Back on track", true);
+}
+
 function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
   if (!car.hero) {
     killAI(sim, car, true);
@@ -1134,6 +1178,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   // Enemies stay on the v0.1 48 cap. Hero uses the car row. In-boost cap stays BOOST_SPEED_CAP (58).
   const cap = wantThrust ? BOOST_SPEED_CAP : (st ? st.topSpeed : 48);
   car.speed = clamp(car.speed, -14, cap);
+  // Brake and reverse stay in the input, but along-speed cannot dead-stop.
+  scrollFloor(car);
 
   if (wantThrust && car.grounded) {
     car.grounded = false;
@@ -1180,22 +1226,69 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   car.z += (fz * car.speed + rz * car.lat) * dt;
 
   let q = queryTrack(sim.track, car.x, car.z, car.along);
-  const limit = q.width * 0.5 - (car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp);
-  if (Math.abs(q.lateral) > limit) {
-    const sign = Math.sign(q.lateral);
-    const overflow = Math.abs(q.lateral) - limit;
-    car.x -= q.rx * sign * overflow;
-    car.z -= q.rz * sign * overflow;
-    if (car.grounded && sp > 8) {
-      car.speed *= 0.965;
-      if (car.hero && sim.scrapeCd <= 0 && overflow > 0.08) {
-        sim.scrapeCd = 0.18;
-        sim.events.push({ t: "scrape" });
-        sim.trauma = Math.min(1, sim.trauma + 0.08);
+  const inset = car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp;
+  const edge = q.width * 0.5 - inset;
+  const latAbs = Math.abs(q.lateral);
+  if (latAbs > edge) {
+    const sign = Math.sign(q.lateral) || 1;
+    const depth = latAbs - edge;
+    const heroWall = car.hero && car.grounded;
+    if (!heroWall) {
+      // Hunters stay on the asphalt. No along-speed friction — that was the mine-shaft stop.
+      car.x -= q.rx * sign * depth;
+      car.z -= q.rz * sign * depth;
+      q = queryTrack(sim.track, car.x, car.z, car.along);
+    } else {
+      // Outward stick means a committed leave. A glance is pushed back toward center.
+      const steerOut = -input.steer * sign > 0.55;
+      const committed = steerOut && depth > 0.45;
+      if (!committed) {
+        const push = Math.min(depth, 18 * dt);
+        car.x -= q.rx * sign * push;
+        car.z -= q.rz * sign * push;
+        car.lat = -sign * Math.max(4, Math.abs(car.lat));
+        car.slideT = Math.max(car.slideT, WALL_SLIDE);
+        if (sim.scrapeCd <= 0 && depth > 0.08) {
+          sim.scrapeCd = 0.18;
+          sim.events.push({ t: "scrape" });
+          sim.trauma = Math.min(1, sim.trauma + 0.08);
+        }
+        q = queryTrack(sim.track, car.x, car.z, car.along);
+        const want = Math.max(SCROLL_MIN, car.speed) * dt;
+        const gained = q.s - car.along;
+        if (gained < want * 0.85) {
+          const p = poseAt(sim.track, car.along + want);
+          const latIn = clamp(q.lateral, -(edge - 0.15), edge - 0.15);
+          car.x = p.x + p.rx * latIn;
+          car.z = p.z + p.rz * latIn;
+          if (!p.gap) car.y = p.y;
+          q = queryTrack(sim.track, car.x, car.z, p.s);
+        }
+      } else {
+        car.lat += -sign * 3 * dt;
+        car.slideT = Math.max(car.slideT, 0.15);
       }
+      scrollFloor(car);
     }
-    q = queryTrack(sim.track, car.x, car.z, car.along);
   }
+  if (car.slideT > 0) {
+    car.slideT = Math.max(0, car.slideT - dt);
+    const err = wrapAngle(yawFromDir(q.tx, q.tz) - car.yaw);
+    car.yaw += clamp(err, -3.2 * dt, 3.2 * dt);
+    if (car.hero && Math.abs(q.lateral) > edge * 0.65) {
+      const s = Math.sign(q.lateral) || 1;
+      car.lat += -s * 11 * dt;
+      car.lat = clamp(car.lat, -14, 14);
+    }
+  }
+  if (car.hero && car.alive && car.invuln <= 0) {
+    const past = Math.abs(q.lateral) - q.width * 0.5;
+    car.offT = past > OFFROAD_M ? car.offT + dt : 0;
+    if (car.offT >= OFFROAD_T) {
+      offroadReset(sim, car);
+      return;
+    }
+  } else if (car.hero) car.offT = 0;
 
   if (q.gap) {
     car.grounded = false;
@@ -1942,7 +2035,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.fireCd = Math.max(0, car.fireCd - dt);
   car.flash = Math.max(0, car.flash - dt);
   car.leaving = false;
-  const cruise = car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED;
+  const cruise = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
   car.speed = cruise;
   car.along += cruise * dt;
   const p = poseAt(sim.track, car.along);
@@ -2271,6 +2364,7 @@ function stepMines(sim: Sim, dt: number) {
           if (car.spin <= 0 && car.kind !== "boss") {
             car.spin = 1.1;
             car.speed *= 0.5;
+            if (car.hero) scrollFloor(car);
             sim.score += 15;
           }
           continue;
@@ -2281,6 +2375,7 @@ function stepMines(sim: Sim, dt: number) {
         if (car.hero) {
           if (car.invuln > 0 || sim.up.shieldT > 0) break;
           car.speed *= m.owner > 0 ? 0.5 : 0.25;
+          scrollFloor(car);
           car.spin = m.owner > 0 ? 0.5 : 0.7;
           if (m.owner === 0) toast(sim, "Own mine");
           damageHero(sim, m.owner > 0 ? 22 : 28);
@@ -2367,6 +2462,7 @@ export function step(sim: Sim, dt: number) {
   stepPickups(sim, dt);
   if (sim.phase === "playing") stepWaves(sim, dt);
   if (sim.phase === "playing") stepRace(sim, dt);
+  if (hero.alive) scrollFloor(hero);
 }
 
 // ---------------------------------------------------------------- debug/test staging (used by ?debug and tests)

@@ -14,6 +14,7 @@ import {
   RIVAL_COUNT,
   RIVAL_OFFSETS,
   RIVAL_SPEED,
+  SCROLL_MIN,
   begin,
   createSim,
   raceStandings,
@@ -84,7 +85,9 @@ test("highway begin arms 3 rivals and a 30 m/s pace; other stages do not", () =>
   const moved = highway.race.paceAlong - origin;
   assert.ok(Math.abs(moved - PACE_SPEED * 2) < 1e-4, `pace moved ${moved}`);
   const gap = highway.cars[0].along - highway.race.paceAlong;
-  assert.ok(gap < -50 && gap > -70, `gap ${gap}`);
+  assert.ok(highway.cars[0].speed >= SCROLL_MIN - 1e-6, `speed ${highway.cars[0].speed}`);
+  // Scroll-lock keeps the hero at >= 22 m/s, so the 30 m/s pace only pulls away at ~8 m/s.
+  assert.ok(gap < -12 && gap > -24, `gap ${gap}`);
   assert.equal(highway.phase, "playing");
   assert.equal(highway.wave, 0);
 
@@ -106,22 +109,26 @@ test("highway begin arms 3 rivals and a 30 m/s pace; other stages do not", () =>
   }
 });
 
-test("stopped hero: rivals pull ahead on their own speed and waves stay muted", () => {
+test("braking hero stays on the scroll pace; faster rivals still pull ahead", () => {
   const sim = quiet("highway");
   const origin = sim.race.originAlong;
   const field = rivals(sim);
   const started = field.map((c) => ({ car: c, along: c.along, speed: c.raceSpeed }));
   assert.equal(raceStandings(sim).place, 3);
-  for (let i = 0; i < 180; i++) step(sim, dt);
+  sim.keysOverride = new Set(["KeyS"]);
+  const secs = 9;
+  for (let i = 0; i < 60 * secs; i++) step(sim, dt);
   assert.equal(sim.phase, "playing");
   assert.equal(sim.wave, 0);
   assert.equal(sim.queue.length, 0);
   assert.equal(sim.cars.filter((c) => c.alive && !c.hero && !c.racer).length, 0);
-  assert.ok(sim.cars[0].along - origin < 5, `hero crept ${sim.cars[0].along - origin}`);
+  assert.ok(sim.cars[0].speed >= SCROLL_MIN - 1e-6, `speed ${sim.cars[0].speed}`);
+  const heroMoved = sim.cars[0].along - origin;
+  assert.ok(heroMoved > SCROLL_MIN * (secs - 0.4), `hero moved ${heroMoved}`);
   for (const row of started) {
     assert.equal(row.car.alive, true);
     const moved = row.car.along - row.along;
-    assert.ok(Math.abs(moved - row.speed * 3) < 0.05, `rival moved ${moved} expected ${row.speed * 3}`);
+    assert.ok(Math.abs(moved - row.speed * secs) < 0.05, `rival moved ${moved} expected ${row.speed * secs}`);
   }
   assert.equal(raceStandings(sim).place, 4);
   assert.ok(raceStandings(sim).leaderGap > 60);
@@ -172,7 +179,7 @@ test("killing a rival drops them out of the field with no respawn", () => {
 test("highway DNF when the hero stays 140 m behind the last living rival for 3s", () => {
   const sim = quiet("highway");
   let sawWarn = false;
-  while (sim.phase === "playing" && sim.time < 20) {
+  while (sim.phase === "playing" && sim.time < 45) {
     step(sim, dt);
     if (sim.phase === "playing" && (sim.race.warning || sim.toast === "Falling behind")) sawWarn = true;
   }
@@ -195,7 +202,7 @@ test("highway DNF when the hero stays 140 m behind the last living rival for 3s"
 
 test("gap timers reset once the hero is back above the threshold", () => {
   const sim = quiet("highway");
-  while (sim.phase === "playing" && !sim.race.warning && sim.time < 20) step(sim, dt);
+  while (sim.phase === "playing" && !sim.race.warning && sim.time < 45) step(sim, dt);
   assert.equal(sim.race.warning, true);
   assert.ok(sim.race.warnT >= GAP_WARN_HOLD);
   const hero = sim.cars[0];

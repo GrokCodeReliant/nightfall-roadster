@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyPickup, begin, createSim, debugSpawn, debugStartWave, ENEMY, resolvedStats, spawnPickup, step, waveRoster, DRONE_ALT } from "../../src/game/sim.ts";
+import { applyPickup, begin, createSim, debugSpawn, debugStartWave, ENEMY, resolvedStats, SCROLL_MIN, spawnPickup, step, waveRoster, DRONE_ALT } from "../../src/game/sim.ts";
 import { botKeys } from "../../src/game/bot.ts";
 
 function run(sim: any, secs: number, keys: string[] | "hunt" | null, until?: () => boolean) {
@@ -147,16 +147,18 @@ test("pickups on the road are collected by driving through them; crates open whe
   assert.equal(crate.crate, false, "crate opened");
 });
 
-test("parking: enemies never pop into view; they leave forward into the fog and return from behind", () => {
+test("coasting at scroll pace: enemies never pop into view", () => {
   const sim: any = createSim();
   begin(sim);
   run(sim, 25, "hunt");
   const hero = sim.cars[0];
   const prev = sim.cars.map((c: any) => ({ alive: c.alive, along: c.along }));
   let pops = 0;
+  let minSpeed = Infinity;
   for (let i = 0; i < 60 * 40 && sim.phase === "playing"; i++) {
     sim.keysOverride = new Set([]);
     step(sim, 1 / 60);
+    minSpeed = Math.min(minSpeed, hero.speed);
     sim.cars.forEach((c: any, k: number) => {
       if (k === 0) return;
       const p = prev[k];
@@ -170,5 +172,5 @@ test("parking: enemies never pop into view; they leave forward into the fog and 
     });
   }
   assert.equal(pops, 0, "no visible teleports");
-  assert.ok(sim.recycled >= 1 || sim.lives < 3, "enemies were recycled behind the parked player");
+  assert.ok(minSpeed >= SCROLL_MIN - 1e-6, `coasting speed ${minSpeed}`);
 });
