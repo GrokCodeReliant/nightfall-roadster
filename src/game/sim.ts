@@ -1859,6 +1859,20 @@ function lateralOf(sim: Sim, car: Car) {
   return queryTrack(sim.track, car.x, car.z, car.along).lateral;
 }
 
+/** Own pace for a hunter. Never the hero's speed, so a floored hero gets passed. */
+function ownCruise(car: Car) {
+  if (car.raceSpeed > SCROLL_MIN) return car.raceSpeed;
+  switch (car.kind) {
+    case "spiker": return 36;
+    case "rammer": return 34;
+    case "drone": return 34;
+    case "gunner": return 32;
+    case "mine": return 30;
+    case "boss": return 28;
+    default: return 32;
+  }
+}
+
 function aiInput(sim: Sim, car: Car): Input {
   const hero = sim.cars[0];
   const heroLat = lateralOf(sim, hero);
@@ -1896,6 +1910,18 @@ function aiInput(sim: Sim, car: Car): Input {
   } else if (car.kind === "boss") {
     wantLat = Math.floor(sim.time / 5) % 2 === 0 ? 4.5 : -4.5;
   }
+  // Behind the hero: race past. A negative hold parks the car on his bumper and
+  // matching his speed makes it slow down with him. Stay off his centerline so
+  // the pass is not a repeated shove.
+  const behind = dS < -0.5;
+  if (behind || sim.race.armed) {
+    hold = Math.max(hold, 30);
+    const myLat = lateralOf(sim, car);
+    if (Math.abs(myLat - heroLat) < 2.5) {
+      const side = myLat > heroLat || (Math.abs(myLat - heroLat) < 0.2 && car.id % 2 === 0) ? 1 : -1;
+      wantLat = clamp(heroLat + side * 3.6, -9.2, 9.2);
+    }
+  }
   const look = 9 + Math.min(20, Math.abs(car.speed) * 0.32);
   const ahead = poseAt(sim.track, car.along + look);
   const tx = ahead.x + ahead.rx * wantLat;
@@ -1907,10 +1933,19 @@ function aiInput(sim: Sim, car: Car): Input {
   const diff = wrapAngle(desired - car.yaw);
   const steer = clamp(diff / 0.42, -1, 1);
   const err = hero.along + hold - car.along;
-  car.baseSpeed += (hero.speed - car.baseSpeed) * Math.min(1, (car.kind === "spiker" ? 0.7 : 6) * (1 / 60));
-  const refSpeed = car.kind === "spiker" ? car.baseSpeed : hero.speed;
+  const cruise = ownCruise(car);
+  if (car.baseSpeed < cruise) car.baseSpeed = cruise;
+  const follow = Math.max(hero.speed, cruise);
+  car.baseSpeed += (follow - car.baseSpeed) * Math.min(1, (car.kind === "spiker" ? 0.7 : 6) * (1 / 60));
+  let refSpeed = car.kind === "spiker" ? car.baseSpeed : hero.speed;
+  // A slower hero is not a pace car. Hunters keep their own cruise and finish ahead.
+  const racing = behind || sim.race.armed || hero.speed < cruise;
+  if (racing) refSpeed = Math.max(refSpeed, cruise);
   let target = clamp(refSpeed + clamp(err * (car.kind === "spiker" && err < 0 ? 0.35 : 0.7), -16, 16), 0, 48);
-  if (car.kind === "rammer" && car.ramCd <= 0 && hold === 0 && Math.abs(dS) < 20) target = Math.max(target, hero.speed + 9);
+  if (racing) target = Math.max(target, cruise);
+  const closeBehind = behind && hero.along - car.along < REAR_RAM_M && Math.abs(lateralOf(sim, car) - heroLat) < 6;
+  if (closeBehind && car.ramCd <= 0) target = Math.max(target, Math.min(54, cruise + 12));
+  if (car.kind === "rammer" && car.ramCd <= 0 && hold === 0 && Math.abs(dS) < 20 && !behind) target = Math.max(target, hero.speed + 9);
   if (car.kind === "boss") target = Math.min(target, 44);
   let throttle = 0.15;
   if (car.speed < target - 1) throttle = 1;
@@ -1980,7 +2015,10 @@ function stepDrone(sim: Sim, car: Car, dt: number) {
   }
   const hold = car.leaving ? 400 : car.hold;
   const err = hero.along + hold - car.along;
-  car.speed = clamp(hero.speed + clamp(err * 1.4, -22, 22), -10, 70);
+  let droneSpeed = hero.speed + clamp(err * 1.4, -22, 22);
+  const cruise = ownCruise(car);
+  if (car.along < hero.along + 4 || sim.race.armed || hero.speed < cruise) droneSpeed = Math.max(droneSpeed, cruise);
+  car.speed = clamp(droneSpeed, -10, 70);
   car.along += car.speed * dt;
   const heroLat = lateralOf(sim, hero);
   const wantLat = clamp(heroLat + Math.sin(sim.time * 0.9 + car.id) * 6, -10, 10);
@@ -2050,11 +2088,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
     const gap = hero.along - car.along;
     const heroLat = clamp(lateralOf(sim, hero), -9, 9);
     const lat = Math.abs(car.lane - heroLat);
-    // Line up while catching him, and stay on the road.
-    if (gap > 0.6 && gap < 32 && lat < 8) {
-      const step = 16 * dt;
-      car.lane = clamp(car.lane + clamp(heroLat - car.lane, -step, step), -9, 9);
-    }
+    // Already close in this lane: one burst. A car a lane over keeps its cruise and drives past.
     if (gap > 0.6 && gap < REAR_RAM_M && lat < REAR_RAM_LAT) {
       // Burst until the pass. ramCd only gates the hit, so a slower hero gets overtaken.
       speed = Math.min(54, Math.max(cruise + 14, hero.speed + 8));

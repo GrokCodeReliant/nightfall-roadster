@@ -45,8 +45,9 @@ test("idle player loses lives, then the run ends and restarts clean", () => {
   const sim: any = createSim();
   begin(sim);
   advance(sim, 45, "idle");
-  assert.ok(sim.lives < 3, `lives ${sim.lives}`);
-  // No-input driving holds SCROLL_MIN, so a parked side-swipe is no longer what ends the run.
+  // Hunters race past a floored hero instead of camping on the bumper, so coasting is not a wipe.
+  assert.equal(sim.phase, "playing");
+  assert.ok(sim.cars[0].speed >= 22, `speed ${sim.cars[0].speed}`);
   // One overlapping ram on the last life still wrecks it, and begin() comes back clean.
   sim.lives = 1;
   const hero = sim.cars[0];

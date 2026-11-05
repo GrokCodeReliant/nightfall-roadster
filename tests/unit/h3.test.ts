@@ -6,6 +6,7 @@ import {
   SCROLL_MIN,
   begin,
   createSim,
+  debugSpawn,
   step,
   type Sim,
 } from "../../src/game/sim.ts";
@@ -110,4 +111,28 @@ test("a rival close behind bursts and rams the hero harder than itself", () => {
   assert.ok(Math.abs(hero.yaw - yaw) < 0.08, `yaw ${hero.yaw - yaw}`);
   assert.equal(rival.alive, true);
   assert.equal(hero.alive, true);
+});
+
+test("a hunter just behind a floored hero passes and does not hold the bumper", () => {
+  const sim = playing("highway");
+  sim.keysOverride = new Set(["KeyS"]);
+  for (let i = 0; i < 30; i++) step(sim, dt);
+  for (const car of sim.cars) if (!car.hero) car.alive = false;
+  const hero = sim.cars[0];
+  hero.speed = SCROLL_MIN;
+  const foe = debugSpawn(sim, "rammer", -6, hero.lane);
+  assert.ok(foe);
+  assert.equal(foe.racer, false);
+  let bumper = 0;
+  const secs = 10;
+  for (let i = 0; i < 60 * secs; i++) {
+    step(sim, dt);
+    const gap = hero.along - foe.along;
+    if (gap > -1.5 && gap < 5.5) bumper += 1;
+  }
+  const ahead = foe.along - hero.along;
+  assert.equal(foe.alive, true);
+  assert.ok(ahead > 40, `ended ${ahead.toFixed(1)} m ahead`);
+  assert.ok(bumper / 60 < 1.5, `bumper ${(bumper / 60).toFixed(2)} s`);
+  assert.ok(foe.speed > SCROLL_MIN + 6, `speed ${foe.speed}`);
 });
