@@ -11,9 +11,11 @@ import {
   PLACE_NAME,
   RACE_DIST,
   RACE_FIELD_TOAST,
+  RACE_HP,
   RIVAL_COUNT,
   RIVAL_OFFSETS,
   RIVAL_SPEED,
+  RIVAL_SPEEDS,
   SCROLL_MIN,
   begin,
   createSim,
@@ -47,11 +49,13 @@ function put(sim: Sim, car: Sim["cars"][number], along: number) {
   car.speed = car.hero ? 0 : car.raceSpeed;
 }
 
-test("highway begin arms 3 rivals and a 30 m/s pace; other stages do not", () => {
+test("highway begin arms the race field and a 30 m/s pace; other stages do not", () => {
   assert.equal(PACE_SPEED, 30);
   assert.equal(RIVAL_SPEED, 30);
-  assert.equal(RIVAL_COUNT, 3);
-  assert.deepEqual(RIVAL_OFFSETS, [-40, 20, 60]);
+  assert.equal(RIVAL_COUNT, 6);
+  assert.equal(RACE_HP, 160);
+  assert.deepEqual(RIVAL_OFFSETS, [-36, -10, 18, 42, 72, 110]);
+  assert.deepEqual(RIVAL_SPEEDS, [29, 32, 30, 34, 28, 33]);
   assert.equal(GAP_WARN, 80);
   assert.equal(GAP_WARN_HOLD, 2);
   assert.equal(GAP_DNF, 140);
@@ -71,12 +75,12 @@ test("highway begin arms 3 rivals and a 30 m/s pace; other stages do not", () =>
   const field = rivals(highway);
   assert.equal(field.length, RIVAL_COUNT);
   const offs = field.map((c) => c.along - origin).sort((a, b) => a - b);
-  assert.ok(Math.abs(offs[0] - RIVAL_OFFSETS[0]) < 1, `offs ${offs}`);
-  assert.ok(Math.abs(offs[1] - RIVAL_OFFSETS[1]) < 1, `offs ${offs}`);
-  assert.ok(Math.abs(offs[2] - RIVAL_OFFSETS[2]) < 1, `offs ${offs}`);
+  RIVAL_OFFSETS.forEach((off, i) => assert.ok(Math.abs(offs[i] - off) < 1, `offs ${offs}`));
   const speeds = field.map((c) => c.raceSpeed).sort((a, b) => a - b);
-  assert.deepEqual(speeds, [RIVAL_SPEED - 2, RIVAL_SPEED, RIVAL_SPEED + 2]);
-  assert.equal(raceStandings(highway).place, 3);
+  assert.deepEqual(speeds, [...RIVAL_SPEEDS].sort((a, b) => a - b));
+  assert.ok(field.every((c) => c.hp === RACE_HP && c.maxHp === RACE_HP));
+  assert.ok(field.every((c) => c.kind === "rammer" || c.kind === "gunner"));
+  assert.equal(raceStandings(highway).place, 5);
   assert.equal(highway.cars.filter((c) => c.alive && !c.hero && !c.racer).length, 0);
 
   highway.lull = 1e9;
@@ -114,7 +118,7 @@ test("braking hero stays on the scroll pace; faster rivals still pull ahead", ()
   const origin = sim.race.originAlong;
   const field = rivals(sim);
   const started = field.map((c) => ({ car: c, along: c.along, speed: c.raceSpeed }));
-  assert.equal(raceStandings(sim).place, 3);
+  assert.equal(raceStandings(sim).place, 5);
   sim.keysOverride = new Set(["KeyS"]);
   const secs = 9;
   for (let i = 0; i < 60 * secs; i++) step(sim, dt);
@@ -131,7 +135,7 @@ test("braking hero stays on the scroll pace; faster rivals still pull ahead", ()
     // Cruise is the floor. A rival that catches the hero from behind may burst past it.
     assert.ok(moved >= row.speed * secs - 0.05, `rival moved ${moved} expected at least ${row.speed * secs}`);
   }
-  assert.equal(raceStandings(sim).place, 4);
+  assert.equal(raceStandings(sim).place, RIVAL_COUNT + 1);
   assert.ok(raceStandings(sim).leaderGap > 60);
 });
 
@@ -164,15 +168,16 @@ test("killing a rival drops them out of the field with no respawn", () => {
   const field = rivals(sim);
   const victim = field.reduce((a, b) => (a.along > b.along ? a : b));
   const score = sim.score;
+  const before = raceStandings(sim).place;
   victim.hp = 0;
   step(sim, dt);
   assert.equal(victim.alive, false);
   assert.ok(sim.score > score, "glory score still counts");
   assert.equal(sim.takedowns, 1);
-  assert.equal(raceStandings(sim).place, 2);
+  assert.equal(raceStandings(sim).place, before - 1);
   for (let i = 0; i < 120; i++) step(sim, dt);
   assert.equal(victim.alive, false);
-  assert.equal(rivals(sim).length, 2);
+  assert.equal(rivals(sim).length, RIVAL_COUNT - 1);
   assert.equal(sim.wave, 0);
   assert.equal(sim.cars.filter((c) => c.alive && !c.hero && !c.racer).length, 0);
 });

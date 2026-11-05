@@ -200,10 +200,20 @@ export const GAP_WARN_HOLD = 2;
 export const GAP_DNF = 140;
 export const GAP_DNF_HOLD = 3;
 export const RACE_DIST = 2200;
-/** Highway rivals. They race the finish at their own speed; they are not wave hunters. */
-export const RIVAL_COUNT = 3;
+/** Highway field. Six tough cars race the finish. They are not drones, mine-layers, or harassers. */
+export const RIVAL_COUNT = 6;
 export const RIVAL_SPEED = 30;
-export const RIVAL_OFFSETS = [-40, 20, 60] as const;
+export const RIVAL_OFFSETS = [-36, -10, 18, 42, 72, 110] as const;
+export const RIVAL_SPEEDS = [29, 32, 30, 34, 28, 33] as const;
+/** Race-field hit points. Wave hunters keep the smaller ENEMY rows. */
+export const RACE_HP = 160;
+/** A car this far behind a slower hero takes the pass, instead of crawling up. */
+export const PASS_WINDOW = 48;
+/** Same-lane window for the burst-ram. Lanes are 6 m apart. */
+export const LINE_LAT = 2.4;
+/** Close range for that ram. */
+export const LINE_M = 12;
+export const BURST_SPEED = 64;
 /** Forward pace while playing. Brake and reverse cannot go under this. */
 export const SCROLL_MIN = 22;
 /** How close behind the hero a rival must be before the rear-ram burst. */
@@ -2040,8 +2050,8 @@ function stepDrone(sim: Sim, car: Car, dt: number) {
   }
 }
 
-const RIVAL_LANES = [-6, 0, 6];
-const RIVAL_KINDS: EnemyKind[] = ["rammer", "gunner", "rammer"];
+const RIVAL_LANES = [-6, 6, -3, 3, 9, -9];
+const RIVAL_KINDS: EnemyKind[] = ["rammer", "gunner", "rammer", "gunner", "rammer", "gunner"];
 const RIVAL_SHOT_GAP = 3.2;
 
 function spawnRivals(sim: Sim) {
@@ -2059,15 +2069,52 @@ function spawnRivals(sim: Sim) {
     const car = spawnEnemy(sim, RIVAL_KINDS[i], off, RIVAL_LANES[i]);
     if (!car) continue;
     car.racer = true;
-    car.raceSpeed = RIVAL_SPEED + (i - 1) * 2;
+    car.raceSpeed = RIVAL_SPEEDS[i] ?? RIVAL_SPEED;
     car.speed = car.raceSpeed;
     car.baseSpeed = car.raceSpeed;
+    car.hp = car.maxHp = RACE_HP;
     car.fireCd = 2.4 + i * 0.35;
     car.recover = 0;
     car.leaving = false;
     car.hold = 0;
     car.burst = 0;
   }
+}
+
+/**
+ * One overtake. Lined up in-lane and close: a huge burst, one ram, then the car
+ * is placed ahead and drops back to its own cruise. A slower hero ("see ya")
+ * gets the same burst from any car already behind, without parking on the bumper.
+ * Returns true when this frame owned the car's movement.
+ */
+function tryRacePass(sim: Sim, car: Car, dt: number) {
+  const hero = sim.cars[0];
+  if (!hero.alive || sim.phase !== "playing") return false;
+  const cruise = Math.max(SCROLL_MIN, car.raceSpeed > SCROLL_MIN ? car.raceSpeed : ownCruise(car));
+  const gap = hero.along - car.along;
+  if (gap <= 0.3) return false;
+  const heroLat = clamp(lateralOf(sim, hero), -9, 9);
+  const lat = Math.min(Math.abs(car.lane - heroLat), Math.abs(lateralOf(sim, car) - heroLat));
+  const lined = gap < LINE_M && lat < LINE_LAT;
+  const seeYa = gap < PASS_WINDOW && hero.speed <= cruise + 6;
+  if (!lined && !seeYa) return false;
+  const speed = Math.max(cruise, BURST_SPEED);
+  const next = car.along + speed * dt;
+  const lunging = lined && hero.along - next < 4;
+  car.speed = speed;
+  car.along = lunging ? hero.along + 8 : next;
+  if (!car.racer && lined) car.lane = heroLat;
+  const p = poseAt(sim.track, car.along);
+  car.x = p.x + p.rx * car.lane;
+  car.z = p.z + p.rz * car.lane;
+  car.y = p.y;
+  car.grounded = true;
+  car.yaw = yawFromDir(p.tx, p.tz);
+  car.lastAlong = car.along;
+  car.lat = 0;
+  car.vy = 0;
+  if (lunging && car.ramCd <= 0) ram(sim, hero, car, { heroDmg: REAR_RAM_HERO, selfDmg: REAR_RAM_SELF, shove: false });
+  return true;
 }
 
 /** Keep racing the finish. Cruise does not pace-match the hero, so a slower hero gets passed. Close behind his rear, burst and ram. */
@@ -2082,34 +2129,19 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.leaving = false;
   const cruise = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
   const hero = sim.cars[0];
-  let speed = cruise;
-  let rear = false;
-  if (hero.alive && sim.phase === "playing") {
-    const gap = hero.along - car.along;
-    const heroLat = clamp(lateralOf(sim, hero), -9, 9);
-    const lat = Math.abs(car.lane - heroLat);
-    // Already close in this lane: one burst. A car a lane over keeps its cruise and drives past.
-    if (gap > 0.6 && gap < REAR_RAM_M && lat < REAR_RAM_LAT) {
-      // Burst until the pass. ramCd only gates the hit, so a slower hero gets overtaken.
-      speed = Math.min(54, Math.max(cruise + 14, hero.speed + 8));
-      if (car.ramCd <= 0) rear = true;
-    }
+  if (!tryRacePass(sim, car, dt)) {
+    car.speed = cruise;
+    car.along += cruise * dt;
+    const p = poseAt(sim.track, car.along);
+    car.x = p.x + p.rx * car.lane;
+    car.z = p.z + p.rz * car.lane;
+    car.y = p.y;
+    car.grounded = true;
+    car.yaw = yawFromDir(p.tx, p.tz);
+    car.lastAlong = car.along;
+    car.lat = 0;
+    car.vy = 0;
   }
-  car.speed = speed;
-  // A burst that would sit inside the hero lunges past him instead of pinning the gap.
-  if (hero.alive && speed > cruise + 1) {
-    const next = car.along + speed * dt;
-    car.along = hero.along - next < 2.6 ? hero.along + 4.2 : next;
-  } else car.along += speed * dt;
-  const p = poseAt(sim.track, car.along);
-  car.x = p.x + p.rx * car.lane;
-  car.z = p.z + p.rz * car.lane;
-  car.y = p.y;
-  car.grounded = true;
-  car.yaw = yawFromDir(p.tx, p.tz);
-  car.lastAlong = car.along;
-  car.lat = 0;
-  car.vy = 0;
   if (!car.alive || sim.phase !== "playing") return;
   if (!hero.alive) return;
   const { fx, fz } = fxDir(car.yaw);
@@ -2120,9 +2152,8 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   const lat = Math.abs(lateralOf(sim, car) - lateralOf(sim, hero));
   const dS = hero.along - car.along;
   const inCone = dist < 22 && ahead > -8 && ahead < 20 && lat < 8 && Math.abs(hero.y - car.y) < 3.5;
-  if (rear && car.ramCd <= 0 && dist < 6.5 && dS > -5 && dS < 6.5) {
-    ram(sim, hero, car, { heroDmg: REAR_RAM_HERO, selfDmg: REAR_RAM_SELF, shove: false });
-  } else if (inCone && car.ramCd <= 0 && dist < 4.6 && Math.abs(dS) < 4) ram(sim, hero, car);
+  // A car still behind does not get a soft-touch. The burst lunge is the only rear hit.
+  if (inCone && car.ramCd <= 0 && dist < 4.6 && dS <= 0 && dS > -4) ram(sim, hero, car);
   if (!inCone) return;
   if (car.alive && car.fireCd <= 0 && hero.alive && sim.phase === "playing") {
     enemyShot(sim, car);
@@ -2155,6 +2186,8 @@ function stepEnemy(sim: Sim, car: Car, dt: number) {
     stepDrone(sim, car, dt);
     return;
   }
+  // Rammers and gunners are race cars. Drones, mine-layers, and harassers are not.
+  if ((car.kind === "rammer" || car.kind === "gunner") && tryRacePass(sim, car, dt)) return;
   drive(sim, car, aiInput(sim, car), dt, true);
   if (!car.alive) return;
   // Catch-up assist (enemies only; never applied to the player): drive() caps cars at
