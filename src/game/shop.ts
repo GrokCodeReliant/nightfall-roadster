@@ -7,10 +7,16 @@ export type MineArmTier = keyof typeof MINE_ARM;
 /** Quick-arm mines: first buy, then the second. */
 export const MINE_FUSE_PRICE = [45, 65] as const;
 
-/** Highway RaceTrial purse. Score does not convert to Credits on that finish. */
-export const RACE_PURSE_HELD = 100;
+/**
+ * Highway RaceTrial purse. Score does not convert to Credits on that finish.
+ * Placed finishes also add RACE_LIFE_BONUS per life remaining, capped at RACE_LIFE_BONUS_MAX.
+ * DNF pays the flat row and ignores lives.
+ */
+export const RACE_PLACE_PURSE = { 1: 180, 2: 120, 3: 70, 4: 40 } as const;
 export const RACE_PURSE_DNF = 25;
-export type RacePurse = "held" | "dnf";
+export const RACE_LIFE_BONUS = 20;
+export const RACE_LIFE_BONUS_MAX = 60;
+export type RacePurse = 1 | 2 | 3 | 4 | "dnf";
 
 export const SHOP_CATALOG = [
   { id: "armor", label: "Armor plate", price: 40 },
@@ -61,27 +67,40 @@ export function creditsForScore(score: number) {
   return Math.floor(score / 10);
 }
 
-export function highwayPurse(reason: string | undefined): RacePurse | null {
-  if (reason === "Pack held") return "held";
-  if (reason === "Fell behind the pack") return "dnf";
+export function highwayPurse(result: { reason?: string; place?: number } | null | undefined): RacePurse | null {
+  if (!result) return null;
+  const place = result.place;
+  if (place === 1 || place === 2 || place === 3 || place === 4) return place;
+  if (place === 0 || result.reason === "DNF" || result.reason === "Fell behind the field") return "dnf";
   return null;
+}
+
+/** Place table plus the lives bonus. DNF is 25 and never adds lives. */
+export function racePayout(purse: RacePurse, lives: number) {
+  if (purse === "dnf") return { purse: RACE_PURSE_DNF, livesBonus: 0, total: RACE_PURSE_DNF };
+  const base = RACE_PLACE_PURSE[purse];
+  const n = Number.isFinite(lives) ? Math.max(0, Math.floor(lives)) : 0;
+  const livesBonus = Math.min(RACE_LIFE_BONUS_MAX, n * RACE_LIFE_BONUS);
+  return { purse: base, livesBonus, total: base + livesBonus };
 }
 
 /**
  * Non-highway finishes bank floor(score/10).
- * A highway RaceTrial finish banks only the flat purse (Pack held 100, DNF 25).
+ * A highway RaceTrial finish banks only the place table (1st 180 … 4th 40, DNF 25)
+ * plus 20 Credits per life remaining on a placed finish.
  * `already` gains nothing, so a finished run cannot bank twice.
  */
 export function bankRun(
   credits: number,
   score: number,
   already: boolean,
-  race?: { highway: boolean; purse: RacePurse | null } | null,
+  race?: { highway: boolean; purse: RacePurse | null; lives?: number } | null,
 ) {
   if (already) return { credits, gained: 0 };
   const base = Math.max(0, credits);
   if (race?.highway) {
-    const gained = race.purse === "held" ? RACE_PURSE_HELD : race.purse === "dnf" ? RACE_PURSE_DNF : 0;
+    if (race.purse == null) return { credits: base, gained: 0 };
+    const gained = racePayout(race.purse, race.lives ?? 0).total;
     return { credits: base + gained, gained };
   }
   const gained = creditsForScore(score);

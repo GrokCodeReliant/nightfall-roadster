@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { CAR_STATS, GAP_DNF, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, raceStandings, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
 import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
 import { botKeys } from "./bot";
@@ -194,9 +194,9 @@ export function RoadsterGame() {
   const shopOpenRef = useRef(false);
   const confirmRef = useRef(false);
   const raceRef = useRef<HTMLDivElement>(null);
+  const racePlaceRef = useRef<HTMLParagraphElement>(null);
   const raceGapRef = useRef<HTMLParagraphElement>(null);
   const raceWarnRef = useRef<HTMLParagraphElement>(null);
-  const raceBarRef = useRef<HTMLSpanElement>(null);
   const padActions = useRef<(ev: PadUiEvent) => void>(() => {});
   shopOpenRef.current = shopOpen;
   settingsOpenRef.current = settingsOpen;
@@ -464,7 +464,7 @@ export function RoadsterGame() {
             prev.credits,
             sim.result.score,
             false,
-            highway ? { highway: true, purse: highwayPurse(sim.result.reason) } : null,
+            highway ? { highway: true, purse: highwayPurse(sim.result), lives: sim.lives } : null,
           );
           const next = writeSave({
             bestScore: Math.max(prev.bestScore, sim.result.score),
@@ -579,21 +579,18 @@ export function RoadsterGame() {
       if (!race.armed) raceEl.hidden = true;
       else {
         raceEl.hidden = false;
-        const gap = hero.along - race.paceAlong;
+        const stand = raceStandings(sim);
+        if (racePlaceRef.current) racePlaceRef.current.textContent = `P${stand.place}`;
         if (raceGapRef.current) {
-          const metres = Math.abs(Math.round(gap));
-          raceGapRef.current.textContent = `${gap >= 0 ? "AHEAD" : "BEHIND"} ${metres} m`;
-        }
-        const span = raceBarRef.current;
-        if (span) {
-          const t = Math.max(-1, Math.min(1, gap / GAP_DNF));
-          span.style.left = t >= 0 ? "50%" : `${(50 + t * 50).toFixed(1)}%`;
-          span.style.width = `${(Math.abs(t) * 50).toFixed(1)}%`;
-          span.style.background = t >= 0 ? "#c6a36a" : "#e23b2f";
+          if (stand.place <= 1) {
+            raceGapRef.current.textContent = stand.nextGap > 0.5 ? `NEXT ${Math.round(stand.nextGap)} m` : "CLEAR";
+          } else {
+            raceGapRef.current.textContent = `LEADER ${Math.round(stand.leaderGap)} m`;
+          }
         }
         if (raceWarnRef.current) raceWarnRef.current.textContent = race.warning ? "Falling behind" : "";
         raceEl.classList.toggle("is-warn", race.warning);
-        raceEl.classList.toggle("is-behind", gap < -GAP_WARN);
+        raceEl.classList.toggle("is-behind", stand.behindField < -GAP_WARN);
       }
     }
     if (fuelRef.current) fuelRef.current.style.transform = `scaleX(${hero.fuel / hero.maxFuel})`;
@@ -868,8 +865,8 @@ export function RoadsterGame() {
               <p className="nf-stat" ref={lapRef}>1</p>
               <p className="nf-sub" ref={posRef}>Kills 0</p>
               <div className="nf-race" ref={raceRef} hidden>
-                <p className="nf-race-gap" ref={raceGapRef}>AHEAD 0 m</p>
-                <div className="nf-race-track" aria-hidden="true"><span ref={raceBarRef} /></div>
+                <p className="nf-race-place" ref={racePlaceRef}>P1</p>
+                <p className="nf-race-gap" ref={raceGapRef}>NEXT 0 m</p>
                 <p className="nf-race-warn" ref={raceWarnRef} />
               </div>
             </div>
@@ -1123,6 +1120,13 @@ export function RoadsterGame() {
             <div className="nf-scroll">
               <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
               <h2 className={result.reason ? "nf-title-sm nf-race-headline" : "nf-title-sm"}>{result.reason ?? "Wrecked"}</h2>
+              {result.purse != null && (
+                <div className="nf-race-pay">
+                  <p className="nf-kicker">Purse</p>
+                  <p className="nf-race-purse">+{result.purse}</p>
+                  {(result.livesBonus ?? 0) > 0 && <p className="nf-race-lives">Lives +{result.livesBonus}</p>}
+                </div>
+              )}
               <div className="nf-rows">
                 <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
                 <div><span>Wave reached</span><strong>{result.wave}</strong></div>
@@ -1185,7 +1189,7 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
   for (let i = sim.cars.length - 1; i >= 0; i--) {
     const c = sim.cars[i];
     if (!c.alive) continue;
-    ctx.fillStyle = c.hero ? "#c4161c" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
+    ctx.fillStyle = c.hero ? "#c4161c" : c.racer ? "#f0d38a" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
     ctx.beginPath();
     ctx.arc(X(c.x, c.z), Y(c.x, c.z), c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();

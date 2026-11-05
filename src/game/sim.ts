@@ -11,7 +11,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { emptyShop, heroMineArm, type ShopSave } from "./shop";
+import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
 export type Fx =
@@ -155,6 +155,10 @@ export type Car = {
   weaveT: number;
   leaving: boolean;
   leaveT: number;
+  /** Highway rival. Not a wave hunter: no respawn, no hero-relative orbit. */
+  racer: boolean;
+  /** Cruise speed while `racer` is set. Ignored for wave hunters. */
+  raceSpeed: number;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -177,6 +181,12 @@ export type Result = {
   falls: number;
   /** RaceTrial headline. Absent on a normal wreck. */
   reason?: string;
+  /** 1–4 on a placed highway finish. 0 on a highway DNF. Absent off the highway. */
+  place?: number;
+  /** Place-table Credits, not including the lives bonus. */
+  purse?: number;
+  /** +20 per life remaining on a placed finish. 0 on DNF. */
+  livesBonus?: number;
 };
 
 /** Highway RaceTrial. Other stage ids leave `armed` false. */
@@ -186,9 +196,14 @@ export const GAP_WARN_HOLD = 2;
 export const GAP_DNF = 140;
 export const GAP_DNF_HOLD = 3;
 export const RACE_DIST = 2200;
-export const PACK_HELD_BONUS = 800;
-/** Shown once when a highway RaceTrial begins. GAP_WARN / GAP_DNF stay put. */
-export const RACE_HOLD_TOAST = "Hold the pack — don’t fall behind";
+/** Highway rivals. They race the finish at their own speed; they are not wave hunters. */
+export const RIVAL_COUNT = 3;
+export const RIVAL_SPEED = 30;
+export const RIVAL_OFFSETS = [-40, 20, 60] as const;
+/** Shown once when a highway RaceTrial begins. */
+export const RACE_FIELD_TOAST = "Race the field — place pays";
+export const FIELD_DNF = "Fell behind the field";
+export const PLACE_NAME = ["", "1st", "2nd", "3rd", "4th"] as const;
 /** Enemy mine fuse. Hero drops use MINE_ARM. */
 export const ENEMY_MINE_ARM = 0.6;
 
@@ -199,11 +214,14 @@ export type RaceTrial = {
   warnT: number;
   dnfT: number;
   warning: boolean;
+  /** Hero crossed RACE_DIST. Place is frozen. */
   held: boolean;
+  /** Frozen place once the hero finishes or DNFs. 0 while the race is live. */
+  place: number;
 };
 
 function freshRace(): RaceTrial {
-  return { armed: false, paceAlong: 0, originAlong: 0, warnT: 0, dnfT: 0, warning: false, held: false };
+  return { armed: false, paceAlong: 0, originAlong: 0, warnT: 0, dnfT: 0, warning: false, held: false, place: 0 };
 }
 
 export type Sim = {
@@ -515,6 +533,8 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     weaveT: 0,
     leaving: false,
     leaveT: 0,
+    racer: false,
+    raceSpeed: 0,
   };
 }
 
@@ -633,6 +653,8 @@ function park(sim: Sim) {
     const c = sim.cars[i];
     c.alive = false;
     c.y = -40;
+    c.racer = false;
+    c.raceSpeed = 0;
   }
 }
 
@@ -670,7 +692,7 @@ export function begin(sim: Sim) {
   sim.prevMine = false;
   sim.events.length = 0;
   armRace(sim);
-  if (sim.race.armed) toast(sim, RACE_HOLD_TOAST, true);
+  if (sim.race.armed) toast(sim, RACE_FIELD_TOAST, true);
   else toast(sim, "Hunters inbound. Survive.", true);
 }
 
@@ -680,10 +702,12 @@ function armRace(sim: Sim) {
   sim.race.dnfT = 0;
   sim.race.warning = false;
   sim.race.held = false;
+  sim.race.place = 0;
   if (sim.stageId === "highway") {
     sim.race.armed = true;
     sim.race.paceAlong = along;
     sim.race.originAlong = along;
+    spawnRivals(sim);
     return;
   }
   sim.race.armed = false;
@@ -1234,12 +1258,25 @@ function gameOver(sim: Sim) {
     takedowns: sim.takedowns,
     falls: sim.falls,
   };
+  if (sim.race.armed && !sim.race.held) {
+    const pay = racePayout("dnf", sim.lives);
+    sim.race.place = 0;
+    sim.result.reason = "DNF";
+    sim.result.place = 0;
+    sim.result.purse = pay.purse;
+    sim.result.livesBonus = 0;
+    toast(sim, "DNF", true);
+  } else {
+    toast(sim, "Wrecked for good", true);
+  }
   sim.events.push({ t: "over" });
-  toast(sim, "Wrecked for good", true);
 }
 
-function finishRace(sim: Sim, headline: string) {
+function finishRace(sim: Sim, headline: string, place: number) {
   sim.phase = "finished";
+  const key: RacePurse = place >= 1 && place <= 4 ? (place as 1 | 2 | 3 | 4) : "dnf";
+  const pay = racePayout(key, sim.lives);
+  sim.race.place = place;
   sim.result = {
     time: sim.time,
     score: Math.round(sim.score),
@@ -1247,18 +1284,72 @@ function finishRace(sim: Sim, headline: string) {
     takedowns: sim.takedowns,
     falls: sim.falls,
     reason: headline,
+    place,
+    purse: pay.purse,
+    livesBonus: pay.livesBonus,
   };
   sim.events.push({ t: "over" });
   toast(sim, headline, true);
 }
 
-/** Highway pace ghost. Combat waves are untouched. Idle peel is not the punish. */
+/** Last living rival, or the pace ghost when the field is gone. */
+function fieldReference(sim: Sim) {
+  let last: number | null = null;
+  for (let i = 1; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    if (!car.alive || !car.racer) continue;
+    if (last == null || car.along < last) last = car.along;
+  }
+  return last == null ? sim.race.paceAlong : last;
+}
+
+export type RaceStanding = {
+  place: number;
+  /** Metres the hero is behind the furthest living rival. 0 when the hero leads or the field is empty. */
+  leaderGap: number;
+  /** Metres to the next car: the one ahead, or the one behind when the hero leads. */
+  nextGap: number;
+  /** hero.along − last living rival. Negative when the hero is behind the field. */
+  behindField: number;
+};
+
+/** Live place from the hero plus living rivals. Dead rivals do not occupy a place. */
+export function raceStandings(sim: Sim): RaceStanding {
+  const hero = sim.cars[0];
+  const alongs: number[] = [];
+  for (let i = 1; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    if (car.alive && car.racer) alongs.push(car.along);
+  }
+  let ahead = 0;
+  let leader = hero.along;
+  let nextAhead = Infinity;
+  let bestBehind = -Infinity;
+  for (const along of alongs) {
+    if (along > leader) leader = along;
+    if (along > hero.along) {
+      ahead += 1;
+      const gap = along - hero.along;
+      if (gap < nextAhead) nextAhead = gap;
+    } else if (along > bestBehind) bestBehind = along;
+  }
+  const place = ahead + 1;
+  const leaderGap = Math.max(0, leader - hero.along);
+  const nextGap = place <= 1 ? (bestBehind === -Infinity ? 0 : hero.along - bestBehind) : nextAhead === Infinity ? leaderGap : nextAhead;
+  const last = alongs.length ? Math.min(...alongs) : hero.along;
+  return { place, leaderGap, nextGap, behindField: hero.along - last };
+}
+
+/**
+ * Highway race rail. Rivals are the punish: falling 140 m behind the last living
+ * rival for 3 s is a DNF. The 30 m/s pace ghost is only the backup when none remain.
+ */
 function stepRace(sim: Sim, dt: number) {
   const race = sim.race;
   if (!race.armed || sim.phase !== "playing") return;
   race.paceAlong += PACE_SPEED * dt;
   const hero = sim.cars[0];
-  const gap = hero.along - race.paceAlong;
+  const gap = hero.along - fieldReference(sim);
   if (gap < -GAP_WARN) race.warnT += dt;
   else race.warnT = 0;
   if (gap < -GAP_DNF) race.dnfT += dt;
@@ -1267,13 +1358,13 @@ function stepRace(sim: Sim, dt: number) {
   if (warn && !race.warning) toast(sim, "Falling behind", true);
   race.warning = warn;
   if (race.dnfT >= GAP_DNF_HOLD) {
-    finishRace(sim, "Fell behind the pack");
+    finishRace(sim, FIELD_DNF, 0);
     return;
   }
   if (!race.held && hero.along - race.originAlong >= RACE_DIST) {
     race.held = true;
-    sim.score += PACK_HELD_BONUS;
-    finishRace(sim, "Pack held");
+    const place = Math.min(4, raceStandings(sim).place);
+    finishRace(sim, PLACE_NAME[place] || "4th", place);
   }
 }
 
@@ -1365,6 +1456,8 @@ function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
   car.weaveT = kind === "spiker" ? 0 : 3;
   car.baseSpeed = hero.speed;
   car.leaving = false;
+  car.racer = false;
+  car.raceSpeed = 0;
   car.hold = kind === "gunner" ? (s > hero.along ? 24 : -12) : kind === "drone" ? 18 : kind === "boss" ? 28 : kind === "mine" ? 30 : s > hero.along ? 1 : -1;
   car.holdT = 6 + Math.random() * 4;
   if (kind === "drone") {
@@ -1375,6 +1468,8 @@ function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
 }
 
 function stepWaves(sim: Sim, dt: number) {
+  // Highway RaceTrial: no endless hunter farm. Rivals spawned at begin() are the field.
+  if (sim.race.armed) return;
   if (sim.lull > 0) {
     sim.lull -= dt;
     if (sim.lull <= 0) startWave(sim, sim.wave + 1);
@@ -1807,7 +1902,82 @@ function stepDrone(sim: Sim, car: Car, dt: number) {
   }
 }
 
+const RIVAL_LANES = [-6, 0, 6];
+const RIVAL_KINDS: EnemyKind[] = ["rammer", "gunner", "rammer"];
+const RIVAL_SHOT_GAP = 3.2;
+
+function spawnRivals(sim: Sim) {
+  const hero = sim.cars[0];
+  for (let i = 0; i < RIVAL_COUNT; i++) {
+    let off: number = RIVAL_OFFSETS[i];
+    if (!spawnPointOk(sim, hero.along + off)) {
+      for (const tweak of [20, -20, 40, -40]) {
+        if (spawnPointOk(sim, hero.along + off + tweak)) {
+          off += tweak;
+          break;
+        }
+      }
+    }
+    const car = spawnEnemy(sim, RIVAL_KINDS[i], off, RIVAL_LANES[i]);
+    if (!car) continue;
+    car.racer = true;
+    car.raceSpeed = RIVAL_SPEED + (i - 1) * 2;
+    car.speed = car.raceSpeed;
+    car.baseSpeed = car.raceSpeed;
+    car.fireCd = 2.4 + i * 0.35;
+    car.recover = 0;
+    car.leaving = false;
+    car.hold = 0;
+    car.burst = 0;
+  }
+}
+
+/** Keep racing the finish. One shot every few seconds inside a short cone. No orbit, no respawn. */
+function stepRival(sim: Sim, car: Car, dt: number) {
+  if (car.hp <= 0) {
+    killAI(sim, car);
+    return;
+  }
+  car.ramCd = Math.max(0, car.ramCd - dt);
+  car.fireCd = Math.max(0, car.fireCd - dt);
+  car.flash = Math.max(0, car.flash - dt);
+  car.leaving = false;
+  const cruise = car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED;
+  car.speed = cruise;
+  car.along += cruise * dt;
+  const p = poseAt(sim.track, car.along);
+  car.x = p.x + p.rx * car.lane;
+  car.z = p.z + p.rz * car.lane;
+  car.y = p.y;
+  car.grounded = true;
+  car.yaw = yawFromDir(p.tx, p.tz);
+  car.lastAlong = car.along;
+  car.lat = 0;
+  car.vy = 0;
+  if (!car.alive || sim.phase !== "playing") return;
+  const hero = sim.cars[0];
+  if (!hero.alive) return;
+  const { fx, fz } = fxDir(car.yaw);
+  const dx = hero.x - car.x;
+  const dz = hero.z - car.z;
+  const dist = Math.hypot(dx, dz);
+  const ahead = dx * fx + dz * fz;
+  const lat = Math.abs(lateralOf(sim, car) - lateralOf(sim, hero));
+  const dS = hero.along - car.along;
+  const inCone = dist < 22 && ahead > -8 && ahead < 20 && lat < 8 && Math.abs(hero.y - car.y) < 3.5;
+  if (!inCone) return;
+  if (car.ramCd <= 0 && dist < 4.6 && Math.abs(dS) < 4) ram(sim, hero, car);
+  if (car.alive && car.fireCd <= 0 && hero.alive && sim.phase === "playing") {
+    enemyShot(sim, car);
+    car.fireCd = RIVAL_SHOT_GAP;
+  }
+}
+
 function stepEnemy(sim: Sim, car: Car, dt: number) {
+  if (car.racer) {
+    stepRival(sim, car, dt);
+    return;
+  }
   const hero = sim.cars[0];
   car.ramCd = Math.max(0, car.ramCd - dt);
   car.dropCd = Math.max(0, car.dropCd - dt);
@@ -2159,8 +2329,18 @@ export function step(sim: Sim, dt: number) {
   sim.trauma = Math.max(0, sim.trauma - dt * 1.5);
 
   const hero = sim.cars[0];
-  ensureTrack(sim.track, hero.along + 800);
-  trimTrack(sim.track, hero.along - 260);
+  let fore = hero.along;
+  let back = hero.along;
+  if (sim.race.armed) {
+    for (let i = 1; i < sim.cars.length; i++) {
+      const car = sim.cars[i];
+      if (!car.alive || !car.racer) continue;
+      if (car.along > fore) fore = car.along;
+      if (car.along < back) back = car.along;
+    }
+  }
+  ensureTrack(sim.track, fore + 800);
+  trimTrack(sim.track, back - 260);
 
   const input = readInput(sim);
   hero.invuln = Math.max(0, hero.invuln - dt);
@@ -2219,6 +2399,7 @@ export function threatHot(sim: Sim, car: Car) {
   const hero = sim.cars[0];
   const dS = car.along - hero.along;
   const d = Math.hypot(hero.x - car.x, hero.z - car.z);
+  if (car.racer) return car.fireCd < 0.45 && d < 24 && dS > -20 && dS < 22;
   switch (car.kind) {
     case "gunner":
       return car.burst > 0 || (car.fireCd < 0.45 && d < 42);

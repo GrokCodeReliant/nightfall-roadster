@@ -35,6 +35,7 @@ type CarView = {
 
 type EnemyInst = { root: THREE.Object3D; wheels: Wheel[]; rotors: THREE.Object3D[]; turret: THREE.Object3D | null; rearTurret: boolean };
 
+const RIVAL_TINT = [0xf0d38a, 0x8ec8ff, 0xff5a4a];
 const KIND_COLOR: Record<Kind, number> = {
   hero: 0xc4161c,
   rammer: 0x4a3226,
@@ -1505,6 +1506,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         view.body.color.setHex(KIND_COLOR[car.kind]);
         useKind(view, car.kind);
       }
+      if (!car.hero) view.body.color.setHex(car.racer ? RIVAL_TINT[(car.id - 1) % RIVAL_TINT.length] : KIND_COLOR[car.kind]);
       const act = view.active;
       if (act && !car.hero) {
         for (const r of act.rotors) r.rotation.y += dt * 40;

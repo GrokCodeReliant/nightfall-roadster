@@ -5,14 +5,17 @@ import { STAGES } from "../../src/game/world.ts";
 import {
   MINE_ARM,
   MINE_FUSE_PRICE,
+  RACE_LIFE_BONUS,
+  RACE_LIFE_BONUS_MAX,
+  RACE_PLACE_PURSE,
   RACE_PURSE_DNF,
-  RACE_PURSE_HELD,
   SHOP_CATALOG,
   bankRun,
   buyUpgrade,
   creditsForScore,
   emptyShop,
   heroMineArm,
+  racePayout,
   sanitizeShop,
   shopComing,
   type ShopId,
@@ -45,18 +48,34 @@ test("credits bank floor(score/10) once per run", () => {
   assert.equal(bankRun(classic.credits, 500, true).gained, 0);
 });
 
-test("highway RaceTrial banks a flat purse and ignores score", () => {
-  assert.equal(RACE_PURSE_HELD, 100);
+test("highway RaceTrial banks place plus lives and ignores score", () => {
+  assert.deepEqual(RACE_PLACE_PURSE, { 1: 180, 2: 120, 3: 70, 4: 40 });
   assert.equal(RACE_PURSE_DNF, 25);
-  const held = bankRun(10, 5000, false, { highway: true, purse: "held" });
-  assert.deepEqual(held, { credits: 110, gained: 100 });
-  const dnf = bankRun(10, 5000, false, { highway: true, purse: "dnf" });
+  assert.equal(RACE_LIFE_BONUS, 20);
+  assert.equal(RACE_LIFE_BONUS_MAX, 60);
+  assert.deepEqual(racePayout(1, 3), { purse: 180, livesBonus: 60, total: 240 });
+  assert.deepEqual(racePayout(1, 2), { purse: 180, livesBonus: 40, total: 220 });
+  assert.deepEqual(racePayout(2, 2), { purse: 120, livesBonus: 40, total: 160 });
+  assert.deepEqual(racePayout(3, 1), { purse: 70, livesBonus: 20, total: 90 });
+  assert.deepEqual(racePayout(4, 3), { purse: 40, livesBonus: 60, total: 100 });
+  assert.deepEqual(racePayout("dnf", 3), { purse: 25, livesBonus: 0, total: 25 });
+  assert.equal(racePayout(1, 9).livesBonus, 60);
+
+  const first = bankRun(10, 5000, false, { highway: true, purse: 1, lives: 3 });
+  assert.deepEqual(first, { credits: 250, gained: 240 });
+  const second = bankRun(10, 5000, false, { highway: true, purse: 2, lives: 2 });
+  assert.deepEqual(second, { credits: 170, gained: 160 });
+  const third = bankRun(10, 5000, false, { highway: true, purse: 3, lives: 1 });
+  assert.deepEqual(third, { credits: 100, gained: 90 });
+  const fourth = bankRun(10, 5000, false, { highway: true, purse: 4, lives: 3 });
+  assert.deepEqual(fourth, { credits: 110, gained: 100 });
+  const dnf = bankRun(10, 5000, false, { highway: true, purse: "dnf", lives: 3 });
   assert.deepEqual(dnf, { credits: 35, gained: 25 });
-  const wreck = bankRun(10, 5000, false, { highway: true, purse: null });
+  const wreck = bankRun(10, 5000, false, { highway: true, purse: null, lives: 3 });
   assert.deepEqual(wreck, { credits: 10, gained: 0 });
-  const twice = bankRun(held.credits, 5000, true, { highway: true, purse: "held" });
+  const twice = bankRun(first.credits, 5000, true, { highway: true, purse: 1, lives: 3 });
   assert.equal(twice.gained, 0);
-  assert.equal(twice.credits, 110);
+  assert.equal(twice.credits, 250);
 });
 
 test("shop spends, caps, and refuses a short balance", () => {
