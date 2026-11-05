@@ -128,7 +128,8 @@ test("braking hero stays on the scroll pace; faster rivals still pull ahead", ()
   for (const row of started) {
     assert.equal(row.car.alive, true);
     const moved = row.car.along - row.along;
-    assert.ok(Math.abs(moved - row.speed * secs) < 0.05, `rival moved ${moved} expected ${row.speed * secs}`);
+    // Cruise is the floor. A rival that catches the hero from behind may burst past it.
+    assert.ok(moved >= row.speed * secs - 0.05, `rival moved ${moved} expected at least ${row.speed * secs}`);
   }
   assert.equal(raceStandings(sim).place, 4);
   assert.ok(raceStandings(sim).leaderGap > 60);
@@ -141,7 +142,7 @@ test("a rival in the cone fires once and keeps its cruise speed", () => {
   rival.lane = hero.lane;
   rival.fireCd = 0;
   rival.ramCd = 10;
-  rival.along = hero.along - 6;
+  rival.along = hero.along + 5;
   const before = rival.along;
   const speed = rival.raceSpeed;
   sim.events.length = 0;

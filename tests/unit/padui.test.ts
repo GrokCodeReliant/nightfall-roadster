@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyGamepad, begin, createSim, hasBoost, readInput, step, type GamepadSample } from "../../src/game/sim.ts";
-import { TITLE_FULL, TITLE_SETTINGS, TITLE_SHOP, TITLE_START, emptyPadUi, maskPadCombat, stepPadUi, type PadUiOpts, type PadUiState } from "../../src/game/padui.ts";
+import { TITLE_FULL, TITLE_SETTINGS, TITLE_SHOP, TITLE_STAGE, TITLE_START, emptyPadUi, maskPadCombat, stepPadUi, type PadUiOpts, type PadUiState } from "../../src/game/padui.ts";
 import { SHOP_CATALOG, buyUpgrade, emptyShop } from "../../src/game/shop.ts";
 
 function flatSim(carId: string) {
@@ -222,8 +222,21 @@ test("title hub pad snaps to Start, cycles pickers, and opens shop and settings"
   release(state, "title");
   stepPadUi(pad([0, 0], [13]), state, "title", menu);
   assert.equal(state.focus, 2);
+  // Button row is left-right. Down does not walk Start into Shop.
   release(state, "title");
   stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, TITLE_START);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [15]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SHOP);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [15]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SETTINGS);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [15]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SETTINGS);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [14]), state, "title", menu);
   assert.equal(state.focus, TITLE_SHOP);
   release(state, "title");
   ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
@@ -237,7 +250,13 @@ test("title hub pad snaps to Start, cycles pickers, and opens shop and settings"
   assert.equal(state.focus, TITLE_SHOP);
 
   release(state, "title");
+  stepPadUi(pad([0, 0], [12]), state, "title", menu);
+  assert.equal(state.focus, TITLE_STAGE);
+  release(state, "title");
   stepPadUi(pad([0, 0], [13]), state, "title", menu);
+  assert.equal(state.focus, TITLE_SHOP);
+  release(state, "title");
+  stepPadUi(pad([0, 0], [15]), state, "title", menu);
   assert.equal(state.focus, TITLE_SETTINGS);
   release(state, "title");
   ev = stepPadUi(pad([0, 0], [0]), state, "title", menu);
@@ -251,13 +270,20 @@ test("title hub pad snaps to Start, cycles pickers, and opens shop and settings"
   const full = emptyPadUi();
   release(full, "title", { titleCount: 6 });
   assert.equal(full.focus, TITLE_START);
-  for (let i = 0; i < 3; i++) {
-    stepPadUi(pad([0, 0], [13]), full, "title", opts({ titleCount: 6 }));
-    release(full, "title", { titleCount: 6 });
-  }
+  stepPadUi(pad([0, 0], [12]), full, "title", opts({ titleCount: 6 }));
+  release(full, "title", { titleCount: 6 });
   assert.equal(full.focus, TITLE_FULL);
   ev = stepPadUi(pad([0, 0], [0]), full, "title", opts({ titleCount: 6 }));
   assert.equal(ev?.type, "fullyUpgraded");
+  release(full, "title", { titleCount: 6 });
+  stepPadUi(pad([0, 0], [12]), full, "title", opts({ titleCount: 6 }));
+  release(full, "title", { titleCount: 6 });
+  assert.equal(full.focus, TITLE_STAGE);
+  stepPadUi(pad([0, 0], [13]), full, "title", opts({ titleCount: 6 }));
+  release(full, "title", { titleCount: 6 });
+  assert.equal(full.focus, TITLE_FULL);
+  stepPadUi(pad([0, 0], [13]), full, "title", opts({ titleCount: 6 }));
+  assert.equal(full.focus, TITLE_START);
 
   const sim = flatSim("model3");
   applyGamepad(sim, pad([0, 0], [0, 1]));

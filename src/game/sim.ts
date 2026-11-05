@@ -206,6 +206,13 @@ export const RIVAL_SPEED = 30;
 export const RIVAL_OFFSETS = [-40, 20, 60] as const;
 /** Forward pace while playing. Brake and reverse cannot go under this. */
 export const SCROLL_MIN = 22;
+/** How close behind the hero a rival must be before the rear-ram burst. */
+export const REAR_RAM_M = 16;
+/** Lateral window for that burst. A full lane over still just races past. */
+export const REAR_RAM_LAT = 4.5;
+/** Rear-ram burst hurts the hero more than the chaser. */
+export const REAR_RAM_HERO = 28;
+export const REAR_RAM_SELF = 8;
 /** Meters past the asphalt edge before an off-road fail can start. */
 export const OFFROAD_M = 6;
 /** Seconds that far off the road before the mid-track reset. */
@@ -2025,7 +2032,7 @@ function spawnRivals(sim: Sim) {
   }
 }
 
-/** Keep racing the finish. One shot every few seconds inside a short cone. No orbit, no respawn. */
+/** Keep racing the finish. Cruise does not pace-match the hero, so a slower hero gets passed. Close behind his rear, burst and ram. */
 function stepRival(sim: Sim, car: Car, dt: number) {
   if (car.hp <= 0) {
     killAI(sim, car);
@@ -2036,8 +2043,30 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.flash = Math.max(0, car.flash - dt);
   car.leaving = false;
   const cruise = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
-  car.speed = cruise;
-  car.along += cruise * dt;
+  const hero = sim.cars[0];
+  let speed = cruise;
+  let rear = false;
+  if (hero.alive && sim.phase === "playing") {
+    const gap = hero.along - car.along;
+    const heroLat = clamp(lateralOf(sim, hero), -9, 9);
+    const lat = Math.abs(car.lane - heroLat);
+    // Line up while catching him, and stay on the road.
+    if (gap > 0.6 && gap < 32 && lat < 8) {
+      const step = 16 * dt;
+      car.lane = clamp(car.lane + clamp(heroLat - car.lane, -step, step), -9, 9);
+    }
+    if (gap > 0.6 && gap < REAR_RAM_M && lat < REAR_RAM_LAT) {
+      // Burst until the pass. ramCd only gates the hit, so a slower hero gets overtaken.
+      speed = Math.min(54, Math.max(cruise + 14, hero.speed + 8));
+      if (car.ramCd <= 0) rear = true;
+    }
+  }
+  car.speed = speed;
+  // A burst that would sit inside the hero lunges past him instead of pinning the gap.
+  if (hero.alive && speed > cruise + 1) {
+    const next = car.along + speed * dt;
+    car.along = hero.along - next < 2.6 ? hero.along + 4.2 : next;
+  } else car.along += speed * dt;
   const p = poseAt(sim.track, car.along);
   car.x = p.x + p.rx * car.lane;
   car.z = p.z + p.rz * car.lane;
@@ -2048,7 +2077,6 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.lat = 0;
   car.vy = 0;
   if (!car.alive || sim.phase !== "playing") return;
-  const hero = sim.cars[0];
   if (!hero.alive) return;
   const { fx, fz } = fxDir(car.yaw);
   const dx = hero.x - car.x;
@@ -2058,8 +2086,10 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   const lat = Math.abs(lateralOf(sim, car) - lateralOf(sim, hero));
   const dS = hero.along - car.along;
   const inCone = dist < 22 && ahead > -8 && ahead < 20 && lat < 8 && Math.abs(hero.y - car.y) < 3.5;
+  if (rear && car.ramCd <= 0 && dist < 6.5 && dS > -5 && dS < 6.5) {
+    ram(sim, hero, car, { heroDmg: REAR_RAM_HERO, selfDmg: REAR_RAM_SELF, shove: false });
+  } else if (inCone && car.ramCd <= 0 && dist < 4.6 && Math.abs(dS) < 4) ram(sim, hero, car);
   if (!inCone) return;
-  if (car.ramCd <= 0 && dist < 4.6 && Math.abs(dS) < 4) ram(sim, hero, car);
   if (car.alive && car.fireCd <= 0 && hero.alive && sim.phase === "playing") {
     enemyShot(sim, car);
     car.fireCd = RIVAL_SHOT_GAP;
@@ -2206,7 +2236,7 @@ function separate(sim: Sim) {
   }
 }
 
-function ram(sim: Sim, hero: Car, enemy: Car) {
+function ram(sim: Sim, hero: Car, enemy: Car, hit?: { heroDmg: number; selfDmg: number; shove: boolean }) {
   if (enemy.kind === "hero") return;
   enemy.ramCd = enemy.kind === "boss" ? 1.4 : 2.6;
   const { rx, rz } = fxDir(hero.yaw);
@@ -2214,8 +2244,10 @@ function ram(sim: Sim, hero: Car, enemy: Car) {
   const x = (hero.x + enemy.x) / 2;
   const z = (hero.z + enemy.z) / 2;
   sim.events.push({ t: "hit", x, y: hero.y + 0.6, z, big: true });
-  if (damageHero(sim, ENEMY[enemy.kind].ram)) hero.lat += side * 7;
-  if (enemy.kind !== "boss") hurtEnemy(sim, enemy, 6, false);
+  const heroDmg = hit?.heroDmg ?? ENEMY[enemy.kind].ram;
+  const shove = hit ? hit.shove : true;
+  if (damageHero(sim, heroDmg) && shove) hero.lat += side * 7;
+  if (enemy.kind !== "boss") hurtEnemy(sim, enemy, hit?.selfDmg ?? 6, false);
 }
 
 function hurtEnemy(sim: Sim, car: Car, dmg: number, rear: boolean) {
@@ -2374,9 +2406,7 @@ function stepMines(sim: Sim, dt: number) {
         sim.trauma = Math.min(1, sim.trauma + (car.hero ? 0.4 : 0.2));
         if (car.hero) {
           if (car.invuln > 0 || sim.up.shieldT > 0) break;
-          car.speed *= m.owner > 0 ? 0.5 : 0.25;
-          scrollFloor(car);
-          car.spin = m.owner > 0 ? 0.5 : 0.7;
+          // Damage and the hit flash only. No spin and no lateral shove into the wall.
           if (m.owner === 0) toast(sim, "Own mine");
           damageHero(sim, m.owner > 0 ? 22 : 28);
         } else {
