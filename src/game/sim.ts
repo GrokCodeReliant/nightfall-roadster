@@ -11,6 +11,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
+import { courseFor, raceDistance } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -193,7 +194,7 @@ export type Result = {
   livesBonus?: number;
 };
 
-/** Highway RaceTrial. Other stage ids leave `armed` false. */
+/** RaceTrial distances. Highway uses RACE_DIST. An authored course uses its own length. Classic stays unarmed. */
 export const PACE_SPEED = 30;
 export const GAP_WARN = 80;
 export const GAP_WARN_HOLD = 2;
@@ -247,14 +248,16 @@ export type RaceTrial = {
   warnT: number;
   dnfT: number;
   warning: boolean;
-  /** Hero crossed RACE_DIST. Place is frozen. */
+  /** Hero crossed the armed finish distance. Place is frozen. */
   held: boolean;
   /** Frozen place once the hero finishes or DNFs. 0 while the race is live. */
   place: number;
+  /** Finish line for this arming. Highway stays RACE_DIST; an authored course uses its length. */
+  dist: number;
 };
 
 function freshRace(): RaceTrial {
-  return { armed: false, paceAlong: 0, originAlong: 0, warnT: 0, dnfT: 0, warning: false, held: false, place: 0 };
+  return { armed: false, paceAlong: 0, originAlong: 0, warnT: 0, dnfT: 0, warning: false, held: false, place: 0, dist: RACE_DIST };
 }
 
 export type Sim = {
@@ -318,7 +321,7 @@ export type Sim = {
   prevMine: boolean;
   autoGas: boolean;
   result: Result | null;
-  /** Stage picker id. RaceTrial arms only for `highway`. */
+  /** Stage picker id. RaceTrial arms for highway and any authored course. Classic stays waves. */
   stageId: string;
   /** Multiplier on hero steer → yaw. Keyboard, touch, and pad share it. */
   steerSens: number;
@@ -672,7 +675,10 @@ function place(sim: Sim, car: Car, along: number, speed: number) {
 }
 
 function park(sim: Sim) {
-  if (sim.track.first > 0 || sim.track.gen.i > 2000) sim.track = buildTrack();
+  // A course rebuilds at every begin(), including a stage switch (the old park only
+  // rebuilt a trimmed or very long procedural track).
+  if (courseFor(sim.stageId)) sim.track = buildTrack();
+  else if (sim.track.first > 0 || sim.track.gen.i > 2000) sim.track = buildTrack();
   const hero = sim.cars[0];
   hero.lane = 0;
   place(sim, hero, START_S, 0);
@@ -740,14 +746,17 @@ function armRace(sim: Sim) {
   sim.race.warning = false;
   sim.race.held = false;
   sim.race.place = 0;
-  if (sim.stageId === "highway") {
+  const course = courseFor(sim.stageId);
+  if (sim.stageId === "highway" || course) {
     sim.race.armed = true;
+    sim.race.dist = raceDistance(sim.stageId, RACE_DIST);
     sim.race.paceAlong = along;
     sim.race.originAlong = along;
     spawnRivals(sim);
     return;
   }
   sim.race.armed = false;
+  sim.race.dist = RACE_DIST;
 }
 
 function toast(sim: Sim, text: string, force = false) {
@@ -1471,7 +1480,7 @@ function stepRace(sim: Sim, dt: number) {
     finishRace(sim, FIELD_DNF, 0);
     return;
   }
-  if (!race.held && hero.along - race.originAlong >= RACE_DIST) {
+  if (!race.held && hero.along - race.originAlong >= race.dist) {
     race.held = true;
     const place = Math.min(4, raceStandings(sim).place);
     finishRace(sim, PLACE_NAME[place] || "4th", place);
