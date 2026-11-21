@@ -1,0 +1,100 @@
+--- a/repo_v02/src/game/world.ts
++++ b/repo_v02/src/game/world.ts
+@@ -1,7 +1,7 @@
+ import * as THREE from "three";
+-import { loadCity, buildCityChunk, cityReady } from "./city";
++import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityReady, roughHook } from "./city";
+ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+ import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
+ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+ import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
+ import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
+@@ -908,11 +908,16 @@
+   const AHEAD = coarse ? 7 : 9;
+   const POOL = BEHIND + AHEAD + 1;
+   const BLD_PER = 4;
+   const roadMat = new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.92, metalness: 0.05 });
+   const wallMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 });
+   const markMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+-  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null };
++  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; kitRoad: THREE.Group; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null };
+   const chunks: Chunk[] = [];
+   const buildings = new THREE.InstancedMesh(
+     new THREE.BoxGeometry(1, 1, 1),
+     new THREE.MeshStandardMaterial({ color: 0x141820, roughness: 0.9, metalness: 0.08 }),
+     POOL * BLD_PER,
+   );
+@@ -931,8 +936,11 @@
+       scene.add(m);
+       return m;
+     };
+     const city = new THREE.Group();
+     scene.add(city);
+-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null });
++    const kitRoad = new THREE.Group();
++    scene.add(kitRoad);
++    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), kitRoad, city, built: false, lamp: null });
+   }
++  loadRoadKit();
+   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
+   let stage: StageId = "city";
+@@ -1046,10 +1054,20 @@
+     setGeo(ch.road, rp, ri);
+     setGeo(ch.walls, wp, wi);
+     setGeo(ch.marks, mp, mc.length ? mi : [], mc);
+     for (const m of [ch.road, ch.walls, ch.marks]) {
+       m.position.set(ox, 0, oz);
+       m.visible = true;
+     }
++    // Swap the driveable deck + lane marks for the road kit when it is ready.
++    // Hide the untextured procedural road and marks (they have no atlas / puddles).
++    // Leave ch.walls as a temporary edge until a later rail pass (BN-6).
++    // CAVEAT: road_straight_40 is a rigid 40 m tile. On curves (R ≈ 150–220 m, ~8–15° per
++    // chunk) expect small gaps or overlaps. If that reads badly, keep this procedural ribbon
++    // and instead project UVs from road_kit_atlas.png (u across 24 m, v = 10 m along z,
++    // periodic) and run roughHook on roadMat — puddles will still show and the spline stays tight.
++    placeKitRoad(ch, index, sim, ox, oz);
+     // skyline: a few slabs per chunk (the real CC0 scenery lands in M4)
+     const colors = buildings.instanceColor!.array as Float32Array;
+@@ -1103,8 +1121,9 @@
+         cityChunk(ch, sim);
+         continue;
+       }
+       ch.road.visible = ch.walls.visible = ch.marks.visible = false;
++      ch.kitRoad.visible = false;
+       ch.city.visible = false;
+     }
+
++  // --- helpers (place next to buildChunk) ---
++  function clearKitRoad(ch: Chunk) {
++    for (const c of [...ch.kitRoad.children]) {
++      ch.kitRoad.remove(c);
++      // geometries come from the shared kit lib — do not dispose them
++    }
++  }
++  function placeKitRoad(ch: Chunk, index: number, sim: Sim, ox: number, oz: number) {
++    clearKitRoad(ch);
++    ch.kitRoad.visible = false;
++    if (!roadKitReady()) return;
++    const mid = sampleAt(sim.track, index * SEG + Math.floor(SEG / 2));
++    const yw = Math.atan2(mid.tx, mid.tz);
++    const put = (name: string) => {
++      const src = getPiece(name);
++      if (!src) return;
++      const root = src.clone(true);
++      root.traverse((o) => {
++        const m = o as THREE.Mesh;
++        if (!m.isMesh) return;
++        const mat = m.material as THREE.MeshStandardMaterial;
++        if (mat && !mat.userData.rough) roughHook(mat);
++      });
++      root.position.set(mid.x, mid.y, mid.z);
++      root.rotation.set(0, yw, 0);
++      ch.kitRoad.add(root);
++    };
++    put("road_straight_40");
++    put("lanepaint_straight_40");
++    ch.kitRoad.visible = true;
++    ch.road.visible = false;
++    ch.marks.visible = false;
++  }

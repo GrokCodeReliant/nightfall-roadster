@@ -1,0 +1,538 @@
+{
+  "name": "nightfall-nightcity-20261120",
+  "version": "v2",
+  "date": "2026-11-20",
+  "zone": "America/Denver",
+  "status": "PART_A_DONE",
+  "stage_only": true,
+  "official_city_atlas_sha256": "fa483a654b9d8794cd273dbf147cdb06a87a1bbc3cd0f52649b55cf6fa7947f7",
+  "road_kit_atlas_v2_sha256": "c02a8d321fcb4a3e026caa708d83b39f46f2e5274a724c23e8b9a702a598dc5b",
+  "patches": [
+    "patches/city.ts.diff",
+    "patches/world.ts.diff"
+  ],
+  "follow_up_01_C": [
+    "finish_gantry_24",
+    "start_grid_paint_40",
+    "ramp_lip_chevron_24",
+    "tunnel_light_strip_4m",
+    "work_light_tower"
+  ],
+  "files": [
+    {
+      "path": "BUDGET.md",
+      "bytes": 5908,
+      "sha256": "a7a7edf22a3f716a2591f487f667b25e3c2c489394f4062f7d0452b260964307"
+    },
+    {
+      "path": "CONTACT_SHEET.jpg",
+      "bytes": 2269278,
+      "sha256": "3bc801e30093bdc1cae81608f44fac9f0a1e18ca02a9f82591b985402d869650"
+    },
+    {
+      "path": "CONTACT_SHEET_v1.jpg",
+      "bytes": 1925470,
+      "sha256": "abf9e89c2a76679804af2bb3ffe0a5f5d4169e2843b94d24ca948983234281ab"
+    },
+    {
+      "path": "CREDITS_LICENSE.md",
+      "bytes": 277,
+      "sha256": "ba0639e0562290015c8d570fd15e63ee708252b5b893b3547ea0e7007589abf1"
+    },
+    {
+      "path": "HONEST_LOOK.md",
+      "bytes": 3000,
+      "sha256": "dc717c17a3694314a40072486514b771ad4006f104bc4dcd1fe970ee5bba1489"
+    },
+    {
+      "path": "INTEGRATION.md",
+      "bytes": 9431,
+      "sha256": "687ae840705cf78a412198b67f837ed1b1c9f59d78dc3c59d8f44941b530d0bc"
+    },
+    {
+      "path": "MANIFEST.json",
+      "bytes": 7802,
+      "sha256": "77571ddf32897cd85a8e1b07285febc24ce717333728ec5556fe40adbff3da1c"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2426,
+      "sha256": "2087d9b0f81358dc2a8e7729b56101ead1984972e90e5175ce4acae60bf10cc0"
+    },
+    {
+      "path": "SHA256SUMS",
+      "bytes": 4939,
+      "sha256": "5eb71fc4bf2159668f3439ae04bab953510c51b3d8f948426127f0bc7606be45"
+    },
+    {
+      "path": "STATUS.md",
+      "bytes": 498,
+      "sha256": "c10bcf13bc7968cc857933de7b9afd5e0f789f00429ae20f74664800dec1717b"
+    },
+    {
+      "path": "atlas/road_kit_atlas.png",
+      "bytes": 1174019,
+      "sha256": "c02a8d321fcb4a3e026caa708d83b39f46f2e5274a724c23e8b9a702a598dc5b"
+    },
+    {
+      "path": "atlas/road_kit_atlas_BEFORE.png",
+      "bytes": 1163005,
+      "sha256": "ff31e187cf1ee19e50e1988797d958ade40d170ee5161666f0c14ff36e14cb95"
+    },
+    {
+      "path": "atlas/road_kit_atlas_v1.png",
+      "bytes": 1210091,
+      "sha256": "bb57f279551545ec38d120059042f380e9a2465e6c7952a2a0a35aae2862e9a9"
+    },
+    {
+      "path": "atlas/road_kit_atlas_v2.png",
+      "bytes": 1174019,
+      "sha256": "c02a8d321fcb4a3e026caa708d83b39f46f2e5274a724c23e8b9a702a598dc5b"
+    },
+    {
+      "path": "docs_v1/BUDGET_v1.md",
+      "bytes": 4850,
+      "sha256": "0efc63db96d9bbebe41b7a1f4465b907c7b612536d062c4f800a0d45baa6d1df"
+    },
+    {
+      "path": "docs_v1/HONEST_LOOK_v1.md",
+      "bytes": 2816,
+      "sha256": "9d45a997dc5ed99f4555956e98b4b70461b654903a03a12b6e83fe56bda95cce"
+    },
+    {
+      "path": "docs_v1/INTEGRATION_v1.md",
+      "bytes": 5971,
+      "sha256": "823e853908bb3db5b46baae5a4c2de3e080edcb9f8d4ca3c365fbbc88e9b4582"
+    },
+    {
+      "path": "docs_v1/README_v1.md",
+      "bytes": 3479,
+      "sha256": "21fce5b81286f43b869ba60b761c579120cfacceb9e843a0bcd13746d436b0a1"
+    },
+    {
+      "path": "dressing_stats.json",
+      "bytes": 2204,
+      "sha256": "e2dc907759dc5c18d6accdade78ffef011d186035172da819ba94e8d3184f572"
+    },
+    {
+      "path": "glb/bollard.glb",
+      "bytes": 5932,
+      "sha256": "c2e10ee2b08d60947d5223f2a0b60b0308be9b7347c8a5801d2957c816565e4c"
+    },
+    {
+      "path": "glb/cable_run_12.glb",
+      "bytes": 22040,
+      "sha256": "7883ddba9b9d0c54a03f26fdb7a736d6ef18713ad28c6c9aeb5f9989d8b8d4cb"
+    },
+    {
+      "path": "glb/city_atlas.png",
+      "bytes": 664008,
+      "sha256": "fa483a654b9d8794cd273dbf147cdb06a87a1bbc3cd0f52649b55cf6fa7947f7"
+    },
+    {
+      "path": "glb/facade_inset_12.glb",
+      "bytes": 28472,
+      "sha256": "a84bbb0394de7601ddf1292427f23e709bbe84c297bb39324212fa1861b99a4d"
+    },
+    {
+      "path": "glb/facade_ledge_12.glb",
+      "bytes": 8588,
+      "sha256": "b69473d26a2181a1edd5ec8676e72b71947e7b1be4c650ef26d75b22e9778d47"
+    },
+    {
+      "path": "glb/facade_signbox_12.glb",
+      "bytes": 8872,
+      "sha256": "e536b21bec0038db86362b687ec7cbd5144df3ade592fa78cc8afb983579aba3"
+    },
+    {
+      "path": "glb/hydrant.glb",
+      "bytes": 9100,
+      "sha256": "059b063889db790a1224be0a63d4bf7de68d597c4177c979afaa1d31b7117ab0"
+    },
+    {
+      "path": "glb/roof_clutter_12.glb",
+      "bytes": 10648,
+      "sha256": "f322eba28017cea7675d483d961817c16293912bcd6ca37f9f9c33c219d762f2"
+    },
+    {
+      "path": "glb/trash_bin.glb",
+      "bytes": 5524,
+      "sha256": "4106ef9e223952bf7eb1e81b8b70d79ac425ad38241629ef543b8fa1cd43a51d"
+    },
+    {
+      "path": "glb/utility_cabinet.glb",
+      "bytes": 6464,
+      "sha256": "88b99797fa62014176a76c27989ec813961686b938fce0ecb5028cbfb006d5c6"
+    },
+    {
+      "path": "glb/v1/bollard.glb",
+      "bytes": 5932,
+      "sha256": "c2e10ee2b08d60947d5223f2a0b60b0308be9b7347c8a5801d2957c816565e4c"
+    },
+    {
+      "path": "glb/v1/cable_run_12.glb",
+      "bytes": 22040,
+      "sha256": "7883ddba9b9d0c54a03f26fdb7a736d6ef18713ad28c6c9aeb5f9989d8b8d4cb"
+    },
+    {
+      "path": "glb/v1/facade_inset_12.glb",
+      "bytes": 23996,
+      "sha256": "7e2dfa3b5785df45b7c71e95f55a002a8978a284a029b4d7d0fa5bab2da4973e"
+    },
+    {
+      "path": "glb/v1/facade_ledge_12.glb",
+      "bytes": 8588,
+      "sha256": "b69473d26a2181a1edd5ec8676e72b71947e7b1be4c650ef26d75b22e9778d47"
+    },
+    {
+      "path": "glb/v1/facade_signbox_12.glb",
+      "bytes": 8868,
+      "sha256": "69460e54272094824facf43bd3d5f4f02cdb141987252c4c5c7dff8882db6bc0"
+    },
+    {
+      "path": "glb/v1/hydrant.glb",
+      "bytes": 9100,
+      "sha256": "059b063889db790a1224be0a63d4bf7de68d597c4177c979afaa1d31b7117ab0"
+    },
+    {
+      "path": "glb/v1/roof_clutter_12.glb",
+      "bytes": 10648,
+      "sha256": "f322eba28017cea7675d483d961817c16293912bcd6ca37f9f9c33c219d762f2"
+    },
+    {
+      "path": "glb/v1/trash_bin.glb",
+      "bytes": 5524,
+      "sha256": "4106ef9e223952bf7eb1e81b8b70d79ac425ad38241629ef543b8fa1cd43a51d"
+    },
+    {
+      "path": "glb/v1/utility_cabinet.glb",
+      "bytes": 6464,
+      "sha256": "88b99797fa62014176a76c27989ec813961686b938fce0ecb5028cbfb006d5c6"
+    },
+    {
+      "path": "glb/v1/vending_box.glb",
+      "bytes": 8584,
+      "sha256": "a622c15aac0b65001363037e3cebb5ab352d4729df0f834c5f1eaaff5d4d00a3"
+    },
+    {
+      "path": "glb/vending_box.glb",
+      "bytes": 8584,
+      "sha256": "a622c15aac0b65001363037e3cebb5ab352d4729df0f834c5f1eaaff5d4d00a3"
+    },
+    {
+      "path": "kit_after/README.txt",
+      "bytes": 220,
+      "sha256": "883a4a205f60e929426093dbc3212c69579f01246b4771f496f5b50f1100acec"
+    },
+    {
+      "path": "kit_after/barrier_jersey_4m.glb",
+      "bytes": 8460,
+      "sha256": "f908f4f510c724c22733ebbd4cf584dd81fe8a432121a867e497106c587b5b91"
+    },
+    {
+      "path": "kit_after/crate.glb",
+      "bytes": 18396,
+      "sha256": "e723b374b9297aa1c62dd06a4edcc2417e840d9d0b0828cf6e38a5eb41757629"
+    },
+    {
+      "path": "kit_after/crate_explosive.glb",
+      "bytes": 22864,
+      "sha256": "c17ce0cd125906c9a423f9214054da1e21146a3db80bf2d699554aba161354a5"
+    },
+    {
+      "path": "kit_after/gap_edge_24.glb",
+      "bytes": 26640,
+      "sha256": "6920fd636130cce31271e8255c6a1836e4706017b9046ed1df3cdc0874d76cb1"
+    },
+    {
+      "path": "kit_after/guardrail_4m.glb",
+      "bytes": 9076,
+      "sha256": "5bf1dadb51af90436f467d1002657c2f3fa4c341e52f581a3a60a3c801ca0f68"
+    },
+    {
+      "path": "kit_after/guardrail_end_4m.glb",
+      "bytes": 18260,
+      "sha256": "8a53376bd98cf9955e66a0a843e555f39ca6bac7d68f2555b387672dc24b8832"
+    },
+    {
+      "path": "kit_after/lanepaint_fork_40.glb",
+      "bytes": 11720,
+      "sha256": "9bf58c0e03bfaebcdcedd6b891906ab5d0757ae52ee464d2fa07d70655dafcea"
+    },
+    {
+      "path": "kit_after/lanepaint_merge_40.glb",
+      "bytes": 11480,
+      "sha256": "3ea089a2ef162b92e9478b0bb7314bde95b458798729affaacdbb0bb2faa2ab9"
+    },
+    {
+      "path": "kit_after/lanepaint_straight_40.glb",
+      "bytes": 9680,
+      "sha256": "db5eddc62c6e845d85bd3b0c3a1df0f26e6253983c51abba7d1509b77622239f"
+    },
+    {
+      "path": "kit_after/ramp_6x10.glb",
+      "bytes": 13988,
+      "sha256": "6ddb8d340e7a1a70076c60daabe8572610b3cc97c8bf4f5cace74ed717912a16"
+    },
+    {
+      "path": "kit_after/road_fork_40.glb",
+      "bytes": 7140,
+      "sha256": "16134a6ef34a78a2df7c503ce5a1ec10d6873e27faa6f8b2f16646ac1a4a8c6a"
+    },
+    {
+      "path": "kit_after/road_kit_atlas.png",
+      "bytes": 1174019,
+      "sha256": "c02a8d321fcb4a3e026caa708d83b39f46f2e5274a724c23e8b9a702a598dc5b"
+    },
+    {
+      "path": "kit_after/road_merge_40.glb",
+      "bytes": 7140,
+      "sha256": "b2cc50b993158c7f27e9484caf2af01b39eb08ee5e43b0d80a9fd1651c7b560a"
+    },
+    {
+      "path": "kit_after/road_straight_40.glb",
+      "bytes": 4540,
+      "sha256": "7c2a85355986bd7fbe8c4c3c521b45daa4ccc1b864e4a2ca7d61005e3333a913"
+    },
+    {
+      "path": "kit_after/sign_chevron.glb",
+      "bytes": 6984,
+      "sha256": "fa082e4bcd0601c87b8f94f0f2309945c5a4dc8b4b0af5d2bd8fb1c2500e61d5"
+    },
+    {
+      "path": "kit_after/sign_fork.glb",
+      "bytes": 12592,
+      "sha256": "37c5e4937dabb9680f46edb976268ed5fdda1c731843f5a69ddb88f280079263"
+    },
+    {
+      "path": "kit_after/sign_warning.glb",
+      "bytes": 3660,
+      "sha256": "e5d4160f26796cbdb8000a0909b9c20035b197af49735d8488c196924c823a7a"
+    },
+    {
+      "path": "kit_after/streetlight.glb",
+      "bytes": 14020,
+      "sha256": "5ed47deca10af0abf9280d333a1dab123fb5c6fa7e6752e9983e30d77b06c9fb"
+    },
+    {
+      "path": "patches/README.md",
+      "bytes": 648,
+      "sha256": "a925d6c6efcd8309802d76799cf9940c49b954e20aaa4e55b8f49bdc3f2634f2"
+    },
+    {
+      "path": "patches/city.ts.diff",
+      "bytes": 7837,
+      "sha256": "ce2b1a8c25be80d32c9e7cdf8bc13a2e0593667393a3d1930f17c81c8a1a7cec"
+    },
+    {
+      "path": "patches/world.ts.diff",
+      "bytes": 4926,
+      "sha256": "b5f3acb3b2ba7e81554e11d205ad0d219e9f6845ab9ac8e3074eefc742e1a05c"
+    },
+    {
+      "path": "renders/CONTACT_SHEET.jpg",
+      "bytes": 2269278,
+      "sha256": "3bc801e30093bdc1cae81608f44fac9f0a1e18ca02a9f82591b985402d869650"
+    },
+    {
+      "path": "renders/compare/asphalt_alpha_after.png",
+      "bytes": 164921,
+      "sha256": "8877653998fd055ab0ae02b36965409bf488dae522294805ce97444f4691bd9e"
+    },
+    {
+      "path": "renders/compare/asphalt_alpha_before.png",
+      "bytes": 161556,
+      "sha256": "67abd003031ae74c25accda178d2c9ec2b803215c0aecb52298d84ec633cfd60"
+    },
+    {
+      "path": "renders/compare/asphalt_alpha_before_after.png",
+      "bytes": 384469,
+      "sha256": "b7f6f4f784ce6b04d805f78bb18250676eeb0f195ffcd0e0c480beeda982c7e9"
+    },
+    {
+      "path": "renders/compare/asphalt_alpha_shipped_vs_v2.png",
+      "bytes": 702787,
+      "sha256": "36c2d7546e1b2a26011d58b74c96556a904e5a423f92c88c7a4f984f8c3bf535"
+    },
+    {
+      "path": "renders/compare/asphalt_mask_after.png",
+      "bytes": 637234,
+      "sha256": "b46165a1896881520591f2b74edf3aeadd793f9bde2dac3ad868cac331e4ea3f"
+    },
+    {
+      "path": "renders/compare/asphalt_mask_before.png",
+      "bytes": 570293,
+      "sha256": "0403d1d3e3069c134a7775878a1ea9a8eb377f68bb42b058c69395c50a130c97"
+    },
+    {
+      "path": "renders/compare/asphalt_rgb_after.png",
+      "bytes": 586128,
+      "sha256": "aafb98438f20579e98fe8726c431c9dab798618622fe0500fd1f255507d77820"
+    },
+    {
+      "path": "renders/compare/asphalt_rgb_before.png",
+      "bytes": 562252,
+      "sha256": "597a7f0d8e9be3ce18605b1f4c1431848ed1541b687ebb8616aa6719d8712b5f"
+    },
+    {
+      "path": "renders/compare/asphalt_rgb_before_after.png",
+      "bytes": 703641,
+      "sha256": "039e24521991dae1abfd592dc9dba776f320a0e35f076d404e0c0ec227808a9e"
+    },
+    {
+      "path": "renders/compare/asphalt_rgb_shipped_vs_v2.png",
+      "bytes": 703598,
+      "sha256": "b0326c41149b882ed5fd7c4b52d214c962ebc74ecdd2378cc7c7ab9f893a1503"
+    },
+    {
+      "path": "renders/compare/asphalt_rgb_v1_vs_v2.png",
+      "bytes": 879522,
+      "sha256": "f75f6d8daf07885fa6398d5503e1cd1362ee8318ee13a8f52e84d627071dfe01"
+    },
+    {
+      "path": "renders/compare/facade_after.png",
+      "bytes": 1077611,
+      "sha256": "63485a61e3b9a0cc452c264e353f22e2fc5a91175dc219409a8ea2f60e40d7fc"
+    },
+    {
+      "path": "renders/compare/facade_before.png",
+      "bytes": 1051494,
+      "sha256": "ae697db6453014138ce78adfa5d682ea5acae2d6a5805b14e41d13c3de66765a"
+    },
+    {
+      "path": "renders/compare/puddle_road_after.png",
+      "bytes": 1051804,
+      "sha256": "2e9eb1d7d81bf57d93f2376a0e1f1aa88cc781a31ea5d27fdb3a6a18fb6640b8"
+    },
+    {
+      "path": "renders/compare/puddle_road_before.png",
+      "bytes": 1047876,
+      "sha256": "7c4c31ba47bdc69fc2fe30c3231f1e4c196041a8fc1542a50704998b261ca919"
+    },
+    {
+      "path": "renders/compare/roadside_dressing.png",
+      "bytes": 984817,
+      "sha256": "c6b8040013f50bf4c7caaac6e4af91ae302ca6e68bb58efb1db4499d587db860"
+    },
+    {
+      "path": "renders/compare/street_chase52_after.png",
+      "bytes": 1398121,
+      "sha256": "e0e76c401d8ed0946c0c107761823e0e36ad3f909dbbca0a4ebc4f9821b4e00f"
+    },
+    {
+      "path": "renders/compare/street_chase52_before.png",
+      "bytes": 1382192,
+      "sha256": "5a4d3b3e56210ebef456fce0d1d1b62eee66b646f1023528ac95e9fa2f871f1c"
+    },
+    {
+      "path": "renders/compare/street_gameplay_after.png",
+      "bytes": 1491327,
+      "sha256": "b56028e9fe63825fe27c34d711713949696e7b5d6fd6697f672ed9d00f8cc036"
+    },
+    {
+      "path": "renders/compare/street_gameplay_before.png",
+      "bytes": 1464401,
+      "sha256": "e5c9f81422360023d6d76d5082d84c48aa9535d3261c8d307cba9277f76e1813"
+    },
+    {
+      "path": "renders/tiles/bollard.png",
+      "bytes": 292861,
+      "sha256": "b4ad190bc14c6bcef452f95c4c8421b9fc9ffaed188e966188ef2849ce11b52e"
+    },
+    {
+      "path": "renders/tiles/cable_run_12.png",
+      "bytes": 304671,
+      "sha256": "ad6a4adeae80d933620ed33c8d0810fa5f7c733057eb9b97d7ccd95b50ab8308"
+    },
+    {
+      "path": "renders/tiles/facade_inset_12.png",
+      "bytes": 322845,
+      "sha256": "8725da6c5f0c730080867619cab341d9688a46f402e688ace71b12390e5b32a6"
+    },
+    {
+      "path": "renders/tiles/facade_ledge_12.png",
+      "bytes": 288412,
+      "sha256": "a255a7ca9db029f83ae65e911a555dc4a078449f823cac0a9e7aefbe31a3068e"
+    },
+    {
+      "path": "renders/tiles/facade_signbox_12.png",
+      "bytes": 337145,
+      "sha256": "cd2da0c9fdb8f9f6fb57d7bf7273ca6815256ad1f90b6e8ee83f1d8af885bf42"
+    },
+    {
+      "path": "renders/tiles/hydrant.png",
+      "bytes": 294151,
+      "sha256": "aaa25e6e1101ff73bfbc56c1469b0b0adcaeb99dadc089ebc3b878d6acf9aec1"
+    },
+    {
+      "path": "renders/tiles/roof_clutter_12.png",
+      "bytes": 305306,
+      "sha256": "dde9858d57bd6e19208f1671350b491b5a845e7d85493663d99296d81180040f"
+    },
+    {
+      "path": "renders/tiles/trash_bin.png",
+      "bytes": 294272,
+      "sha256": "84815c143a58af74c64f5bc68391a99ecd31627cda745f38778215611b837d7f"
+    },
+    {
+      "path": "renders/tiles/utility_cabinet.png",
+      "bytes": 306041,
+      "sha256": "2e7602e2fe3de65573286e5503d5d8e7e5f9bb9ffc4021945850ca0101e55bd6"
+    },
+    {
+      "path": "renders/tiles/vending_box.png",
+      "bytes": 343803,
+      "sha256": "a9fe4074e630e981d3c54c0295df8b0898c60517c1dd11c25a4eea12368bbee4"
+    },
+    {
+      "path": "renders/v1/CONTACT_SHEET.jpg",
+      "bytes": 1925470,
+      "sha256": "abf9e89c2a76679804af2bb3ffe0a5f5d4169e2843b94d24ca948983234281ab"
+    },
+    {
+      "path": "renders/v1/v1_asphalt_rgb_after.png",
+      "bytes": 586128,
+      "sha256": "aafb98438f20579e98fe8726c431c9dab798618622fe0500fd1f255507d77820"
+    },
+    {
+      "path": "renders/v1/v1_facade_after.png",
+      "bytes": 1080106,
+      "sha256": "e6d859ac44f44cab58284b0e6f4a655afd0ca8a8c440391d12f3ec33d50f0806"
+    },
+    {
+      "path": "renders/v1/v1_puddle_road_after.png",
+      "bytes": 1071795,
+      "sha256": "058505aa00ba836e51dfb90a617f96f3e7063c581af2338aefe34e503db80626"
+    },
+    {
+      "path": "renders/v1/v1_street_chase52_after.png",
+      "bytes": 1432837,
+      "sha256": "599aded637f110b7913099286376737ff544fcbdd10c7e509cf29e434b0cf496"
+    },
+    {
+      "path": "renders/v1/v1_street_gameplay_after.png",
+      "bytes": 1514875,
+      "sha256": "57eaabda290aaa458af8c57d6d21a8d879fdcb9b53899faa26e47c460c7862c2"
+    },
+    {
+      "path": "src/build_nightcity_dressing.py",
+      "bytes": 26576,
+      "sha256": "937dd17490adda42e28934827531c988b6fe66f975578352cd9c19e0f0a85dbd"
+    },
+    {
+      "path": "src/make_contact_sheet.py",
+      "bytes": 7563,
+      "sha256": "0d6604aab3ff99f5b21566ba2b8e50007a4d4dda7844ec4db143980a4ee00061"
+    },
+    {
+      "path": "src/patch_puddles.py",
+      "bytes": 9518,
+      "sha256": "53067f9dc47e8fadef3eddd3bc51a4bb88547acf93b151b609086f544c4b5d31"
+    },
+    {
+      "path": "src/patch_puddles_v2.py",
+      "bytes": 6975,
+      "sha256": "03270a6f9fef191820e9ab3d137ebfb64ffb658d80463af42b48b094e630d7c9"
+    }
+  ]
+}
