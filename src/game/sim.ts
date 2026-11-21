@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, edgeKind, raceDistance } from "./course";
+import { courseFor, edgeKind, medianAt, raceDistance, sectionAt } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -954,6 +954,20 @@ function scrollFloor(car: Car) {
   if (car.alive && car.speed < SCROLL_MIN) car.speed = SCROLL_MIN;
 }
 
+/** Split sections land on the side the car was on. Everywhere else stays lane 0. */
+function forkLane(sim: Sim, car: Car, atS: number): number {
+  const course = courseFor(sim.stageId);
+  if (!course) return 0;
+  const sec = sectionAt(course, atS - sim.race.originAlong);
+  if (!sec || sec.type !== "split") return 0;
+  const lat = lateralOf(sim, car);
+  if (lat < -0.05) return -6;
+  if (lat > 0.05) return 6;
+  if (car.lane < 0) return -6;
+  if (car.lane > 0) return 6;
+  return -6;
+}
+
 /** Tire-blow, then back to lane center a short way behind. One fail does not end the race. */
 function offroadReset(sim: Sim, car: Car) {
   const hp = car.hp;
@@ -961,7 +975,7 @@ function offroadReset(sim: Sim, car: Car) {
   const back = Math.min(15, OFFROAD_BACK);
   let s = Math.max(sim.track.first * 2 + 2, car.along - back);
   if (poseAt(sim.track, s).gap || gapAhead(sim.track, s, 20)) s = safeSpawnS(sim, car.along - back);
-  car.lane = 0;
+  car.lane = forkLane(sim, car, s);
   place(sim, car, s, speed);
   car.hp = hp;
   car.invuln = OFFROAD_INVULN;
@@ -993,7 +1007,7 @@ function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
     }
   }
   const hp = car.hp;
-  car.lane = 0;
+  car.lane = forkLane(sim, car, car.along);
   place(sim, car, safeSpawnS(sim, car.along), 22);
   car.hp = hp;
   car.recover = reason === "fall" ? 0.85 : 0.65;
@@ -1014,7 +1028,7 @@ function loseLife(sim: Sim) {
     gameOver(sim);
     return;
   }
-  hero.lane = 0;
+  hero.lane = forkLane(sim, hero, hero.along);
   place(sim, hero, safeSpawnS(sim, hero.along), 22);
   const lost = dropTier(sim);
   hero.hp = hero.maxHp;
@@ -1170,6 +1184,43 @@ function dropMine(sim: Sim, car: Car) {
 }
 
 
+/** Jersey median. Grounded cars, and anyone within 1 m of the deck, glance off. A higher hop crosses. */
+function glanceMedian(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>) {
+  const course = courseFor(sim.stageId);
+  if (!course || car.y > q.y + 1) return q;
+  const med = medianAt(course, q.s - sim.race.originAlong);
+  if (!med) return q;
+  const inset = car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp;
+  const keep = med.half + inset;
+  if (Math.abs(q.lateral) >= keep - 1e-3) return q;
+  const side = Math.sign(q.lateral) || Math.sign(car.lane) || -1;
+  const target = side * (keep + 0.05);
+  const delta = target - q.lateral;
+  car.x += q.rx * delta;
+  car.z += q.rz * delta;
+  car.lat = side < 0 ? -Math.max(4, Math.abs(car.lat)) : Math.max(4, Math.abs(car.lat));
+  car.slideT = Math.max(car.slideT, WALL_SLIDE);
+  if (car.hero && sim.scrapeCd <= 0) {
+    sim.scrapeCd = 0.18;
+    sim.events.push({ t: "scrape" });
+  }
+  scrollFloor(car);
+  return queryTrack(sim.track, car.x, car.z, car.along);
+}
+
+/** A rival keeps the fork side it is already on. */
+function holdMedianSide(sim: Sim, car: Car) {
+  const course = courseFor(sim.stageId);
+  if (!course) return;
+  const med = medianAt(course, car.along - sim.race.originAlong);
+  if (!med) return;
+  const inset = car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp;
+  const keep = med.half + inset;
+  if (car.lane < 0) car.lane = Math.min(car.lane, -keep);
+  else if (car.lane > 0) car.lane = Math.max(car.lane, keep);
+  else car.lane = -keep;
+}
+
 /** Rail disables the committed-leave branch. sideSign > 0 is the driver's right. */
 function railHere(sim: Sim, absS: number, sideSign: number): boolean {
   const course = courseFor(sim.stageId);
@@ -1316,6 +1367,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     car.z += q.rz * delta;
     q = queryTrack(sim.track, car.x, car.z, car.along);
   }
+  q = glanceMedian(sim, car, q);
   if (car.slideT > 0) {
     car.slideT = Math.max(0, car.slideT - dt);
     const err = wrapAngle(yawFromDir(q.tx, q.tz) - car.yaw);
@@ -2132,6 +2184,7 @@ function tryRacePass(sim: Sim, car: Car, dt: number) {
   car.speed = speed;
   car.along = lunging ? hero.along + 8 : next;
   if (!car.racer && lined) car.lane = heroLat;
+  holdMedianSide(sim, car);
   const p = poseAt(sim.track, car.along);
   car.x = p.x + p.rx * car.lane;
   car.z = p.z + p.rz * car.lane;
@@ -2160,6 +2213,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   if (!tryRacePass(sim, car, dt)) {
     car.speed = cruise;
     car.along += cruise * dt;
+    holdMedianSide(sim, car);
     const p = poseAt(sim.track, car.along);
     car.x = p.x + p.rx * car.lane;
     car.z = p.z + p.rz * car.lane;

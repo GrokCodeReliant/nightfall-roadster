@@ -24,12 +24,15 @@ export type Section = {
   curves: Curve[];
 };
 
+export type Median = { s0: number; s1: number; half: number };
+
 export type Course = {
   id: string;
   length: number;
   runout: number;
   width: number;
   sections: Section[];
+  medians: Median[];
 };
 
 function curve(s0: number, len: number, R: number): Curve {
@@ -42,6 +45,10 @@ export const NIGHT_CITY: Course = {
   length: 3600,
   runout: COURSE_RUNOUT,
   width: 24,
+  medians: [
+    { s0: 1080, s1: 1460, half: 0.3 },
+    { s0: 2700, s1: 2950, half: 0.3 },
+  ],
   sections: [
     { id: "NC-0", type: "road", s0: 0, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "lantern", curves: [] },
     { id: "NC-1", type: "road", s0: 300, len: 260, width: 24, edgeL: "soft", edgeR: "soft", zone: "glass", curves: [curve(300, 260, 450)] },
@@ -95,6 +102,11 @@ export function sectionAt(course: Course, raceS: number): Section | null {
 
 export function sectionById(course: Course, id: string): Section | null {
   return course.sections.find((s) => s.id === id) ?? null;
+}
+
+export function medianAt(course: Course, raceS: number): Median | null {
+  for (const m of course.medians) if (raceS >= m.s0 && raceS <= m.s1) return m;
+  return null;
 }
 
 /** Edge on the driver's left (lateral < 0) or right. Missing road is soft. */

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COURSE_ORIGIN, NIGHT_CITY, courseFor, sectionAt, sectionById } from "../../src/game/course.ts";
-import { buildCourseTrack, ensureTrack, poseAt, sampleAt, yawFromDir } from "../../src/game/road.ts";
+import { buildCourseTrack, ensureTrack, poseAt, queryTrack, sampleAt, yawFromDir } from "../../src/game/road.ts";
 import {
   RACE_DIST,
   RACE_HP,
@@ -229,6 +229,96 @@ test("NC §9.7 soft walls slide and rail edges refuse a committed leave", () => 
     assert.equal(rail.invuln, 0, `invuln on race ${s}`);
     assert.equal(rail.slow, 0, `slow on race ${s}`);
   }
+});
+
+function lateral(sim: Sim) {
+  const car = sim.cars[0];
+  return queryTrack(sim.track, car.x, car.z, car.along).lateral;
+}
+
+test("NC §9.8 Fork A median holds the inside line", () => {
+  const sim = quietCity();
+  plant(sim, 1120, -6, 30);
+  sim.keysOverride = new Set(["KeyD"]);
+  for (let i = 0; i < 60 * 2; i++) {
+    step(sim, dt);
+    const lat = lateral(sim);
+    assert.ok(lat <= -1.45, `lat ${lat} at frame ${i}`);
+    assert.ok(sim.cars[0].speed >= 22 - 1e-4, `speed ${sim.cars[0].speed}`);
+  }
+});
+
+test("NC §9.12 off-road reset inside Fork A lands on the left side centre", () => {
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 1200, -20, 30);
+  const hp = hero.hp;
+  sim.keysOverride = new Set(["KeyA"]);
+  let frames = 0;
+  while (sim.toast !== "Back on track" && frames < 180) {
+    step(sim, dt);
+    frames += 1;
+  }
+  assert.equal(sim.toast, "Back on track");
+  const lat = lateral(sim);
+  assert.ok(Math.abs(lat - -6) <= 0.5, `lat ${lat}`);
+  assert.equal(hero.hp, hp);
+  assert.ok(hero.invuln > 0);
+});
+
+test("a rival on the inside of Fork A stays left, and a Roadster hop clears the median", () => {
+  const sim = quietCity();
+  const rival = sim.cars[1];
+  rival.alive = true;
+  rival.racer = true;
+  rival.kind = "rammer";
+  rival.raceSpeed = 30;
+  rival.hp = rival.maxHp = 160;
+  rival.fireCd = 9;
+  rival.ramCd = 9;
+  const origin = sim.race.originAlong;
+  const p = poseAt(sim.track, origin + 1070);
+  rival.lane = -6;
+  rival.x = p.x + p.rx * -6;
+  rival.z = p.z + p.rz * -6;
+  rival.y = p.y;
+  rival.along = p.s;
+  rival.lastAlong = p.s;
+  rival.yaw = yawFromDir(p.tx, p.tz);
+  rival.speed = 30;
+  rival.grounded = true;
+  sim.keysOverride = new Set();
+  const pace = sim.cars[0];
+  for (let i = 0; i < 60 * 20 && rival.along - origin < 1460; i++) {
+    const back = poseAt(sim.track, Math.max(origin, rival.along - 40));
+    pace.x = back.x + back.rx * -6;
+    pace.z = back.z + back.rz * -6;
+    pace.y = back.y;
+    pace.along = back.s;
+    pace.lastAlong = back.s;
+    pace.speed = 40;
+    pace.lane = -6;
+    step(sim, dt);
+    const lat = queryTrack(sim.track, rival.x, rival.z, rival.along).lateral;
+    assert.ok(lat < 0, `rival lat ${lat}`);
+  }
+  assert.ok(rival.along - origin >= 1460, `along ${rival.along - origin}`);
+
+  const hop = quietCity("roadster");
+  const hero = hop.cars[0];
+  plant(hop, 1200, -1.6, 36);
+  const deck = poseAt(hop.track, hero.along).y;
+  hero.y = deck + 3;
+  hero.grounded = false;
+  hero.vy = 0;
+  hero.lat = 12;
+  hop.keysOverride = new Set(["KeyD"]);
+  let crossed = false;
+  for (let i = 0; i < 40; i++) {
+    step(hop, dt);
+    if (lateral(hop) > 1) crossed = true;
+  }
+  assert.equal(crossed, true);
 });
 
 test("classic still runs waves after Night City is a race", () => {
