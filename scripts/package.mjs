@@ -94,7 +94,7 @@ const inlineMap = {};
 for (const [dir, test] of [[glbDir, (f) => f.endsWith("_phone.glb")], [enDir, (f) => f.endsWith("_phone.glb")], [dist + "/assets/v02/rig", (f) => f.endsWith("_phone.glb")]]) {
   if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (test(f)) inlineMap[f.replace(".glb", "")] = b64(`${dir}/${f}`);
 }
-for (const d of ["city", "kit"]) {
+for (const d of ["city", "kit", "coast"]) {
   const dir = `${dist}/assets/v02/${d}`;
   if (!fs.existsSync(dir)) continue;
   for (const f of fs.readdirSync(dir)) {
