@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, gatePhase, medianAt, respawnBlocked, sectionAt, sectionById, tunnelClearance } from "../../src/game/course.ts";
-import { concealTunnelRoof } from "../../src/game/city.ts";
+import { botKeys } from "../../src/game/bot.ts";
+import { cityChunkRules, concealTunnelRoof } from "../../src/game/city.ts";
+import { cityPlacements, tally, windowBudget } from "../../src/game/citycourse.ts";
 import { CAM_BACK, CAM_UP } from "../../src/game/world.ts";
 import * as THREE from "three";
 import { buildCourseTrack, ensureTrack, poseAt, queryTrack, sampleAt, yawFromDir } from "../../src/game/road.ts";
@@ -11,6 +13,7 @@ import {
   RACE_HP,
   RIVAL_COUNT,
   RIVAL_SPEEDS,
+  CAR_IDS,
   begin,
   createSim,
   step,
@@ -574,6 +577,72 @@ test("NC §9.6 brake held the whole stage never dead-stops", () => {
   const reason = sim.result?.reason ?? "";
   const placed = reason === "1st" || reason === "2nd" || reason === "3rd" || reason === "4th";
   assert.ok(placed || reason === "DNF" || reason === FIELD_DNF, reason);
+});
+
+test("Night City scenery matches the art list and stays off the road colliders", () => {
+  assert.equal(cityChunkRules(2, false).overpass, true);
+  assert.equal(cityChunkRules(3, false).gate, true);
+  assert.equal(cityChunkRules(2, true).overpass, false);
+  assert.equal(cityChunkRules(3, true).gate, false);
+
+  const props = cityPlacements();
+  const n = tally(props);
+  assert.equal(n.facade_fins_12, 24);
+  assert.equal(n.facade_balcony_12, 12);
+  assert.equal(n.facade_ac_12, 12);
+  assert.equal(n.billboard_pole_12x6, 10);
+  assert.equal(n.billboard_roof_12x6, 4);
+  assert.equal(n.billboard_wall_8x4, 2);
+  assert.equal(n.overpass_60x12, 3);
+  assert.equal(n.tunnel_40, 6);
+  assert.equal(n.tunnel_portal, 2);
+  assert.equal(n.tunnel_light_strip_4m, 60);
+  assert.equal(n.barrier_jersey_4m, 158);
+  assert.equal(n.guardrail_end_4m, 4);
+  assert.equal(n.sign_fork, 12);
+  assert.equal(n.barricade_3m, 22);
+  assert.equal(n.ramp_kicker_1m, 2);
+  assert.equal(n.finish_gantry_24, 1);
+  assert.equal(n.bldg_stack, 250);
+  assert.equal(n.neon, 70);
+  assert.equal(n.water_barrier_2m, 210);
+  assert.equal(n.crate, 2);
+  assert.equal(n.work_light_tower, 4);
+  assert.ok(Math.abs((n.sidewalk_12x40 ?? 0) - 150) <= 15, `sidewalks ${n.sidewalk_12x40}`);
+  assert.ok(Math.abs((n.streetlight_city_twin_8m ?? 0) - 180) <= 18, `twin ${n.streetlight_city_twin_8m}`);
+  assert.ok(Math.abs((n.streetlight_city_6m ?? 0) - 180) <= 18, `lamp ${n.streetlight_city_6m}`);
+  assert.ok(Math.abs((n.traffic_cone ?? 0) - 70) <= 7, `cones ${n.traffic_cone}`);
+  const over = props.filter((p) => p.id === "overpass_60x12").map((p) => p.s).sort((a, b) => a - b);
+  assert.deepEqual(over, [1500, 1560, 1640]);
+  for (const s of over) {
+    assert.ok(s <= 540 || s >= 850, `ramp A ${s}`);
+    assert.ok(s <= 2410 || s >= 2720, `ramp B ${s}`);
+  }
+  assert.equal(props.some((p) => p.collider), false);
+  for (const label of ["NC-0", "NC-6", "NC-12"] as const) {
+    const at = label === "NC-0" ? 150 : label === "NC-6" ? 1820 : 3480;
+    const budget = windowBudget(at, props);
+    console.log(`${label} draws ${budget.draws} tris ${budget.tris} instances ${budget.instances}`);
+    assert.ok(budget.draws <= 160, `${label} draws ${budget.draws}`);
+    assert.ok(budget.tris <= 250000, `${label} tris ${budget.tris}`);
+  }
+});
+
+test("NC §9.15 the bot finishes Night City in each of the six cars", () => {
+  for (const carId of CAR_IDS) {
+    const sim = createSim();
+    sim.carId = carId;
+    sim.stageId = "city";
+    begin(sim);
+    let frames = 0;
+    while (sim.phase === "playing" && frames < 60 * 220) {
+      sim.keysOverride = new Set(botKeys(sim, true));
+      step(sim, dt);
+      frames += 1;
+    }
+    assert.equal(sim.phase, "finished", `${carId} ${sim.toast}`);
+    assert.ok(sim.race.place >= 1 && sim.race.place <= 4, `${carId} ${sim.result?.reason}`);
+  }
 });
 
 test("classic still runs waves after Night City is a race", () => {

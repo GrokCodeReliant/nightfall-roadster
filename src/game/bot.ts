@@ -1,4 +1,5 @@
 /** Test/debug autopilot (only reachable through the ?debug hook and the test suites). */
+import { courseFor, medianAt, sectionAt } from "./course";
 import { gapAhead, poseAt, queryTrack, wrapAngle, yawFromDir } from "./road";
 import type { Sim } from "./sim";
 
@@ -53,6 +54,13 @@ export function botKeys(sim: Sim, cruise = false): string[] {
     keys[0] = "KeyS"; // let chasers / a spiker go past into the guns
   }
   if (droneNear && hero.fuel > 45 && !cruise) keys.push("Space", "KeyF");
+  const course = courseFor(sim.stageId);
+  if (course) {
+    const race = hero.along - sim.race.originAlong;
+    const sec = sectionAt(course, race);
+    const med = medianAt(course, race + 20) ?? (sec?.type === "split" ? medianAt(course, sec.s0 + 1) : null);
+    if (med && Math.abs(target) < 1.6) target = heroQ.lateral >= 0.4 ? 6 : -6;
+  }
   const road = poseAt(sim.track, hero.along + 10);
   const err = Math.max(-10, Math.min(10, target)) - heroQ.lateral;
   const desired = yawFromDir(road.tx, road.tz) - Math.max(-0.3, Math.min(0.3, err * 0.05));

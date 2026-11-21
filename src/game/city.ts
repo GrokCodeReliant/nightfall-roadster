@@ -65,8 +65,13 @@ type Pose = { x: number; y: number; z: number; rx: number; rz: number; tx: numbe
 const yaw = (p: Pose) => Math.atan2(p.tx, p.tz);
 const tmp = new THREE.Matrix4();
 
+/** Authored Night City turns the old every-4th overpass and every-6th gate off. */
+export function cityChunkRules(index: number, authored: boolean) {
+  return { overpass: !authored && index % 4 === 2, gate: !authored && index % 6 === 3 };
+}
+
 /** one chunk of city: all pieces baked into one merged mesh per material (+ separate gate lamps) */
-export function buildCityChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number, rnd: (n: number) => number) {
+export function buildCityChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number, rnd: (n: number) => number, authored = false) {
   for (const c of [...group.children]) {
     group.remove(c);
     c.traverse((o) => {
@@ -145,10 +150,11 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
     if (p.y < 0.6) continue;
     for (const side of [1, -1]) add("water_barrier_2m", p, side * (half - 0.6), 0, 0, 0);
   }
-  if (index % 4 === 2) add("overpass_60x12", mid, 0, 0, 0, 0);
-  else if (rnd(index * 9 + 2) < 0.3) add("billboard_pole_12x6", mid, (rnd(index) < 0.5 ? 1 : -1) * (half + 4), 0, 0, Math.PI);
+  const rules = cityChunkRules(index, authored);
+  if (rules.overpass) add("overpass_60x12", mid, 0, 0, 0, 0);
+  else if (!authored && rnd(index * 9 + 2) < 0.3) add("billboard_pole_12x6", mid, (rnd(index) < 0.5 ? 1 : -1) * (half + 4), 0, 0, Math.PI);
   let lamp: THREE.Mesh | null = null;
-  if (index % 6 === 3) {
+  if (rules.gate) {
     // boost gate: sign_fork on both kerbs, status_lamp tinted green/amber/red in code
     for (const side of [1, -1]) add("sign_fork", mid, side * (half - 1.4), 0, 0, Math.PI);
     // H2c OUT: ramp_launch / ramp_kicker used to sit on the sidewalk, outside the

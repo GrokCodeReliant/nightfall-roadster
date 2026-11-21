@@ -965,7 +965,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage !== "city" || ch.index < 0 || ch.built || !cityReady()) return;
     const i0 = ch.index * SEG;
     const o = sampleAt(sim.track, i0);
-    ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n));
+        ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n), sim.track.courseId === "city");
     ch.city.position.set(o.x, 0, o.z);
     ch.built = true;
   }
