@@ -98,6 +98,37 @@ for (const prof of profiles) {
     const ok = !rects.center && rects.bottom && !hit(rects.bottom, rects.top) && !hit(rects.bottom, rects.touch) && !hit(rects.bottom, rects.stick) && ![rects.top, rects.map].some((t) => hit(t, rects.pl) || hit(t, rects.pr) || hit(t, rects.bottom)) && gapOk && [rects.bottom, rects.top, rects.map, rects.touch, rects.stick, rects.pl, rects.pr].every(ins);
     check(P, "HUD on the edges: no overlaps, ≥8 px above touch row, inside viewport, centre clear", ok, JSON.stringify(rects));
   }
+  // Week I compact phone HUD: readouts are thin pills that never overlap each other or the touch controls,
+  // and every touch target is at least 44x44 CSS px. Portrait (the profile) and landscape (844x390).
+  if (P === "phone") {
+    const phoneHud = () => page.evaluate(() => {
+      const box = (e) => { const b = e.getBoundingClientRect(); return { n: (e.className || "").toString().split(" ")[0] + ":" + (e.textContent || "").trim().slice(0, 12), l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height }; };
+      const vis = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).visibility !== "hidden"; };
+      const all = (q) => [...document.querySelectorAll(q)].filter(vis).map(box);
+      return {
+        vw: innerWidth, vh: innerHeight,
+        groups: [all(".nf-readout"), all(".nf-map-wrap"), ...all(".nf-bottom .nf-meter").map((x) => [x]), ...all(".nf-bottom .nf-chip").map((x) => [x])],
+        controls: all(".nf-touch.is-live .nf-stick, .nf-touch.is-live button, .nf-icon-btn"),
+      };
+    });
+    const judge = (h) => {
+      const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+      const bad = [];
+      const g = h.groups.filter((x) => x.length);
+      for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) for (const a of g[i]) for (const b of g[j]) if (hit(a, b)) bad.push(`${a.n}x${b.n}`);
+      for (const a of g.flat()) { for (const c of h.controls) if (hit(a, c)) bad.push(`${a.n}x${c.n}`); if (a.l < 0 || a.t < 0 || a.r > h.vw || a.b > h.vh) bad.push(`${a.n} off-screen`); }
+      const small = h.controls.filter((c) => c.w < 43.99 || c.h < 43.99).map((c) => `${c.n} ${c.w.toFixed(0)}x${c.h.toFixed(0)}`);
+      const hasCtl = h.controls.length >= 7;
+      return { ok: !bad.length && !small.length && hasCtl && g.length >= 5, bad, small, controls: h.controls.length, readouts: g.length };
+    };
+    const portrait = judge(await phoneHud());
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const landscape = judge(await phoneHud());
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    check(P, "phone HUD: readouts clear of each other and of touch controls, touch targets ≥44x44 (portrait + landscape)", portrait.ok && landscape.ok, JSON.stringify({ portrait, landscape }));
+  }
   check(P, "drives after handover", moved > 20, `${moved.toFixed(1)} m (spawn along ${along0.toFixed(0)})`);
   const fired = await page.evaluate(() => { const r = window.__nf.cars[0].rounds; window.__nfAdvance(0.6, ["KeyW", "KeyF"]); return r - window.__nf.cars[0].rounds; });
   check(P, "fires", fired >= 3, `${fired.toFixed(0)} rounds`);

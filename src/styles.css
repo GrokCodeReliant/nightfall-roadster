@@ -1052,3 +1052,165 @@
   .nf-hud.has-track { --nf-touch-h: 6.2rem; }
   .nf-hud .nf-bottom { gap: 0.25rem; }
 }
+
+/* ---- Week I: compact phone HUD (David, Nov 21). Touch / narrow screens only; desktop (fine pointer,
+   >820 px) keeps the layout above. Readouts become thin single-line pills on the edges:
+   top strip = wave · kills · place/gap between pause and mute; right edge = minimap + timer under mute;
+   bottom strip = guns/mines · speed · hull · chips just above the touch row (portrait) or between the
+   stick and the buttons (landscape). Touch targets stay ≥ 44 px. */
+@media (pointer: coarse), (max-width: 820px) {
+  .nf-hud .nf-top {
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    padding-left: 3.25rem;
+    padding-right: 3.25rem;
+  }
+  .nf-hud .nf-readout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem 0.35rem;
+    min-width: 0;
+    max-width: 100%;
+    flex: 0 1 auto;
+    overflow: visible;
+    padding: 0.14rem 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-bg) 62%, transparent);
+  }
+  .nf-hud .nf-readout .nf-kicker { font-size: 0.6rem; letter-spacing: 0.12em; line-height: 1.2; }
+  .nf-hud .nf-readout .nf-stat { font-size: 0.82rem; margin: 0 0.15rem 0 -0.1rem; line-height: 1.2; }
+  .nf-hud .nf-readout .nf-sub { font-size: 0.6rem; margin: 0; letter-spacing: 0.08em; line-height: 1.2; white-space: nowrap; }
+  .nf-hud .nf-race {
+    display: flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    padding: 0.04rem 0.4rem;
+    border-width: 1px;
+    border-radius: 999px;
+    box-shadow: none;
+    white-space: nowrap;
+  }
+  .nf-hud .nf-race[hidden] { display: none; }
+  .nf-hud .nf-race-place { font-size: 0.82rem; line-height: 1.15; }
+  .nf-hud .nf-race-gap,
+  .nf-hud .nf-race-warn { margin: 0; font-size: 0.58rem; letter-spacing: 0.06em; line-height: 1.15; }
+  .nf-hud .nf-race.is-warn { border-width: 1px; box-shadow: 0 0 8px rgba(226, 59, 47, 0.8); }
+  /* minimap: a small tile on the right edge, under mute, with the timer as a pill under it */
+  .nf-hud .nf-map-wrap {
+    position: absolute;
+    top: calc(0.75rem + 2.75rem + 0.35rem + env(safe-area-inset-top));
+    right: calc(0.75rem + env(safe-area-inset-right));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+  .nf-hud .nf-map {
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+    border: 1px solid var(--color-border);
+  }
+  .nf-hud .nf-map-wrap .nf-sub {
+    margin: 0;
+    font-size: 0.56rem;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    padding: 0.06rem 0.3rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-bg) 62%, transparent);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .nf-hud .nf-toast {
+    top: calc(0.75rem + 2.75rem + 0.4rem + env(safe-area-inset-top));
+    width: min(16rem, calc(100% - 9rem));
+    font-size: 0.72rem;
+    min-height: 0;
+  }
+  /* bottom strip */
+  .nf-hud .nf-bottom {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.25rem;
+    max-width: none;
+  }
+  .nf-hud .nf-bottom .nf-meter {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-bg) 62%, transparent);
+    min-height: 0;
+    font-family: var(--font-hud);
+    font-size: 0.6rem;
+    line-height: 1.25;
+  }
+  .nf-hud .nf-meter p {
+    margin: 0;
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    line-height: 1.25;
+    gap: 0.22rem;
+    white-space: nowrap;
+  }
+  .nf-hud .nf-meter strong { font-size: 0.7rem; }
+  .nf-hud .nf-speed-box { display: flex; }
+  .nf-hud .nf-speed {
+    display: flex;
+    align-items: baseline;
+    gap: 0.2rem;
+    font-size: 0.92rem;
+    line-height: 1.15;
+    color: var(--color-fg);
+    text-shadow: none;
+  }
+  .nf-hud .nf-speed span.unit { display: inline; margin: 0; font-size: 0.52rem; letter-spacing: 0.1em; }
+  /* hull: "HULL ▬▬ ×3" on one line */
+  .nf-hud .nf-meter:has(> .nf-bar.is-hot) > p { display: contents; }
+  .nf-hud .nf-meter:has(> .nf-bar.is-hot) > p > strong { order: 2; }
+  .nf-hud .nf-meter > .nf-bar { order: 1; width: 2.6rem; height: 0.3rem; flex: 0 0 auto; }
+  .nf-hud .nf-meter.is-boost > p { order: 0; }
+  .nf-hud .nf-chips {
+    position: static;
+    display: contents;
+  }
+  .nf-hud .nf-chip { font-size: 0.56rem; letter-spacing: 0.08em; padding: 0.1rem 0.4rem; line-height: 1.25; }
+  /* touch targets: ≥ 44 px everywhere, Track row included */
+  .nf-touch button,
+  .nf-touch button.nf-track { min-height: 2.75rem; }
+  .nf-hud.has-track { --nf-touch-h: 8.8rem; }
+}
+
+/* Phone landscape: the bottom strip sits on the bottom edge between the stick and the buttons,
+   so the play area keeps the full height between the top strip and the controls. */
+@media (pointer: coarse) and (max-height: 500px) and (orientation: landscape), (max-width: 820px) and (max-height: 500px) and (orientation: landscape) {
+  .nf-stick { width: 5.2rem; height: 5.2rem; }
+  .nf-touch button { min-height: 2.75rem; font-size: 0.82rem; }
+  .nf-touch .nf-actions { gap: 0.3rem; }
+  .nf-touch .nf-actions button { min-width: 4.4rem; }
+  .nf-hud .nf-bottom {
+    top: auto;
+    bottom: calc(0.55rem + env(safe-area-inset-bottom));
+    left: calc(0.6rem + 5.2rem + 0.75rem + env(safe-area-inset-left));
+    right: calc(0.6rem + 9.1rem + 0.75rem + env(safe-area-inset-right));
+    margin: 0;
+    flex-wrap: wrap-reverse;
+  }
+  .nf-hud .nf-toast { width: min(20rem, calc(100% - 9rem)); }
+}
