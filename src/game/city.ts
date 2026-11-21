@@ -2,6 +2,8 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { COURSE_ORIGIN } from "./course";
+import { cityPlacements } from "./citycourse";
 
 type Inline = Record<string, string> | undefined;
 const inl = () => (window as unknown as { __NF_GLB?: Inline }).__NF_GLB;
@@ -11,7 +13,10 @@ const PIECES: [string, string][] = [
   ["city", "bldg_mid_12x12"], ["city", "bldg_mid_24x12"], ["city", "bldg_mid_24x24"],
   ["city", "bldg_top_12x12"], ["city", "bldg_top_24x12"], ["city", "bldg_top_24x24"],
   ["city", "sidewalk_12x40"], ["city", "overpass_60x12"], ["city", "billboard_pole_12x6"], ["city", "water_barrier_2m"], ["city", "traffic_cone"],
-  ["kit", "sign_fork"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"],
+  ["kit", "sign_fork"], ["kit", "barrier_jersey_4m"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"],
+  ["city", "barricade_3m"], ["city", "tunnel_40"], ["city", "tunnel_portal"], ["city", "ramp_kicker_1m"],
+  ["city", "facade_fins_12"], ["city", "facade_balcony_12"], ["city", "facade_ac_12"],
+  ["city", "billboard_roof_12x6"], ["city", "billboard_wall_8x4"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
 ];
 const lib: Record<string, THREE.Object3D> = {};
@@ -64,6 +69,13 @@ export function loadCity() {
 type Pose = { x: number; y: number; z: number; rx: number; rz: number; tx: number; tz: number };
 const yaw = (p: Pose) => Math.atan2(p.tx, p.tz);
 const tmp = new THREE.Matrix4();
+
+/** Set pieces the procedural fill does not already scatter. Tunnels stay unmerged so the roof can hide. */
+const AUTHORED_IDS = new Set([
+  "overpass_60x12", "tunnel_40", "tunnel_portal", "barricade_3m", "ramp_kicker_1m", "sign_fork",
+  "barrier_jersey_4m", "facade_fins_12", "facade_balcony_12", "facade_ac_12",
+  "billboard_pole_12x6", "billboard_roof_12x6", "billboard_wall_8x4",
+]);
 
 /** Authored Night City turns the old every-4th overpass and every-6th gate off. */
 export function cityChunkRules(index: number, authored: boolean) {
@@ -180,6 +192,29 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
         if (!lamp) lamp = o;
       }
       group.add(gate);
+    }
+  }
+  if (authored) {
+    const chunkS = index * seg * 2;
+    for (const piece of cityPlacements()) {
+      if (!AUTHORED_IDS.has(piece.id)) continue;
+      const abs = COURSE_ORIGIN + piece.s;
+      if (abs < chunkS || abs >= chunkS + seg * 2) continue;
+      const k = Math.round((abs - chunkS) / 2);
+      const p = at(Math.max(0, Math.min(seg, k)));
+      if (piece.id === "tunnel_40" || piece.id === "tunnel_portal") {
+        const src = lib[piece.id];
+        if (!src) continue;
+        const clone = src.clone(true);
+        concealTunnelRoof(clone, 13.5);
+        const q = new THREE.Group();
+        q.position.set(p.x - ox, p.y, p.z - oz);
+        q.rotation.set(0, yaw(p), 0);
+        q.add(clone);
+        group.add(q);
+      } else {
+        add(piece.id, p, -piece.lat, 0, 0, 0);
+      }
     }
   }
   for (const [mat, list] of parts) {
