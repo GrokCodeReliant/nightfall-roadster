@@ -2266,9 +2266,27 @@ function spawnRivals(sim: Sim) {
  * gets the same burst from any car already behind, without parking on the bumper.
  * Returns true when this frame owned the car's movement.
  */
+function burstHeld(sim: Sim, car: Car, hero: Car) {
+  const course = courseFor(sim.stageId);
+  if (!course) return false;
+  if (!car.grounded || !hero.grounded) return true;
+  const origin = sim.race.originAlong;
+  const windows: [number, number][] = [
+    [590, 620],
+    [2460, 2490],
+    [2687, 2717],
+    [2817, 2847],
+  ];
+  for (const o of obstaclesFor(sim.stageId)) windows.push([o.s - 30, o.s]);
+  const hs = hero.along - origin;
+  const cs = car.along - origin;
+  return windows.some(([a, b]) => (hs >= a && hs <= b) || (cs >= a && cs <= b));
+}
+
 function tryRacePass(sim: Sim, car: Car, dt: number) {
   const hero = sim.cars[0];
   if (!hero.alive || sim.phase !== "playing") return false;
+  if (burstHeld(sim, car, hero)) return false;
   const cruise = Math.max(SCROLL_MIN, car.raceSpeed > SCROLL_MIN ? car.raceSpeed : ownCruise(car));
   const gap = hero.along - car.along;
   if (gap <= 0.3) return false;

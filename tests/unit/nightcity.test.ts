@@ -678,6 +678,53 @@ test("a 40 degree landing off R1 blows the tires in place", () => {
   assert.ok(hero.speed >= 22);
 });
 
+test("no burst-ram starts on a lip or in the 30 m before a barricade", () => {
+  const windows: [number, number][] = [
+    [590, 620],
+    [2460, 2490],
+    [2687, 2717],
+    [2817, 2847],
+    ...NIGHT_CITY_OBSTACLES.map((o) => [o.s - 30, o.s] as [number, number]),
+  ];
+  for (let seed = 0; seed < 200; seed++) {
+    const [a, b] = windows[seed % windows.length];
+    const span = Math.max(1, b - a);
+    const s = a + (seed * 17) % span;
+    const sim = quietCity();
+    const hero = sim.cars[0];
+    const lat = seed % 2 === 0 ? -6 : 6;
+    plant(sim, s, lat, 28);
+    if (seed % 5 === 0) {
+      hero.y += 2;
+      hero.grounded = false;
+    }
+    const rival = sim.cars[1];
+    const p = poseAt(sim.track, sim.race.originAlong + Math.max(0, s - 4));
+    rival.alive = true;
+    rival.racer = true;
+    rival.kind = "rammer";
+    rival.lane = lat;
+    rival.x = p.x + p.rx * lat;
+    rival.z = p.z + p.rz * lat;
+    rival.y = p.y;
+    rival.along = p.s;
+    rival.lastAlong = p.s;
+    rival.yaw = yawFromDir(p.tx, p.tz);
+    rival.speed = 40;
+    rival.raceSpeed = 34;
+    rival.hp = rival.maxHp = 160;
+    rival.ramCd = 0;
+    rival.grounded = seed % 7 !== 0;
+    rival.burst = 0;
+    sim.keysOverride = new Set(["KeyW"]);
+    const before = rival.along;
+    step(sim, dt);
+    const jumped = rival.along - before;
+    assert.ok(jumped < 4, `seed ${seed} jump ${jumped}`);
+    assert.equal(rival.burst, 0, `seed ${seed}`);
+  }
+});
+
 test("classic still runs waves after Night City is a race", () => {
   const sim = createSim();
   sim.stageId = "classic";
