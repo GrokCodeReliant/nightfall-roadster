@@ -533,6 +533,21 @@ test("NC §9.11 tunnel hop stays under the roof and the camera does not move", (
   assert.ok(peak <= 6.5 + 1e-6, `peak ${peak}`);
 });
 
+test("NC §9.14 reaching 3600 freezes a place from 1st to 4th", () => {
+  const sim = quietCity();
+  plant(sim, 3588, 0, 48);
+  sim.keysOverride = new Set(["KeyW"]);
+  for (let i = 0; i < 60 * 4 && sim.phase === "playing"; i++) step(sim, dt);
+  assert.equal(sim.phase, "finished");
+  assert.ok(sim.race.place >= 1 && sim.race.place <= 4, `place ${sim.race.place}`);
+  const place = sim.race.place;
+  const reason = sim.result?.reason;
+  step(sim, dt);
+  assert.equal(sim.race.place, place);
+  assert.equal(sim.result?.reason, reason);
+  assert.equal(sim.race.held, true);
+});
+
 test("NC §9.6 brake held the whole stage never dead-stops", () => {
   const sim = createSim();
   sim.stageId = "city";
