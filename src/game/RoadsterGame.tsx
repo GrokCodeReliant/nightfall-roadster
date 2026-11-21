@@ -167,6 +167,8 @@ export function RoadsterGame() {
     worldRef.current?.setCar(CARS[i].id as CarId);
   }
   const chipKey = useRef("");
+  // Bumped on every run start so a frame that began before the reset cannot paint the old clock.
+  const hudEpoch = useRef(0);
   const knobRef = useRef<HTMLSpanElement>(null);
   const crossRef = useRef<HTMLDivElement>(null);
   const joy = useRef({ active: false, cx: 0, cy: 0 });
@@ -392,6 +394,7 @@ export function RoadsterGame() {
     window.addEventListener("resize", resize);
 
     const loop = (now: number) => {
+      const epoch = hudEpoch.current;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       acc = Math.min(stepDt * 5, acc + dt);
@@ -490,8 +493,11 @@ export function RoadsterGame() {
           cross.style.top = `${((1 - ndc.y) * 50).toFixed(2)}%`;
         }
       }
-      if (live) paintHud(sim);
-      paintThreats(sim, world, live && sim.phase === "playing");
+      // This frame started before a reset. The reset paint is the HUD; don't write over it.
+      if (hudEpoch.current === epoch) {
+        if (live) paintHud(sim);
+        paintThreats(sim, world, live && sim.phase === "playing");
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -627,6 +633,21 @@ export function RoadsterGame() {
     if (map) drawMap(map, sim);
   }
 
+  /** Paint the HUD from the sim immediately. A later frame that started earlier must not overwrite it. */
+  function publishHud(sim: Sim) {
+    hudEpoch.current += 1;
+    const epoch = hudEpoch.current;
+    chipKey.current = "\u0000";
+    const draw = () => {
+      if (epoch !== hudEpoch.current) return;
+      const current = simRef.current;
+      if (!current || (current.phase !== "playing" && current.phase !== "paused")) return;
+      paintHud(current);
+    };
+    draw();
+    queueMicrotask(draw);
+  }
+
   const [confirmMenu, setConfirmMenu] = useState(false);
   confirmRef.current = confirmMenu;
   /** tear down the current run: looping audio, rollout rig/robots/mixers, held input; sim state is reset by begin() */
@@ -710,6 +731,7 @@ export function RoadsterGame() {
     trackOnRef.current = false;
     setTrackOn(false);
     begin(sim);
+    publishHud(sim);
     const nextShop = { ...sim.shop };
     shopRef.current = nextShop;
     setShop(nextShop);

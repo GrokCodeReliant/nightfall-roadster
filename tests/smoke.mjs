@@ -200,7 +200,9 @@ for (const prof of profiles) {
   await page.evaluate(() => { window.__nfAdvance(3, "hunt"); });
   await page.keyboard.press("Escape");
   await page.click(".nf-pausemenu >> text=Restart");
-  await page.waitForTimeout(500);
+  // Let the frame that was already queued finish, then give a slow box up to a second to show 0:00.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.waitForFunction(() => /^0:00/.test(document.querySelector(".nf-map-wrap .nf-sub")?.textContent || ""), null, { timeout: 1000 }).catch(() => {});
   const rr2 = await page.evaluate(() => {
     const s = window.__nf;
     const h = s.cars[0];
