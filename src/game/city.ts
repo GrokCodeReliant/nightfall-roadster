@@ -21,6 +21,9 @@ const PIECES: [string, string][] = [
   ["city", "utility_cabinet"], ["city", "cable_run_12"], ["city", "hydrant"],
   ["city", "billboard_roof_12x6"], ["city", "billboard_wall_8x4"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
+  // Week I shared drop (art/nightfall-shared-20261120): citycourse already places these ids
+  ["city", "finish_gantry_24"], ["city", "tunnel_light_strip_4m"], ["city", "work_light_tower"],
+  ["kit", "start_grid_paint_40"], ["kit", "ramp_lip_chevron_24"],
 ];
 const lib: Record<string, THREE.Object3D> = {};
 const mats = new Map<string, THREE.Material>();
@@ -74,12 +77,15 @@ export function getPiece(name: string): THREE.Object3D | undefined {
   return lib[name];
 }
 
-function loadPieces(list: [string, string][], onDone: () => void) {
+export function loadPieces(list: [string, string][], onDone: () => void) {
   const mgr = new THREE.LoadingManager();
   mgr.setURLModifier((u) => {
     const f = u.split("/").pop() ?? "";
     const d = inl()?.[f];
-    return d ?? u;
+    if (d) return d;
+    // coast + shared kit GLBs point at ../road_kit/road_kit_atlas.png; the atlas ships as kit/
+    if (f === "road_kit_atlas.png" && u.includes("/road_kit/")) return `${BASE()}kit/road_kit_atlas.png`;
+    return u;
   });
   for (const [dir, name] of list) {
     if (lib[name]) { onDone(); continue; }
@@ -106,14 +112,63 @@ function loadPieces(list: [string, string][], onDone: () => void) {
   }
 }
 
-type Pose = { x: number; y: number; z: number; rx: number; rz: number; tx: number; tz: number };
+export type Pose = { x: number; y: number; z: number; rx: number; rz: number; tx: number; tz: number };
 const yaw = (p: Pose) => Math.atan2(p.tx, p.tz);
 const tmp = new THREE.Matrix4();
+
+// ---- Week I helpers used by coast.ts (Coast Road scenery, not wired into world.ts yet) ----
+export type Parts = Map<THREE.Material, THREE.BufferGeometry[]>;
+export function inNode(o: THREE.Object3D, name: string) {
+  for (let c: THREE.Object3D | null = o; c; c = c.parent) if (c.name === name) return true;
+  return false;
+}
+/** chunk-local placement matrix: road-local (lx left, ly up, lz forward) from pose p, yaw ry on top of the road yaw */
+export function placeMatrix(p: Pose, lx: number, ly: number, lz: number, ry: number, ox: number, oz: number, out = new THREE.Matrix4()) {
+  const q = new THREE.Object3D();
+  q.position.set(p.x - p.rx * lx - ox, p.y + ly, p.z - p.rz * lx - oz);
+  q.rotation.set(0, yaw(p) + ry, 0);
+  q.translateZ(lz);
+  q.updateMatrix();
+  return out.copy(q.matrix);
+}
+export function bakePiece(parts: Parts, name: string, m4: THREE.Matrix4, keep?: (o: THREE.Object3D) => boolean) {
+  const src = lib[name];
+  if (!src) return false;
+  src.updateMatrixWorld(true);
+  src.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || o.name === "status_lamp") return;
+    if (keep && !keep(o)) return;
+    const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    const g = new THREE.BufferGeometry();
+    for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g.setAttribute(a, g0.getAttribute(a));
+    if (!g.getAttribute("uv") || !g.getAttribute("normal")) return;
+    g.applyMatrix4(tmp.multiplyMatrices(m4, m.matrixWorld));
+    const l = parts.get(m.material as THREE.Material) ?? [];
+    l.push(g);
+    parts.set(m.material as THREE.Material, l);
+  });
+  return true;
+}
+export function flushParts(parts: Parts, group: THREE.Object3D) {
+  const out: THREE.Mesh[] = [];
+  for (const [mat, list] of parts) {
+    const g = mergeGeometries(list, false);
+    for (const x of list) x.dispose();
+    if (!g) continue;
+    const mesh = new THREE.Mesh(g, mat);
+    group.add(mesh);
+    out.push(mesh);
+  }
+  return out;
+}
 
 /** Set pieces the procedural fill does not already scatter. Tunnels stay unmerged so the roof can hide. */
 const AUTHORED_IDS = new Set([
   "overpass_60x12", "tunnel_40", "tunnel_portal", "barricade_3m", "ramp_kicker_1m", "sign_fork",
   "barrier_jersey_4m", "billboard_pole_12x6", "billboard_roof_12x6", "billboard_wall_8x4",
+  // Week I shared drop: merged per material into the chunk like the rest (the ~60 NC-6 tunnel strips add 0 draws this way)
+  "finish_gantry_24", "tunnel_light_strip_4m", "work_light_tower", "start_grid_paint_40", "ramp_lip_chevron_24",
 ]);
 
 function chunkZone(index: number, k: number, seg: number) {
@@ -294,6 +349,10 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
         q.rotation.set(0, yaw(p), 0);
         q.add(clone);
         group.add(q);
+      } else if (piece.id === "tunnel_light_strip_4m") {
+        // shared drop INTEGRATION.md: pivot on the wall plane, lamp faces +X, y 6-7, yaw 180 on the opposite wall
+        const lx = -Math.sign(piece.lat) * 13.15;
+        add(piece.id, p, lx, 6.5, 0, lx > 0 ? Math.PI : 0);
       } else {
         add(piece.id, p, -piece.lat, 0, 0, 0);
       }
