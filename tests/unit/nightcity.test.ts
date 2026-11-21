@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COURSE_ORIGIN, NIGHT_CITY, courseFor, sectionAt, sectionById } from "../../src/game/course.ts";
+import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, medianAt, respawnBlocked, sectionAt, sectionById } from "../../src/game/course.ts";
 import { buildCourseTrack, ensureTrack, poseAt, queryTrack, sampleAt, yawFromDir } from "../../src/game/road.ts";
 import {
+  FIELD_DNF,
   RACE_DIST,
   RACE_HP,
   RIVAL_COUNT,
@@ -319,6 +320,102 @@ test("a rival on the inside of Fork A stays left, and a Roadster hop clears the 
     if (lateral(hop) > 1) crossed = true;
   }
   assert.equal(crossed, true);
+});
+
+test("NC §9.9 L4 into HZ-1 glances once and stays moving", () => {
+  assert.equal(NIGHT_CITY_OBSTACLES.length, 11);
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 856, 9, 40);
+  const hp = hero.hp;
+  sim.keysOverride = new Set(["KeyW"]);
+  let hits = 0;
+  let ratio = 0;
+  let slow = 0;
+  let off = false;
+  for (let i = 0; i < 90; i++) {
+    const before = hero.speed;
+    const hpBefore = hero.hp;
+    step(sim, dt);
+    if (hero.speed < 22 - 1e-3) slow += 1;
+    if (hero.hp < hpBefore) {
+      hits += 1;
+      ratio = hero.speed / before;
+      if (Math.abs(lateral(sim) - 9) > 1) off = true;
+    }
+  }
+  assert.equal(hits, 1);
+  assert.ok(Math.abs(ratio - 0.85) <= 0.02, `ratio ${ratio}`);
+  assert.equal(hero.hp, hp - 6);
+  assert.equal(slow, 0);
+  assert.equal(off, true);
+  assert.ok(hero.speed >= 22);
+});
+
+test("no barricade shoves a car toward a wall", () => {
+  for (const o of NIGHT_CITY_OBSTACLES) {
+    const sim = quietCity();
+    plant(sim, o.s - 1, o.lat, 40);
+    sim.keysOverride = new Set(["KeyW"]);
+    let hit = false;
+    for (let i = 0; i < 30 && !hit; i++) {
+      step(sim, dt);
+      if (sim.cars[0].hp < 100) hit = true;
+    }
+    assert.equal(hit, true, o.id);
+    const lat = lateral(sim);
+    assert.ok(Math.abs(lat) <= 10.9, `${o.id} lat ${lat}`);
+    const med = medianAt(NIGHT_CITY, o.s);
+    if (med) assert.equal(Math.sign(lat), Math.sign(o.lat), `${o.id} crossed the median`);
+    else assert.ok(Math.abs(lat) < Math.abs(o.lat) - 0.5, `${o.id} lat ${lat} toward the wall`);
+  }
+});
+
+test("reset backstep inside Fork A skips the barricade", () => {
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 1202, -20, 30);
+  hero.offT = 0.85 - dt;
+  const hp = hero.hp;
+  sim.keysOverride = new Set(["KeyA"]);
+  step(sim, dt);
+  assert.equal(sim.toast, "Back on track");
+  const landed = hero.along - sim.race.originAlong;
+  const lat = lateral(sim);
+  assert.equal(respawnBlocked("city", landed, lat), false);
+  assert.equal(respawnBlocked("city", 1190.4, -6), true);
+  assert.ok(Math.abs(landed - 1190.4) > 1.5, `landed ${landed}`);
+  assert.ok(Math.abs(lat - -6) <= 0.5, `lat ${lat}`);
+  assert.equal(hero.hp, hp);
+  assert.ok(hero.speed >= 22);
+});
+
+test("NC §9.6 brake held the whole stage never dead-stops", () => {
+  const sim = createSim();
+  sim.stageId = "city";
+  begin(sim);
+  sim.keysOverride = new Set(["KeyS"]);
+  const hero = sim.cars[0];
+  let slow = 0;
+  let stalled = 0;
+  let prev = hero.along;
+  let frames = 0;
+  while (sim.phase === "playing" && frames < 60 * 200) {
+    const frozen = sim.hitstop > 0;
+    step(sim, dt);
+    frames += 1;
+    if (!frozen && sim.phase === "playing") {
+      if (hero.speed < 22 - 1e-3) slow += 1;
+      if (hero.along <= prev + 1e-4) stalled += 1;
+    }
+    prev = hero.along;
+  }
+  assert.equal(slow, 0);
+  assert.equal(stalled, 0);
+  assert.equal(sim.phase, "finished");
+  const reason = sim.result?.reason ?? "";
+  const placed = reason === "1st" || reason === "2nd" || reason === "3rd" || reason === "4th";
+  assert.ok(placed || reason === "DNF" || reason === FIELD_DNF, reason);
 });
 
 test("classic still runs waves after Night City is a race", () => {

@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, edgeKind, medianAt, raceDistance, sectionAt } from "./course";
+import { courseFor, edgeKind, ejectLat, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -165,6 +165,8 @@ export type Car = {
   slideT: number;
   /** Continuous seconds spent more than OFFROAD_M past the road edge. */
   offT: number;
+  /** Per-obstacle contact cooldown (seconds). Indexed like the stage obstacle list. */
+  bumpCd: number[];
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -574,6 +576,7 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     raceSpeed: 0,
     slideT: 0,
     offT: 0,
+    bumpCd: [],
   };
 }
 
@@ -969,12 +972,28 @@ function forkLane(sim: Sim, car: Car, atS: number): number {
 }
 
 /** Tire-blow, then back to lane center a short way behind. One fail does not end the race. */
+/** Skip a 12 m backstep that would plant the car on a barricade or a kicker lip. */
+function clearOfCourse(sim: Sim, car: Car, s: number): number {
+  const minS = sim.track.first * 2 + 2;
+  const bad = (abs: number) => {
+    if (poseAt(sim.track, abs).gap) return true;
+    return respawnBlocked(sim.stageId, abs - sim.race.originAlong, forkLane(sim, car, abs));
+  };
+  if (!bad(s)) return s;
+  for (let d = 2; d <= 60; d += 2) {
+    if (s - d >= minS && !bad(s - d)) return s - d;
+    if (!bad(s + d)) return s + d;
+  }
+  return s;
+}
+
 function offroadReset(sim: Sim, car: Car) {
   const hp = car.hp;
   const speed = Math.max(SCROLL_MIN, car.speed);
   const back = Math.min(15, OFFROAD_BACK);
   let s = Math.max(sim.track.first * 2 + 2, car.along - back);
   if (poseAt(sim.track, s).gap || gapAhead(sim.track, s, 20)) s = safeSpawnS(sim, car.along - back);
+  s = clearOfCourse(sim, car, s);
   car.lane = forkLane(sim, car, s);
   place(sim, car, s, speed);
   car.hp = hp;
@@ -1007,8 +1026,9 @@ function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
     }
   }
   const hp = car.hp;
-  car.lane = forkLane(sim, car, car.along);
-  place(sim, car, safeSpawnS(sim, car.along), 22);
+  const s = clearOfCourse(sim, car, safeSpawnS(sim, car.along));
+  car.lane = forkLane(sim, car, s);
+  place(sim, car, s, 22);
   car.hp = hp;
   car.recover = reason === "fall" ? 0.85 : 0.65;
   car.flash = 0.4;
@@ -1028,8 +1048,9 @@ function loseLife(sim: Sim) {
     gameOver(sim);
     return;
   }
-  hero.lane = forkLane(sim, hero, hero.along);
-  place(sim, hero, safeSpawnS(sim, hero.along), 22);
+  const respawnS = clearOfCourse(sim, hero, safeSpawnS(sim, hero.along));
+  hero.lane = forkLane(sim, hero, respawnS);
+  place(sim, hero, respawnS, 22);
   const lost = dropTier(sim);
   hero.hp = hero.maxHp;
   hero.recover = 0.65;
@@ -1229,6 +1250,39 @@ function railHere(sim: Sim, absS: number, sideSign: number): boolean {
   return edgeKind(course, absS - sim.race.originAlong, side) === "rail";
 }
 
+function glanceObstacles(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, dt: number) {
+  const rows = obstaclesFor(sim.stageId);
+  if (!rows.length || !car.alive || sim.phase !== "playing") return q;
+  if (car.bumpCd.length !== rows.length) car.bumpCd = rows.map(() => 0);
+  for (let i = 0; i < rows.length; i++) car.bumpCd[i] = Math.max(0, car.bumpCd[i] - dt);
+  if (car.y > q.y + rows[0].h) return q;
+  const race = q.s - sim.race.originAlong;
+  for (let i = 0; i < rows.length; i++) {
+    const o = rows[i];
+    if (car.bumpCd[i] > 0 || !obstacleOverlap(o, race, q.lateral)) continue;
+    const target = ejectLat(sim.stageId, race, o, q.lateral);
+    const delta = target - q.lateral;
+    car.x += q.rx * delta;
+    car.z += q.rz * delta;
+    car.lat = Math.sign(delta || 1) * Math.max(4, Math.abs(car.lat));
+    car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
+    car.slideT = Math.max(car.slideT, WALL_SLIDE);
+    car.bumpCd[i] = 0.5;
+    if (car.hero) damageHero(sim, 6);
+    else {
+      car.hp -= 4;
+      if (car.hp <= 0) {
+        killAI(sim, car);
+        return q;
+      }
+    }
+    if (!car.alive) return q;
+    q = queryTrack(sim.track, car.x, car.z, car.along);
+    break;
+  }
+  return q;
+}
+
 function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boolean) {
   if (car.recover > 0) {
     car.recover -= dt;
@@ -1368,6 +1422,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     q = queryTrack(sim.track, car.x, car.z, car.along);
   }
   q = glanceMedian(sim, car, q);
+  q = glanceObstacles(sim, car, q, dt);
   if (car.slideT > 0) {
     car.slideT = Math.max(0, car.slideT - dt);
     const err = wrapAngle(yawFromDir(q.tx, q.tz) - car.yaw);
@@ -2198,6 +2253,27 @@ function tryRacePass(sim: Sim, car: Car, dt: number) {
   return true;
 }
 
+function rivalObstacles(sim: Sim, car: Car, dt: number) {
+  const rows = obstaclesFor(sim.stageId);
+  if (!rows.length || !car.alive) return;
+  if (car.bumpCd.length !== rows.length) car.bumpCd = rows.map(() => 0);
+  for (let i = 0; i < rows.length; i++) car.bumpCd[i] = Math.max(0, car.bumpCd[i] - dt);
+  const race = car.along - sim.race.originAlong;
+  for (let i = 0; i < rows.length; i++) {
+    const o = rows[i];
+    if (car.bumpCd[i] > 0 || !obstacleOverlap(o, race, car.lane)) continue;
+    car.lane = ejectLat(sim.stageId, race, o, car.lane);
+    car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
+    car.hp -= 4;
+    car.bumpCd[i] = 0.5;
+    const p = poseAt(sim.track, car.along);
+    car.x = p.x + p.rx * car.lane;
+    car.z = p.z + p.rz * car.lane;
+    if (car.hp <= 0) killAI(sim, car);
+    return;
+  }
+}
+
 /** Keep racing the finish. Cruise does not pace-match the hero, so a slower hero gets passed. Close behind his rear, burst and ram. */
 function stepRival(sim: Sim, car: Car, dt: number) {
   if (car.hp <= 0) {
@@ -2224,6 +2300,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
     car.lat = 0;
     car.vy = 0;
   }
+  rivalObstacles(sim, car, dt);
   if (!car.alive || sim.phase !== "playing") return;
   if (!hero.alive) return;
   const { fx, fz } = fxDir(car.yaw);

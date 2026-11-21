@@ -109,6 +109,86 @@ export function medianAt(course: Course, raceS: number): Median | null {
   return null;
 }
 
+/** One static barricade collider. lat/s are race-space. */
+export type Obstacle = {
+  id: string;
+  s: number;
+  lat: number;
+  latHalf: number;
+  alongHalf: number;
+  h: number;
+};
+
+const LANE_LAT = { L1: -9, L2: -3, L3: 3, L4: 9 } as const;
+const BARRICADE = { latHalf: 2.9, alongHalf: 0.365, h: 1.26 };
+const CAR_ALONG = 1.2;
+const CAR_LAT = 1.15;
+
+function barricade(id: string, s: number, lane: keyof typeof LANE_LAT): Obstacle {
+  return { id, s, lat: LANE_LAT[lane], ...BARRICADE };
+}
+
+/**
+ * Eleven collider rows. HZ-3 is two lanes at one s, so each lane is its own box
+ * (the sheet lists 9 sites and "11 rows").
+ */
+export const NIGHT_CITY_OBSTACLES: Obstacle[] = [
+  barricade("HZ-1a", 860, "L4"),
+  barricade("HZ-1b", 940, "L1"),
+  barricade("HZ-1c", 1010, "L4"),
+  barricade("HZ-2a", 1190, "L2"),
+  barricade("HZ-2b", 1330, "L1"),
+  barricade("HZ-3a", 2260, "L1"),
+  barricade("HZ-3b", 2260, "L2"),
+  barricade("HZ-3c", 2380, "L3"),
+  barricade("HZ-3d", 2380, "L4"),
+  barricade("HZ-4a", 2725, "L4"),
+  barricade("HZ-4b", 2855, "L3"),
+];
+
+export function obstaclesFor(stageId: string): readonly Obstacle[] {
+  return stageId === "city" ? NIGHT_CITY_OBSTACLES : [];
+}
+
+export function obstacleOverlap(o: Obstacle, raceS: number, lat: number): boolean {
+  return Math.abs(raceS - o.s) <= o.alongHalf + CAR_ALONG && Math.abs(lat - o.lat) <= o.latHalf + CAR_LAT;
+}
+
+/** Full-width ramp kickers, expanded ±6 m so a 12 m backstep does not plant on the lip. */
+export function kickerWindow(stageId: string, raceS: number): boolean {
+  if (stageId !== "city") return false;
+  if (raceS >= 662 && raceS <= 686) return true;
+  if (raceS >= 2532 && raceS <= 2556) return true;
+  return false;
+}
+
+export function respawnBlocked(stageId: string, raceS: number, lat: number): boolean {
+  if (kickerWindow(stageId, raceS)) return true;
+  return obstaclesFor(stageId).some((o) => obstacleOverlap(o, raceS, lat));
+}
+
+/**
+ * Free side is the larger gap inside the carriageway (median splits the road).
+ * The landing stays on that side and short of the kerb.
+ */
+export function ejectLat(stageId: string, raceS: number, o: Obstacle, carLat: number): number {
+  const course = courseFor(stageId);
+  const med = course ? medianAt(course, raceS) : null;
+  const road = 12;
+  let lo = -road;
+  let hi = road;
+  if (med) {
+    const side = Math.sign(o.lat) || Math.sign(carLat) || -1;
+    if (side < 0) hi = -med.half;
+    else lo = med.half;
+  }
+  const leftGap = o.lat - o.latHalf - lo;
+  const rightGap = hi - (o.lat + o.latHalf);
+  const sign = rightGap > leftGap ? 1 : -1;
+  const raw = sign < 0 ? o.lat - o.latHalf - CAR_LAT - 0.1 : o.lat + o.latHalf + CAR_LAT + 0.1;
+  return Math.max(lo + CAR_LAT, Math.min(hi - CAR_LAT, raw));
+}
+
 /** Edge on the driver's left (lateral < 0) or right. Missing road is soft. */
 export function edgeKind(course: Course, raceS: number, side: "L" | "R"): EdgeKind {
   const sec = sectionAt(course, raceS);
