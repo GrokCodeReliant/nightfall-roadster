@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, edgeKind, ejectLat, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
+import { courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -292,6 +292,8 @@ export type Sim = {
   boostCd: number;
   relit: boolean;
   floating: boolean;
+  /** Seconds left on a green-gate top-speed raise (+10, never above 60). */
+  gateCapT: number;
   track: Track;
   cars: Car[];
   shots: Shot[];
@@ -641,6 +643,7 @@ export function createSim(): Sim {
     boostCd: 0,
     relit: false,
     floating: false,
+    gateCapT: 0,
     touch: { steer: 0, throttle: 0, fire: false, mine: false, thrust: false, brake: false },
     mouseFire: false,
     mouseMine: false,
@@ -724,6 +727,7 @@ export function begin(sim: Sim) {
   if (sim.devFull) grantFullUpgrades(sim);
   sim.phase = "playing";
   sim.time = 0;
+  sim.gateCapT = 0;
   sim.score = 0;
   sim.takedowns = 0;
   sim.falls = 0;
@@ -1283,6 +1287,24 @@ function glanceObstacles(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, d
   return q;
 }
 
+function passGates(sim: Sim, car: Car, prevAlong: number, nowAlong: number, lat: number) {
+  if (!car.hero || !car.alive) return;
+  const gates = gatesFor(sim.stageId);
+  if (!gates.length) return;
+  const origin = sim.race.originAlong;
+  const prev = prevAlong - origin;
+  const now = nowAlong - origin;
+  if (now <= prev) return;
+  const raised = Math.min(60, resolvedStats(sim.carId, sim.trackOn).topSpeed + 10);
+  for (const g of gates) {
+    if (!(prev < g.s && now >= g.s)) continue;
+    if (g.side === "right" && lat <= 0) continue;
+    if (gatePhase(g.s, sim.time) !== "green") continue;
+    car.speed = Math.min(raised, car.speed + 10);
+    sim.gateCapT = 2;
+  }
+}
+
 function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boolean) {
   if (car.recover > 0) {
     car.recover -= dt;
@@ -1297,6 +1319,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   const boost = car.hero && hasBoost(sim.carId) ? { hopMax: BOOST_HOP_MAX, accel: BOOST_ACCEL } : undefined;
   const st = car.hero ? resolvedStats(sim.carId, sim.trackOn) : null;
   if (car.hero) sim.boostCd = Math.max(0, sim.boostCd - dt);
+  if (car.hero) sim.gateCapT = Math.max(0, sim.gateCapT - dt);
   // ground take-off needs the post-landing cooldown; one air re-light per jump
   let wantThrust = !!boost && input.thrust && (infiniteFuel || car.fuel > 0.5);
   if (wantThrust && car.grounded && sim.boostCd > 0) wantThrust = false;
@@ -1317,7 +1340,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   car.speed -= car.speed * drag * dt;
   if (wantThrust) car.speed += BOOST_SPEED_BONUS * dt;
   // Enemies stay on the v0.1 48 cap. Hero uses the car row. In-boost cap stays BOOST_SPEED_CAP (58).
-  const cap = wantThrust ? BOOST_SPEED_CAP : (st ? st.topSpeed : 48);
+  let cap = wantThrust ? BOOST_SPEED_CAP : (st ? st.topSpeed : 48);
+  if (car.hero && sim.gateCapT > 0) cap = Math.min(60, cap + 10);
   car.speed = clamp(car.speed, -14, cap);
   // Brake and reverse stay in the input, but along-speed cannot dead-stop.
   scrollFloor(car);
@@ -1474,6 +1498,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     car.grounded = false;
   }
 
+  passGates(sim, car, car.lastAlong, q.s, q.lateral);
   car.lastAlong = car.along = q.s;
 
   if (car.hero && car.alive) {

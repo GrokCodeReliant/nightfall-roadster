@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, medianAt, respawnBlocked, sectionAt, sectionById } from "../../src/game/course.ts";
+import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, gatePhase, medianAt, respawnBlocked, sectionAt, sectionById } from "../../src/game/course.ts";
 import { buildCourseTrack, ensureTrack, poseAt, queryTrack, sampleAt, yawFromDir } from "../../src/game/road.ts";
 import {
   FIELD_DNF,
@@ -429,6 +429,74 @@ test("NC §9.10 lane kickers launch on their lane and nowhere else", () => {
   }
   assert.equal(air, false);
   assert.ok(hero.along - sim.race.originAlong >= 2760);
+});
+
+function phaseHold(gateS: number, want: "green" | "red") {
+  for (let t = 0; t < 6; t += 0.05) {
+    if (gatePhase(gateS, t) === want && gatePhase(gateS, t + 0.4) === want) return t;
+  }
+  return 0;
+}
+
+test("NC §9.13 gates boost on green, hold the raise, and ignore a red or the wrong side", () => {
+  const at = (t: number) => [480, 1380, 1600, 3420].map((s) => gatePhase(s, t));
+  assert.deepEqual(at(2.5), at(2.5));
+
+  const cross = (phase: "green" | "red", raceS: number, lat: number) => {
+    const sim = quietCity();
+    const hero = sim.cars[0];
+    plant(sim, raceS - 4, lat, 48);
+    sim.time = phaseHold(raceS, phase);
+    sim.keysOverride = new Set(["KeyW"]);
+    let speed = 0;
+    for (let i = 0; i < 40 && speed === 0; i++) {
+      step(sim, dt);
+      if (hero.along - sim.race.originAlong >= raceS) speed = hero.speed;
+    }
+    return speed;
+  };
+
+  const green = cross("green", 480, 0);
+  const red = cross("red", 480, 0);
+  assert.ok(green <= 60, `green ${green}`);
+  assert.ok(green >= red + 8, `green ${green} red ${red}`);
+  assert.ok(Math.abs(red - 48) < 1.5, `red ${red}`);
+
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 476, 0, 48);
+  sim.time = phaseHold(480, "green");
+  sim.keysOverride = new Set(["KeyW"]);
+  let held = 0;
+  let crossed = false;
+  for (let i = 0; i < 60 * 3; i++) {
+    step(sim, dt);
+    if (hero.along - sim.race.originAlong >= 480) crossed = true;
+    if (crossed && hero.speed >= 56) held += dt;
+  }
+  assert.ok(held >= 1.5, `held ${held}`);
+
+  const air = quietCity();
+  const flyer = air.cars[0];
+  plant(air, 476, 0, 40);
+  flyer.y += 3;
+  flyer.grounded = false;
+  flyer.vy = 4;
+  air.time = phaseHold(480, "green");
+  air.keysOverride = new Set(["KeyW"]);
+  let boosted = false;
+  for (let i = 0; i < 40; i++) {
+    const before = flyer.speed;
+    const airing = !flyer.grounded;
+    step(air, dt);
+    if (airing && flyer.along - air.race.originAlong >= 480 && flyer.speed >= before + 8) boosted = true;
+  }
+  assert.equal(boosted, true);
+
+  const left = cross("green", 1380, -6);
+  const right = cross("green", 1380, 6);
+  assert.ok(Math.abs(left - 48) < 1.5, `G-A left ${left}`);
+  assert.ok(right >= left + 8, `G-A right ${right} left ${left}`);
 });
 
 test("NC §9.6 brake held the whole stage never dead-stops", () => {

@@ -166,6 +166,30 @@ export function laneKickerAt(stageId: string, raceS: number, lat: number): boole
   return false;
 }
 
+/** `right` fires only for lat > 0 (the right roadway). */
+export type Gate = { id: string; s: number; side: "both" | "right" };
+
+export const NIGHT_CITY_GATES: Gate[] = [
+  { id: "G1", s: 480, side: "both" },
+  { id: "G-A", s: 1380, side: "right" },
+  { id: "G2", s: 1600, side: "both" },
+  { id: "G3", s: 3420, side: "both" },
+];
+
+export function gatesFor(stageId: string): readonly Gate[] {
+  return stageId === "city" ? NIGHT_CITY_GATES : [];
+}
+
+/** 6 s cycle: green 3, amber 1.2, red 1.8. Offset is a hash of the gate s, not the wall clock. */
+export function gatePhase(gateS: number, time: number): "green" | "amber" | "red" {
+  const x = Math.sin(gateS * 127.1 + 3.7) * 43758.5453;
+  const offset = (x - Math.floor(x)) * 6;
+  const c = (((time + offset) % 6) + 6) % 6;
+  if (c < 3) return "green";
+  if (c < 4.2) return "amber";
+  return "red";
+}
+
 export function obstacleOverlap(o: Obstacle, raceS: number, lat: number): boolean {
   return Math.abs(raceS - o.s) <= o.alongHalf + CAR_ALONG && Math.abs(lat - o.lat) <= o.latHalf + CAR_LAT;
 }

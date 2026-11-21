@@ -5,6 +5,7 @@ import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.j
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
+import { courseFor } from "./course";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
 type CarView = {
@@ -1116,7 +1117,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         // boost gate: pass the sign_fork pair while green for a short speed boost (visual stage feature)
         const gs = ch.index * CHUNK + CHUNK / 2;
         const hero = sim.cars[0];
-        if (sim.phase === "playing" && hero.alive && hero.along > gs && hero.along - gs < 3 && gateBoost <= 0 && col === 0x33ff66) {
+        if (!courseFor(sim.stageId) && sim.phase === "playing" && hero.alive && hero.along > gs && hero.along - gs < 3 && gateBoost <= 0 && col === 0x33ff66) {
           hero.speed = Math.min(hero.speed + 10, 60);
           gateBoost = 2;
         }
