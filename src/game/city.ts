@@ -19,6 +19,11 @@ const PIECES: [string, string][] = [
   ["city", "facade_ledge_12"], ["city", "facade_signbox_12"], ["city", "facade_inset_12"],
   ["city", "bollard"], ["city", "vending_box"], ["city", "trash_bin"],
   ["city", "utility_cabinet"], ["city", "cable_run_12"], ["city", "hydrant"],
+  // Facade pass v3 (art/nightfall-nightcity-v3-20261120) — chunky trim + denser dressing
+  ["city", "facade_fins_12_v3"], ["city", "facade_balcony_12_v3"], ["city", "facade_ac_12_v3"],
+  ["city", "facade_ledge_12_v3"], ["city", "facade_awning_12"], ["city", "facade_parapet_12"],
+  ["city", "streetlight_city_12m"], ["city", "bus_shelter_4m"], ["city", "planter_box"],
+  ["city", "kiosk_2m"], ["city", "scooter_parked"], ["city", "bollard_v3"],
   ["city", "billboard_roof_12x6"], ["city", "billboard_wall_8x4"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
   // Week I shared drop (art/nightfall-shared-20261120): citycourse already places these ids
@@ -245,25 +250,29 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       const zone = authored ? chunkZone(index, Math.min(seg, Math.max(0, Math.round(((z + front / 2 + 20) / 40) * seg))), seg) : "";
       // Authored zones pick the trim. The bay offsets are the art-pass attach rules.
       let trim: string | null = null;
-      if (zone === "glass" && n % 2 === 0) trim = "facade_fins_12";
-      else if (zone === "market") trim = rnd(index * 19 + n * 5 + side) < 0.5 ? "facade_balcony_12" : "facade_ac_12";
+      if (zone === "glass" && n % 2 === 0) trim = "facade_fins_12_v3";
+      else if (zone === "market") trim = rnd(index * 19 + n * 5 + side) < 0.5 ? "facade_balcony_12_v3" : "facade_ac_12_v3";
+      else if (!authored) {
+        // stand-in mix until BN-12 authored placement lands
+        trim = (n % 3 === 0) ? "facade_balcony_12_v3" : (n % 3 === 1) ? "facade_fins_12_v3" : "facade_ac_12_v3";
+      }
       const frontLx = side * (half + 12.35);
       const bays = front === 12 ? [0] : [-6, 6];
       add(`bldg_base_${key}`, p, lx, 0.22, 0, ry);
+      for (const bz of bays) add("facade_awning_12", p, frontLx, 0.22, bz, ry);
       for (let f = 1; f < floors; f++) {
         add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry);
         if (!trim) continue;
         for (const bz of bays) {
           add(trim, p, frontLx, 0.22 + 12 * f, bz, ry);
-          if (trim === "facade_balcony_12") continue;
-          add("facade_ledge_12", p, frontLx, 0.22 + 12 * f, bz, ry);
-          if (trim === "facade_fins_12" && rnd(index * 29 + n * 3 + f + side) < 0.45) {
-            add("facade_inset_12", p, frontLx, 0.22 + 12 * f, bz, ry);
-          }
+          if (trim === "facade_balcony_12_v3") continue;
+          add("facade_ledge_12_v3", p, frontLx, 0.22 + 12 * f, bz, ry);
+          // v3 pilasters are 1.4 m deep — do not place the 0.16 m v2 inset on these bays
         }
       }
       add(`bldg_top_${key}`, p, lx, 0.22 + 12 * floors, 0, ry);
-      if (trim && trim !== "facade_balcony_12") add("facade_signbox_12", p, frontLx, 0.22, bays[0], ry);
+      for (const bz of bays) add("facade_parapet_12", p, frontLx, 0.22 + 12 * floors, bz, ry);
+      if (trim && trim !== "facade_balcony_12_v3") add("facade_signbox_12", p, frontLx, 0.22, bays[0], ry);
       if (rnd(index * 17 + n * 3 + side) < 0.6) {
         const ns = ["neon_arrow", "neon_ring", "neon_bar", "neon_cup", "neon_bolt", "neon_bowl"][Math.floor(rnd(index * 23 + n) * 6)];
         add(ns, p, side * (half + 12.3), 6 + rnd(index + n * 11) * 10, 0, ry);
@@ -275,14 +284,24 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   // streetlights every 20 m, alternating sides
   for (let k = 0; k < 2; k++) {
     const p = at(Math.floor((k * seg) / 2));
-    add("streetlight_city_twin_8m", p, k % 2 ? half + 1.2 : -(half + 1.2), 0.22, 0, k % 2 ? Math.PI : 0);
-    add("streetlight_city_6m", at(Math.floor(((k + 0.5) * seg) / 2)), k % 2 ? -(half + 10) : half + 10, 0.22, 0, k % 2 ? 0 : Math.PI);
+    add("streetlight_city_12m", p, k % 2 ? half + 1.3 : -(half + 1.3), 0.22, 0, k % 2 ? Math.PI : 0);
+    add("streetlight_city_12m", at(Math.floor(((k + 0.5) * seg) / 2)), k % 2 ? -(half + 1.3) : half + 1.3, 0.22, 0, k % 2 ? 0 : Math.PI);
   }
   if (authored && chunkZone(index, Math.floor(seg / 2), seg) !== "tunnel") {
-    for (let k = 0; k < 4; k++) {
-      const p = at(Math.floor(((k + 0.5) / 4) * seg));
-      add("bollard", p, half + 1.6, 0.22, 0, 0);
-      add("bollard", p, -(half + 1.6), 0.22, 0, Math.PI);
+    for (let k = 0; k < 8; k++) {
+      const p = at(Math.floor(((k + 0.5) / 8) * seg));
+      add("bollard_v3", p, half + 1.7, 0.22, 0, 0);
+      add("bollard_v3", p, -(half + 1.7), 0.22, 0, Math.PI);
+    }
+    // 1 shelter, alternate sides; 4 planters; 1 kiosk; 3–4 scooters
+    add("bus_shelter_4m", mid, (index % 2 ? 1 : -1) * (half + 4.2), 0.22, 8, index % 2 ? Math.PI : 0);
+    for (const [sx, sz] of [[1, -12], [1, 12], [-1, -4], [-1, 16]] as [number, number][]) {
+      add("planter_box", mid, sx * (half + 3.4), 0.22, sz, 0);
+    }
+    add("kiosk_2m", mid, (index % 2 ? -1 : 1) * (half + 9.6), 0.22, index % 2 ? -6 : 14, index % 2 ? 0 : Math.PI);
+    for (const [sx, sz, yaw] of [[1, -4, Math.PI], [1, 16, Math.PI], [-1, 2, 0], [-1, 24, 0]] as [number, number, number][]) {
+      if (sx < 0 && index % 3 === 0) continue;
+      add("scooter_parked", mid, sx * (half + 2.6), 0.22, sz, yaw);
     }
     if (rnd(index * 11 + 3) < 0.5) {
       add("vending_box", mid, half + 10.4, 0.22, -8, Math.PI);
