@@ -150,20 +150,39 @@ export function obstaclesFor(stageId: string): readonly Obstacle[] {
   return stageId === "city" ? NIGHT_CITY_OBSTACLES : [];
 }
 
+/** Lane kicker: 5.3 m window starting at the lip, live only within 3 m of the lane. */
+export type LaneKicker = { id: string; s: number; lat: number; len: number; half: number };
+
+export const NIGHT_CITY_KICKERS: LaneKicker[] = [
+  { id: "K-B1", s: 2717, lat: 9, len: 5.3, half: 3 },
+  { id: "K-B2", s: 2847, lat: 3, len: 5.3, half: 3 },
+];
+
+export function laneKickerAt(stageId: string, raceS: number, lat: number): boolean {
+  if (stageId !== "city") return false;
+  for (const k of NIGHT_CITY_KICKERS) {
+    if (raceS >= k.s && raceS <= k.s + k.len && Math.abs(lat - k.lat) <= k.half) return true;
+  }
+  return false;
+}
+
 export function obstacleOverlap(o: Obstacle, raceS: number, lat: number): boolean {
   return Math.abs(raceS - o.s) <= o.alongHalf + CAR_ALONG && Math.abs(lat - o.lat) <= o.latHalf + CAR_LAT;
 }
 
-/** Full-width ramp kickers, expanded ±6 m so a 12 m backstep does not plant on the lip. */
-export function kickerWindow(stageId: string, raceS: number): boolean {
+/** Ramp lips and lane kickers, expanded ±6 m so a 12 m backstep does not plant on the lip. */
+export function kickerWindow(stageId: string, raceS: number, lat = 0): boolean {
   if (stageId !== "city") return false;
   if (raceS >= 662 && raceS <= 686) return true;
   if (raceS >= 2532 && raceS <= 2556) return true;
+  for (const k of NIGHT_CITY_KICKERS) {
+    if (raceS >= k.s - 6 && raceS <= k.s + k.len + 6 && Math.abs(lat - k.lat) <= k.half) return true;
+  }
   return false;
 }
 
 export function respawnBlocked(stageId: string, raceS: number, lat: number): boolean {
-  if (kickerWindow(stageId, raceS)) return true;
+  if (kickerWindow(stageId, raceS, lat)) return true;
   return obstaclesFor(stageId).some((o) => obstacleOverlap(o, raceS, lat));
 }
 

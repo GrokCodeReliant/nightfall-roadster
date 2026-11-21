@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, edgeKind, ejectLat, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
+import { courseFor, edgeKind, ejectLat, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -1449,7 +1449,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       return;
     }
   } else if (car.y <= q.y + 0.12 || car.grounded) {
-    if (car.grounded && q.kicker && car.speed > 15 && !wantThrust) {
+    const kicked = q.kicker || laneKickerAt(sim.stageId, q.s - sim.race.originAlong, q.lateral);
+    if (car.grounded && kicked && car.speed > 15 && !wantThrust) {
       car.grounded = false;
       car.vy = Math.max(8, car.speed * 0.45) * (boost ? RAMP_ASSIST : 1);
       car.y = q.y + 0.15;
@@ -2259,8 +2260,10 @@ function rivalObstacles(sim: Sim, car: Car, dt: number) {
   if (car.bumpCd.length !== rows.length) car.bumpCd = rows.map(() => 0);
   for (let i = 0; i < rows.length; i++) car.bumpCd[i] = Math.max(0, car.bumpCd[i] - dt);
   const race = car.along - sim.race.originAlong;
+  const deck = poseAt(sim.track, car.along).y;
   for (let i = 0; i < rows.length; i++) {
     const o = rows[i];
+    if (car.y > deck + o.h) continue;
     if (car.bumpCd[i] > 0 || !obstacleOverlap(o, race, car.lane)) continue;
     car.lane = ejectLat(sim.stageId, race, o, car.lane);
     car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
@@ -2271,6 +2274,26 @@ function rivalObstacles(sim: Sim, car: Car, dt: number) {
     car.z = p.z + p.rz * car.lane;
     if (car.hp <= 0) killAI(sim, car);
     return;
+  }
+}
+
+function flyRival(sim: Sim, car: Car, dt: number, cruise: number) {
+  car.speed = cruise;
+  car.vy -= GRAVITY * dt;
+  car.vy = Math.max(-40, Math.min(28, car.vy));
+  car.y += car.vy * dt;
+  car.along += car.speed * dt;
+  holdMedianSide(sim, car);
+  const p = poseAt(sim.track, car.along);
+  car.x = p.x + p.rx * car.lane;
+  car.z = p.z + p.rz * car.lane;
+  car.yaw = yawFromDir(p.tx, p.tz);
+  car.lastAlong = car.along;
+  car.lat = 0;
+  if (car.y <= p.y) {
+    car.y = p.y;
+    car.vy = 0;
+    car.grounded = true;
   }
 }
 
@@ -2286,19 +2309,29 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.leaving = false;
   const cruise = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
   const hero = sim.cars[0];
-  if (!tryRacePass(sim, car, dt)) {
+  if (!car.grounded && courseFor(sim.stageId)) {
+    flyRival(sim, car, dt, cruise);
+  } else if (!tryRacePass(sim, car, dt)) {
     car.speed = cruise;
     car.along += cruise * dt;
     holdMedianSide(sim, car);
     const p = poseAt(sim.track, car.along);
     car.x = p.x + p.rx * car.lane;
     car.z = p.z + p.rz * car.lane;
-    car.y = p.y;
-    car.grounded = true;
     car.yaw = yawFromDir(p.tx, p.tz);
     car.lastAlong = car.along;
     car.lat = 0;
-    car.vy = 0;
+    const race = p.s - sim.race.originAlong;
+    const lip = courseFor(sim.stageId) && (p.kicker || laneKickerAt(sim.stageId, race, car.lane));
+    if (lip && car.speed > 15) {
+      car.grounded = false;
+      car.vy = Math.max(8, car.speed * 0.45);
+      car.y = p.y + 0.15;
+    } else {
+      car.y = p.y;
+      car.grounded = true;
+      car.vy = 0;
+    }
   }
   rivalObstacles(sim, car, dt);
   if (!car.alive || sim.phase !== "playing") return;

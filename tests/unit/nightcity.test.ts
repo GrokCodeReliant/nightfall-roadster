@@ -390,6 +390,47 @@ test("reset backstep inside Fork A skips the barricade", () => {
   assert.ok(hero.speed >= 22);
 });
 
+function clearsKicker(lip: number, lat: number, speed: number, mark: number) {
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, lip - 2, lat, speed);
+  sim.keysOverride = new Set(speed <= 22 ? [] : ["KeyW"]);
+  let wasAir = false;
+  let high = false;
+  let land = -1;
+  for (let i = 0; i < 60 * 8 && land < 0; i++) {
+    step(sim, dt);
+    const race = hero.along - sim.race.originAlong;
+    const road = poseAt(sim.track, hero.along).y;
+    if (!hero.grounded && Math.abs(race - mark) <= 1.5 && hero.y - road > 1.3) high = true;
+    if (wasAir && hero.grounded) land = race;
+    wasAir = !hero.grounded;
+  }
+  assert.equal(high, true, `lip ${lip} speed ${speed} land ${land}`);
+  assert.ok(land > mark + 1, `land ${land} mark ${mark}`);
+}
+
+test("NC §9.10 lane kickers launch on their lane and nowhere else", () => {
+  assert.equal(sampleAt(cityTrack, (COURSE_ORIGIN + 2718) / 2).kicker, false);
+  assert.equal(sampleAt(cityTrack, (COURSE_ORIGIN + 2848) / 2).kicker, false);
+  for (const speed of [22, 30, 40]) {
+    clearsKicker(2717, 9, speed, 2725);
+    clearsKicker(2847, 3, speed, 2855);
+  }
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 2710, 3, 40);
+  sim.keysOverride = new Set(["KeyW"]);
+  let air = false;
+  for (let i = 0; i < 60 * 3 && hero.along - sim.race.originAlong < 2760; i++) {
+    step(sim, dt);
+    const road = poseAt(sim.track, hero.along).y;
+    if (!hero.grounded || hero.y - road > 0.4) air = true;
+  }
+  assert.equal(air, false);
+  assert.ok(hero.along - sim.race.originAlong >= 2760);
+});
+
 test("NC §9.6 brake held the whole stage never dead-stops", () => {
   const sim = createSim();
   sim.stageId = "city";
