@@ -995,6 +995,21 @@
 @media (max-width: 420px) {
   .nf-hud .nf-bottom { flex-wrap: wrap; }
   .nf-hud .nf-bottom .nf-meter { flex: 1 1 40%; }
+  /* Race place/gap/warn sits inside the left readout. On a 390-wide phone the 11rem card
+     pushed that readout into the minimap and the mute button. Let it shrink instead. */
+  .nf-top { gap: 0.35rem; }
+  .nf-readout { min-width: 0; flex: 1 1 auto; overflow: hidden; }
+  .nf-map-wrap { flex: 0 0 auto; }
+  .nf-race {
+    min-width: 0;
+    max-width: 100%;
+    margin-top: 0.22rem;
+    padding: 0.22rem 0.38rem 0.26rem;
+  }
+  .nf-race-place { font-size: 1.15rem; }
+  .nf-race-gap,
+  .nf-race-warn { font-size: 0.68rem; letter-spacing: 0.06em; }
+  .nf-hud .nf-toast { top: calc(8.4rem + env(safe-area-inset-top)); }
 }
 
 /* Desktop meters sit on the bottom edge. Lift them so upgrade chips stay in the viewport. */

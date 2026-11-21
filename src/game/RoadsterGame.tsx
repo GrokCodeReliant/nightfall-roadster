@@ -638,6 +638,7 @@ export function RoadsterGame() {
     setConfirmMenu(false);
     if (!sim) return;
     sim.keys.clear();
+    sim.keysOverride = null;
     sim.mouseFire = false;
     sim.mouseMine = false;
   }

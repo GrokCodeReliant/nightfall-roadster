@@ -118,17 +118,35 @@ for (const prof of profiles) {
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
   const k1 = await page.evaluate(() => window.__nf.takedowns);
   check(P, "an enemy dies", k1 > k0 || k0 > 0, `kills ${k0} -> ${k1}`);
-  // ---- full run loop: game over -> retry -> title -> different car + stage
-  await page.evaluate(() => { const s = window.__nf; s.lives = 1; const h = s.cars[0]; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = 0.01; });
-  await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
+  // Night City is a 3600 m race. Idling DNFs or finishes; it does not wreck. Cover finish -> results -> retry here.
+  const finished = await page.evaluate(() => {
+    const s = window.__nf;
+    const h = s.cars[0];
+    h.alive = true;
+    h.invuln = 0;
+    if (s.up) s.up.shieldT = 0;
+    h.hp = Math.max(h.hp, 1);
+    const target = s.race.originAlong + s.race.dist + 6;
+    const i = Math.round(target / 2);
+    const sample = s.track.samples[i - s.track.first];
+    if (!sample) return { ok: false, target, first: s.track.first, n: s.track.samples.length };
+    h.x = sample.x;
+    h.y = sample.y;
+    h.z = sample.z;
+    h.along = sample.s;
+    h.lastAlong = sample.s;
+    h.speed = 30;
+    window.__nfAdvance(0.2, "idle");
+    return { ok: true, phase: s.phase, reason: s.result && s.result.reason, along: h.along };
+  });
   const over = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
-  const ov = await page.evaluate(() => ({ phase: window.__nf.phase, lives: window.__nf.lives, wrecked: !!document.querySelector(".nf-card .nf-title-sm")?.textContent?.includes("Wrecked") }));
-  check(P, "game over screen", over && ov.phase === "finished" && ov.wrecked, JSON.stringify(ov));
+  const ov = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
+  check(P, "finish results", over && finished.ok && ov.phase === "finished" && /^(1st|2nd|3rd|4th)$/.test(ov.title), JSON.stringify({ ov, finished }));
   await page.screenshot({ path: `${SHOTS}/${P}-gameover.png` });
   await page.click("text=Run it again");
   await page.waitForSelector(".nf-hud");
   const rs = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return { phase: s.phase, wave: s.wave, kills: s.takedowns, score: s.score ?? 0, lives: s.lives, hp: h.hp, alive: h.alive, enemies: s.cars.filter((c) => !c.hero && c.alive).length, roll: window.__nfRollout() }; });
-  check(P, "retry resets the run", rs.phase === "playing" && rs.kills === 0 && rs.wave <= 1 && rs.lives === 3 && rs.alive && rs.enemies === 0 && rs.roll.active, JSON.stringify(rs));
+  check(P, "retry after finish resets the run", rs.phase === "playing" && rs.kills === 0 && rs.wave <= 1 && rs.lives === 3 && rs.alive && rs.enemies >= 6 && rs.roll.active, JSON.stringify(rs));
   await page.evaluate(() => window.__nfSkipRollout());
   await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
   const mv = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); return window.__nf.cars[0].along - a; });
@@ -148,6 +166,18 @@ for (const prof of profiles) {
   await page.waitForFunction((id) => !window.__nfRollout().active && window.__nfCar().car === id && window.__nfCar().source === "glb", EXPECT[pick.car]?.id, { timeout: 120000 });
   const again = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); return { m: window.__nf.cars[0].along - a, car: window.__nfCar().file, stage: window.__nfStageInfo().stage, kills: window.__nf.takedowns, lives: window.__nf.lives }; });
   check(P, "title -> new car + stage -> plays", again.m > 10 && again.stage === "classic" && again.car === `${EXPECT[pick.car].file}_phone` && again.lives === 3, `${pick.car} / ${pick.stage}: ${JSON.stringify(again)}`);
+  // Classic Night is still the wave loop: a lethal hit with no lives left is Wrecked, then retry spawns no field.
+  await page.evaluate(() => { const s = window.__nf; s.lives = 1; const h = s.cars[0]; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = 0.01; });
+  await page.evaluate(() => { for (let i = 0; i < 80 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
+  const wreckOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+  const wv = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
+  check(P, "wrecked game over", wreckOver && wv.phase === "finished" && wv.title.includes("Wrecked"), JSON.stringify(wv));
+  await page.click("text=Run it again");
+  await page.waitForSelector(".nf-hud");
+  const wrs = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return { phase: s.phase, wave: s.wave, kills: s.takedowns, lives: s.lives, alive: h.alive, enemies: s.cars.filter((c) => !c.hero && c.alive).length, roll: window.__nfRollout().active }; });
+  check(P, "wreck retry resets the run", wrs.phase === "playing" && wrs.kills === 0 && wrs.wave <= 1 && wrs.lives === 3 && wrs.alive && wrs.enemies === 0 && wrs.roll, JSON.stringify(wrs));
+  await page.evaluate(() => window.__nfSkipRollout());
+  await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
   // ---- pause menu loop: pause -> Resume; pause -> Restart; pause -> Back to menu (confirm) -> different car + stage -> play; no growth
   const settle = async () => { await page.evaluate(() => { window.__nf.hitstop = 0; }); await page.waitForTimeout(2500); };
   const snap = () => page.evaluate(() => ({ ...window.__nfScene(), ...window.__nfDraws(), audio: window.__nfAudio().loopNodes, phase: window.__nf.phase }));
@@ -171,8 +201,25 @@ for (const prof of profiles) {
   await page.keyboard.press("Escape");
   await page.click(".nf-pausemenu >> text=Restart");
   await page.waitForTimeout(500);
-  const rr2 = await page.evaluate(() => { const s = window.__nf; return { phase: s.phase, time: s.time, kills: s.takedowns, wave: s.wave, lives: s.lives, hp: s.cars[0].hp, enemies: s.cars.filter((c) => !c.hero && c.alive).length, shots: s.shots.filter((x) => x.alive).length, mines: s.mines.filter((x) => x.alive).length, roll: window.__nfRollout().active, audio: window.__nfAudio().loopNodes }; });
-  check(P, "Restart resets the run", rr2.phase === "playing" && rr2.time < 1 && rr2.kills === 0 && rr2.lives === 3 && rr2.hp === 100 && rr2.enemies === 0 && rr2.shots === 0 && rr2.mines === 0 && rr2.roll && rr2.audio === base.audio, JSON.stringify(rr2));
+  const rr2 = await page.evaluate(() => {
+    const s = window.__nf;
+    const h = s.cars[0];
+    const race = document.querySelector(".nf-race");
+    return {
+      phase: s.phase, time: s.time, kills: s.takedowns, wave: s.wave, lives: s.lives,
+      hp: h.hp, maxHp: h.maxHp,
+      enemies: s.cars.filter((c) => !c.hero && c.alive).length,
+      shots: s.shots.filter((x) => x.alive).length,
+      mines: s.mines.filter((x) => x.alive).length,
+      roll: window.__nfRollout().active,
+      audio: window.__nfAudio().loopNodes,
+      hudWave: document.querySelector(".nf-readout .nf-stat")?.textContent ?? "",
+      hudKills: document.querySelector(".nf-readout .nf-sub")?.textContent ?? "",
+      hudTime: document.querySelector(".nf-map-wrap .nf-sub")?.textContent ?? "",
+      raceHidden: !race || race.hidden,
+    };
+  });
+  check(P, "Restart resets the run", rr2.phase === "playing" && rr2.time < 1 && rr2.kills === 0 && rr2.lives === 3 && rr2.hp === rr2.maxHp && rr2.hp > 0 && rr2.enemies === 0 && rr2.shots === 0 && rr2.mines === 0 && rr2.roll && rr2.audio === base.audio && rr2.hudWave === "1" && rr2.hudKills === "Kills 0" && /^0:00/.test(rr2.hudTime) && rr2.raceHidden, JSON.stringify(rr2));
   await page.evaluate(() => window.__nfSkipRollout());
   await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
   await page.keyboard.press("Escape");

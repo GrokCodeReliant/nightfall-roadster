@@ -183,7 +183,7 @@ export function cityChunkRules(index: number, authored: boolean) {
 }
 
 /** one chunk of city: all pieces baked into one merged mesh per material (+ separate gate lamps) */
-export function buildCityChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number, rnd: (n: number) => number, authored = false) {
+export function buildCityChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number, rnd: (n: number) => number, authored = false, foldProps = false) {
   for (const c of [...group.children]) {
     group.remove(c);
     c.traverse((o) => {
@@ -195,6 +195,7 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   }
   if (!cityReady()) return null;
   const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  let skipRoof = false;
   const add = (name: string, p: Pose, lx: number, ly: number, lz: number, ry: number) => {
     const src = lib[name];
     if (!src) return;
@@ -209,6 +210,11 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
     src.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || o.name === "status_lamp") return;
+      if (skipRoof) {
+        let roof = false;
+        for (let n: THREE.Object3D | null = o; n; n = n.parent) if (n.name === "tunnel_roof") roof = true;
+        if (roof) return;
+      }
       const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
       const g = new THREE.BufferGeometry();
       for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g.setAttribute(a, g0.getAttribute(a));
@@ -342,6 +348,13 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       if (piece.id === "tunnel_40" || piece.id === "tunnel_portal") {
         const src = lib[piece.id];
         if (!src) continue;
+        // Phone: bake the shell into the chunk materials. The chase cam stays above the roof, so the roof mesh is omitted.
+        if (foldProps) {
+          skipRoof = true;
+          add(piece.id, p, 0, 0, 0, 0);
+          skipRoof = false;
+          continue;
+        }
         const clone = src.clone(true);
         concealTunnelRoof(clone, 13.5);
         const q = new THREE.Group();

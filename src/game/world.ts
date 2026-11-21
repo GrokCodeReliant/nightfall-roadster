@@ -560,6 +560,119 @@ export function mergeStatic(root: THREE.Object3D) {
   }
 }
 
+/** Phone enemy LOD: one mesh per wheel material, parented on the root. The wheel_* pivots stay so the rig still finds four wheels. */
+function foldWheels(root: THREE.Object3D) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const victims: THREE.Mesh[] = [];
+  const underWheel = (o: THREE.Object3D) => {
+    for (let p: THREE.Object3D | null = o.parent; p && p !== root; p = p.parent) if (/^wheel_/.test(p.name)) return true;
+    return false;
+  };
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || (m as unknown as THREE.SkinnedMesh).isSkinnedMesh || !underWheel(m) || Array.isArray(m.material)) return;
+    const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    const g = new THREE.BufferGeometry();
+    const pos = g0.getAttribute("position");
+    const nrm = g0.getAttribute("normal");
+    if (!pos || !nrm) return;
+    g.setAttribute("position", pos);
+    g.setAttribute("normal", nrm);
+    if (g0.getAttribute("uv")) g.setAttribute("uv", g0.getAttribute("uv"));
+    g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    const list = groups.get(m.material as THREE.Material) ?? [];
+    list.push(g);
+    groups.set(m.material as THREE.Material, list);
+    victims.push(m);
+  });
+  for (const v of victims) v.parent?.remove(v);
+  for (const [mat, list] of groups) {
+    const merged = mergeGeometries(list, false);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.name = "merged_wheel";
+    mesh.castShadow = false;
+    root.add(mesh);
+  }
+}
+
+function ancestorNamed(o: THREE.Object3D, root: THREE.Object3D, re: RegExp) {
+  for (let p: THREE.Object3D | null = o.parent; p && p !== root; p = p.parent) if (re.test(p.name)) return p;
+  return null;
+}
+
+/**
+ * Phone enemy LOD. The phone GLBs are already the low mesh, but each wheel is four
+ * materials and the body is five, so a full field is a draw each. Collapse trim into
+ * the body paint, wheels into one tire mesh, and each turret into one mesh. Glass stays.
+ * The hero car does not come through here.
+ */
+function phoneEnemyLod(root: THREE.Object3D) {
+  const named = new Map<string, THREE.Material>();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || Array.isArray(m.material)) return;
+    const name = m.material.name;
+    if (name && !named.has(name)) named.set(name, m.material);
+  });
+  const body = named.get("body");
+  const tire = named.get("tire") ?? body;
+  if (body) {
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || Array.isArray(m.material)) return;
+      if (ancestorNamed(m, root, /rotor_/)) return;
+      if (ancestorNamed(m, root, /wheel_/)) {
+        if (tire) m.material = tire;
+        return;
+      }
+      const matName = m.material.name;
+      if (matName === "lamp" || matName === "trim" || matName === "rim" || matName === "taillight") m.material = body;
+    });
+  }
+  mergeStatic(root);
+  foldWheels(root);
+  const mounts: THREE.Object3D[] = [];
+  root.traverse((o) => {
+    if (/^turret_/.test(o.name)) mounts.push(o);
+  });
+  for (const mount of mounts) {
+    mount.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(mount.matrixWorld).invert();
+    const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+    const victims: THREE.Mesh[] = [];
+    mount.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || m === mount || Array.isArray(m.material)) return;
+      const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+      const g = new THREE.BufferGeometry();
+      const pos = g0.getAttribute("position");
+      const nrm = g0.getAttribute("normal");
+      if (!pos || !nrm) return;
+      g.setAttribute("position", pos);
+      g.setAttribute("normal", nrm);
+      if (g0.getAttribute("uv")) g.setAttribute("uv", g0.getAttribute("uv"));
+      g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+      const list = groups.get(m.material as THREE.Material) ?? [];
+      list.push(g);
+      groups.set(m.material as THREE.Material, list);
+      victims.push(m);
+    });
+    if (victims.length < 2) continue;
+    for (const v of victims) v.parent?.remove(v);
+    for (const [mat, list] of groups) {
+      const merged = mergeGeometries(list, false);
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.name = "merged_turret";
+      mesh.castShadow = false;
+      mount.add(mesh);
+    }
+  }
+}
+
 /**
  * Swap the hero view's procedural hull for the GLB. Every attachment is found by node name
  * (wheel_*, thruster_*, lamp_*, taillight, turret_mount, driver_seat), so a re-export with the
@@ -910,7 +1023,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const POOL = BEHIND + AHEAD + 1;
   const BLD_PER = 4;
   const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
-  const roadMap = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}assets/v02/kit/road_kit_atlas.png`);
+  // Single-file HTML inlines the atlas on window.__NF_GLB. A path fetch from file:// is a CORS error and the road stays untextured.
+  const roadMap = new THREE.TextureLoader().load(inlineGlb("road_kit_atlas.png") ?? `${import.meta.env.BASE_URL}assets/v02/kit/road_kit_atlas.png`);
   roadMap.colorSpace = THREE.SRGBColorSpace;
   roadMap.flipY = false;
   roadMap.wrapS = THREE.ClampToEdgeWrapping;
@@ -975,7 +1089,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage !== "city" || ch.index < 0 || ch.built || !cityReady()) return;
     const i0 = ch.index * SEG;
     const o = sampleAt(sim.track, i0);
-        ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n), sim.track.courseId === "city");
+        ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n), sim.track.courseId === "city", coarse);
     ch.city.position.set(o.x, 0, o.z);
     ch.built = true;
   }
@@ -1097,6 +1211,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const c = Math.floor(along / CHUNK);
     const lo = Math.max(0, c - BEHIND);
     const hi = c + AHEAD;
+    // Phone keeps the road stream and drops city dressing outside a short window. Desktop still builds every streamed chunk.
+    const cityLo = coarse ? Math.max(0, c - 1) : lo;
+    const cityHi = coarse ? c + 3 : hi;
     const have = new Set<number>();
     for (const ch of chunks) {
       if (ch.index >= lo && ch.index <= hi) have.add(ch.index);
@@ -1111,6 +1228,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     let cityBudget = 1;
     for (const ch of chunks) {
       if (ch.index !== -1) {
+        if (stage === "city" && (ch.index < cityLo || ch.index > cityHi)) continue;
         if (!cityBudget && stage === "city" && !ch.built) continue;
         if (!cityBudget) continue;
         if (stage === "city" && !ch.built && cityReady()) cityBudget = 0;
@@ -1125,7 +1243,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
         if (ch.index < 0) continue;
-        ch.city.visible = true;
+        ch.city.visible = ch.index >= cityLo && ch.index <= cityHi;
         if (!ch.lamp) continue;
         const col = gateColor(now + ch.index);
         ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
@@ -1240,7 +1358,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       new GLTFLoader().load(
         enemyUrl(kind, enemyLod),
         (g) => {
-          mergeStatic(g.scene);
+          if (coarse) phoneEnemyLod(g.scene);
+          else mergeStatic(g.scene);
           enemyModels[kind] = g.scene;
           enemyInfo[kind] = "glb";
         },
