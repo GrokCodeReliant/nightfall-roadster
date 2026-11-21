@@ -1306,6 +1306,7 @@ function passGates(sim: Sim, car: Car, prevAlong: number, nowAlong: number, lat:
 }
 
 function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boolean) {
+  let blown = false;
   if (car.recover > 0) {
     car.recover -= dt;
     input = { steer: 0, throttle: 0, fire: false, mine: false, thrust: false };
@@ -1493,6 +1494,18 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       car.y = q.y;
       car.vy = 0;
       car.grounded = true;
+      if (wasAir && car.hero && courseFor(sim.stageId)) {
+        const err = Math.abs(wrapAngle(car.yaw - yawFromDir(q.tx, q.tz)));
+        if (err > (35 * Math.PI) / 180) {
+          car.invuln = OFFROAD_INVULN;
+          car.speed = Math.max(SCROLL_MIN, car.speed);
+          car.spin = 0.4;
+          car.flash = 0.45;
+          car.offT = 0;
+          car.slideT = 0;
+          blown = true;
+        }
+      }
       if (wasAir && (hard || sp > 12)) {
         sim.events.push({ t: "land", x: car.x, y: car.y, z: car.z, hard });
         if (hard && car.hero) sim.trauma = Math.min(1, sim.trauma + 0.35);
@@ -1511,6 +1524,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       sim.hinted = p.s;
       toast(sim, boost ? "Ramp — boost if you want more air" : "Ramp ahead", true);
     }
+    if (blown) toast(sim, "Back on track", true);
   }
 
   car.fireCd = Math.max(0, car.fireCd - dt);

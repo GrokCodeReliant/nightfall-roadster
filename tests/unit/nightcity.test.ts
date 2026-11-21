@@ -658,6 +658,26 @@ test("NC §9.15 the bot finishes Night City in each of the six cars", () => {
   }
 });
 
+test("a 40 degree landing off R1 blows the tires in place", () => {
+  const sim = quietCity();
+  const hero = sim.cars[0];
+  plant(sim, 900, 0, 30);
+  const p = poseAt(sim.track, hero.along);
+  hero.y = p.y + 0.4;
+  hero.grounded = false;
+  hero.vy = -24;
+  hero.yaw = yawFromDir(p.tx, p.tz) + (40 * Math.PI) / 180;
+  const along = hero.along;
+  const hp = hero.hp;
+  sim.keysOverride = new Set();
+  step(sim, dt);
+  assert.equal(sim.toast, "Back on track");
+  assert.equal(hero.hp, hp);
+  assert.ok(hero.invuln > 0.9, `invuln ${hero.invuln}`);
+  assert.ok(Math.abs(hero.along - along) < 2, `along ${hero.along - along}`);
+  assert.ok(hero.speed >= 22);
+});
+
 test("classic still runs waves after Night City is a race", () => {
   const sim = createSim();
   sim.stageId = "classic";
