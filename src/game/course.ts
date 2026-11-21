@@ -180,6 +180,37 @@ export function gatesFor(stageId: string): readonly Gate[] {
   return stageId === "city" ? NIGHT_CITY_GATES : [];
 }
 
+/** Nearest ramp, kicker, or gate to a tunnel mouth. Night City's nearest is G2, 100 m before NC-6. */
+export function tunnelClearance(course: Course): { ok: boolean; nearest: string; gap: number } {
+  const features: { name: string; s: number }[] = [];
+  for (const sec of course.sections) {
+    if (sec.type !== "ramp") continue;
+    features.push({ name: sec.id, s: sec.s0 }, { name: `${sec.id}-end`, s: sec.s0 + sec.len });
+  }
+  for (const k of stageIdKickers(course.id)) features.push({ name: k.id, s: k.s });
+  for (const g of gatesFor(course.id)) features.push({ name: g.id, s: g.s });
+  let nearest = "";
+  let gap = Infinity;
+  for (const t of course.sections) {
+    if (t.type !== "tunnel") continue;
+    const mouth0 = t.s0;
+    const mouth1 = t.s0 + t.len;
+    for (const f of features) {
+      const d = Math.min(Math.abs(f.s - mouth0), Math.abs(f.s - mouth1));
+      if (d < gap) {
+        gap = d;
+        nearest = f.name;
+      }
+      if (f.s >= mouth0 - 60 && f.s <= mouth1 + 60) return { ok: false, nearest: f.name, gap: d };
+    }
+  }
+  return { ok: true, nearest, gap };
+}
+
+function stageIdKickers(id: string): readonly LaneKicker[] {
+  return id === "city" ? NIGHT_CITY_KICKERS : [];
+}
+
 /** 6 s cycle: green 3, amber 1.2, red 1.8. Offset is a hash of the gate s, not the wall clock. */
 export function gatePhase(gateS: number, time: number): "green" | "amber" | "red" {
   const x = Math.sin(gateS * 127.1 + 3.7) * 43758.5453;

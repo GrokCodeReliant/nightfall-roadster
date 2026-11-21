@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, gatePhase, medianAt, respawnBlocked, sectionAt, sectionById } from "../../src/game/course.ts";
+import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, gatePhase, medianAt, respawnBlocked, sectionAt, sectionById, tunnelClearance } from "../../src/game/course.ts";
+import { concealTunnelRoof } from "../../src/game/city.ts";
+import { CAM_BACK, CAM_UP } from "../../src/game/world.ts";
+import * as THREE from "three";
 import { buildCourseTrack, ensureTrack, poseAt, queryTrack, sampleAt, yawFromDir } from "../../src/game/road.ts";
 import {
   FIELD_DNF,
@@ -497,6 +500,37 @@ test("NC §9.13 gates boost on green, hold the raise, and ignore a red or the wr
   const right = cross("green", 1380, 6);
   assert.ok(Math.abs(left - 48) < 1.5, `G-A left ${left}`);
   assert.ok(right >= left + 8, `G-A right ${right} left ${left}`);
+});
+
+test("NC §9.11 tunnel hop stays under the roof and the camera does not move", () => {
+  assert.equal(CAM_BACK, 19);
+  assert.equal(CAM_UP, 13.5);
+  const clear = tunnelClearance(NIGHT_CITY);
+  assert.equal(clear.ok, true);
+  assert.equal(clear.nearest, "G2");
+  assert.equal(clear.gap, 100);
+
+  const roof = new THREE.Group();
+  roof.name = "tunnel_roof";
+  const shell = new THREE.Group();
+  shell.add(roof);
+  concealTunnelRoof(shell, CAM_UP);
+  assert.equal(roof.visible, false);
+
+  const sim = quietCity("roadster");
+  const hero = sim.cars[0];
+  plant(sim, 1800, 0, 40);
+  sim.keysOverride = new Set(["Space"]);
+  let peak = 0;
+  for (let i = 0; i < 60 * 4; i++) {
+    step(sim, dt);
+    const race = hero.along - sim.race.originAlong;
+    if (race < 1700 || race > 1940) continue;
+    const road = poseAt(sim.track, hero.along).y;
+    peak = Math.max(peak, hero.y - road);
+  }
+  assert.ok(peak > 2, `peak ${peak}`);
+  assert.ok(peak <= 6.5 + 1e-6, `peak ${peak}`);
 });
 
 test("NC §9.6 brake held the whole stage never dead-stops", () => {

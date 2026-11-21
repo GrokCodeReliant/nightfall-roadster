@@ -182,3 +182,13 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   }
   return lamp;
 }
+
+/** Chase cam sits above the 9.7 m roof, so the roof node stays hidden. Camera itself does not move. */
+export const TUNNEL_ROOF_Y = 9.7;
+
+export function concealTunnelRoof(root: THREE.Object3D, cameraUp: number) {
+  if (cameraUp <= TUNNEL_ROOF_Y) return;
+  root.traverse((o) => {
+    if (o.name === "tunnel_roof") o.visible = false;
+  });
+}

@@ -1361,8 +1361,12 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       car.vy -= GRAVITY * (wantThrust ? 1 : FLOAT_GRAVITY_SCALE) * dt;
       car.vy = Math.max(FLOAT_VY_MIN, Math.min(28, car.vy));
       // never above HOP_MAX over the deck under the car (or the take-off deck, whichever is higher)
-      const deck = Math.max(sim.boostDeck, queryTrack(sim.track, car.x, car.z, car.along).y);
-      const top = deck + boost.hopMax;
+      const under = queryTrack(sim.track, car.x, car.z, car.along);
+      const course = courseFor(sim.stageId);
+      const inTunnel = !!course && sectionAt(course, under.s - sim.race.originAlong)?.type === "tunnel";
+      const deck = inTunnel ? under.y : Math.max(sim.boostDeck, under.y);
+      const hop = inTunnel ? Math.min(boost.hopMax, 6.5) : boost.hopMax;
+      const top = deck + hop;
       car.y += car.vy * dt;
       if (car.y >= top) { car.y = top; if (car.vy > 0) car.vy = 0; }
     } else {
