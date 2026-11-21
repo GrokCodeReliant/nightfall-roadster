@@ -97,6 +97,13 @@ export function sectionById(course: Course, id: string): Section | null {
   return course.sections.find((s) => s.id === id) ?? null;
 }
 
+/** Edge on the driver's left (lateral < 0) or right. Missing road is soft. */
+export function edgeKind(course: Course, raceS: number, side: "L" | "R"): EdgeKind {
+  const sec = sectionAt(course, raceS);
+  if (!sec) return "soft";
+  return side === "L" ? sec.edgeL : sec.edgeR;
+}
+
 /** Signed curvature (rad/m) at an engine absolute s. Positive turns left. */
 export function bendAt(course: Course, absS: number): number {
   const s = absS - COURSE_ORIGIN;

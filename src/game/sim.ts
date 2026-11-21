@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, raceDistance } from "./course";
+import { courseFor, edgeKind, raceDistance } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -1170,6 +1170,14 @@ function dropMine(sim: Sim, car: Car) {
 }
 
 
+/** Rail disables the committed-leave branch. sideSign > 0 is the driver's right. */
+function railHere(sim: Sim, absS: number, sideSign: number): boolean {
+  const course = courseFor(sim.stageId);
+  if (!course) return false;
+  const side = sideSign < 0 ? "L" : "R";
+  return edgeKind(course, absS - sim.race.originAlong, side) === "rail";
+}
+
 function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boolean) {
   if (car.recover > 0) {
     car.recover -= dt;
@@ -1268,8 +1276,9 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       q = queryTrack(sim.track, car.x, car.z, car.along);
     } else {
       // Outward stick means a committed leave. A glance is pushed back toward center.
+      // Rail edges (deck, tunnel, ramp) never open that branch.
       const steerOut = -input.steer * sign > 0.55;
-      const committed = steerOut && depth > 0.45;
+      const committed = steerOut && depth > 0.45 && !railHere(sim, q.s, sign);
       if (!committed) {
         const push = Math.min(depth, 18 * dt);
         car.x -= q.rx * sign * push;
@@ -1298,6 +1307,14 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
       }
       scrollFloor(car);
     }
+  }
+  // City sidewalks end and facades start past the kerb. Hold the hero out of the wall mesh.
+  if (car.hero && sim.stageId === "city" && Math.abs(q.lateral) > 22) {
+    const held = Math.sign(q.lateral) * 22;
+    const delta = held - q.lateral;
+    car.x += q.rx * delta;
+    car.z += q.rz * delta;
+    q = queryTrack(sim.track, car.x, car.z, car.along);
   }
   if (car.slideT > 0) {
     car.slideT = Math.max(0, car.slideT - dt);

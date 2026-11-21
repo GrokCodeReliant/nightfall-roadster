@@ -194,6 +194,43 @@ test("NC §9.5 a straight 40 m/s run off R1 lands once near d 105 with no damage
   assert.notEqual(sim.toast, "Back on track");
 });
 
+function resetsWhile(sim: Sim, frames: number, keys: string[]) {
+  const hero = sim.cars[0];
+  sim.keysOverride = new Set(keys);
+  let prev = hero.along;
+  let jumps = 0;
+  let scrapes = 0;
+  let slow = 0;
+  for (let i = 0; i < frames; i++) {
+    const n = sim.events.length;
+    step(sim, dt);
+    for (let k = n; k < sim.events.length; k++) if (sim.events[k].t === "scrape") scrapes += 1;
+    if (hero.along < prev - 5) jumps += 1;
+    if (hero.speed < 22 - 1e-4) slow += 1;
+    prev = hero.along;
+  }
+  return { jumps, scrapes, slow, invuln: hero.invuln };
+}
+
+test("NC §9.7 soft walls slide and rail edges refuse a committed leave", () => {
+  const soft = quietCity();
+  plant(soft, 900, -11.2, 30);
+  const slid = resetsWhile(soft, 60 * 3, ["KeyA"]);
+  assert.equal(slid.jumps, 0);
+  assert.equal(slid.invuln, 0);
+  assert.equal(slid.slow, 0);
+  assert.ok(slid.scrapes > 0, `scrapes ${slid.scrapes}`);
+
+  for (const s of [700, 1800, 2060]) {
+    const sim = quietCity();
+    plant(sim, s, -11.4, 30);
+    const rail = resetsWhile(sim, 60 * 8, ["KeyA"]);
+    assert.equal(rail.jumps, 0, `reset on race ${s}`);
+    assert.equal(rail.invuln, 0, `invuln on race ${s}`);
+    assert.equal(rail.slow, 0, `slow on race ${s}`);
+  }
+});
+
 test("classic still runs waves after Night City is a race", () => {
   const sim = createSim();
   sim.stageId = "classic";
