@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { loadCity, buildCityChunk, cityReady } from "./city";
+import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityReady, roughHook, roadTilesFit } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -909,7 +909,14 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const AHEAD = coarse ? 7 : 9;
   const POOL = BEHIND + AHEAD + 1;
   const BLD_PER = 4;
-  const roadMat = new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.92, metalness: 0.05 });
+  const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
+  const roadMap = new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}assets/v02/kit/road_kit_atlas.png`);
+  roadMap.colorSpace = THREE.SRGBColorSpace;
+  roadMap.flipY = false;
+  roadMap.wrapS = THREE.ClampToEdgeWrapping;
+  roadMap.wrapT = THREE.ClampToEdgeWrapping;
+  roadMat.map = roadMap;
+  roughHook(roadMat);
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 });
   const markMat = new THREE.MeshBasicMaterial({ vertexColors: true });
   type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null };
@@ -934,6 +941,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     scene.add(city);
     chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null });
   }
+  loadRoadKit();
+  let kitRoads: THREE.InstancedMesh[] | null = null;
+  const kitMatrix = new THREE.Matrix4();
   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
   let stage: StageId = "city";
   let gateBoost = 0;
@@ -1014,9 +1024,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const mp: number[] = [];
     const mc: number[] = [];
     const mi: number[] = [];
+    const ru: number[] = [];
     for (let k = 0; k <= SEG; k++) {
       const s = sampleAt(track, i0 + k);
       rp.push(s.x - s.rx * half - ox, s.y + 0.05, s.z - s.rz * half - oz, s.x + s.rx * half - ox, s.y + 0.05, s.z + s.rz * half - oz);
+      const v = ((index * CHUNK + k * STEP) / 10) % 1 * 0.5;
+      ru.push(0, v, 1, v);
     }
     for (let k = 0; k < SEG; k++) {
       const a = sampleAt(track, i0 + k);
@@ -1045,6 +1058,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
     }
     setGeo(ch.road, rp, ri);
+    ch.road.geometry.setAttribute("uv", new THREE.Float32BufferAttribute(ru, 2));
     setGeo(ch.walls, wp, wi);
     setGeo(ch.marks, mp, mc.length ? mi : [], mc);
     for (const m of [ch.road, ch.walls, ch.marks]) {
@@ -1106,6 +1120,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       ch.road.visible = ch.walls.visible = ch.marks.visible = false;
       ch.city.visible = false;
     }
+    placeKitRoads(sim);
     if (stage === "city") {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
@@ -1144,6 +1159,74 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
       sg.group.visible = true;
     });
+  }
+
+  function chunkTileFit(sim: Sim, index: number) {
+    const track = sim.track;
+    const a = sampleAt(track, index * SEG);
+    const b = sampleAt(track, index * SEG + SEG);
+    let bend = Math.atan2(b.tx, b.tz) - Math.atan2(a.tx, a.tz);
+    while (bend > Math.PI) bend -= Math.PI * 2;
+    while (bend < -Math.PI) bend += Math.PI * 2;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let gap = false;
+    for (let k = 0; k <= SEG; k++) {
+      const s = sampleAt(track, index * SEG + k);
+      if (s.gap) gap = true;
+      if (s.y < lo) lo = s.y;
+      if (s.y > hi) hi = s.y;
+    }
+    return roadTilesFit(!!track.authored, Math.abs(bend), hi - lo, gap);
+  }
+
+  function ensureKitRoads() {
+    if (kitRoads || !roadKitReady()) return;
+    const list: THREE.InstancedMesh[] = [];
+    for (const name of ["road_straight_40", "lanepaint_straight_40"] as const) {
+      const src = getPiece(name);
+      if (!src) continue;
+      src.updateMatrixWorld(true);
+      src.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const geo = mesh.geometry.clone();
+        geo.applyMatrix4(mesh.matrixWorld);
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat?.isMeshStandardMaterial) roughHook(mat);
+        const inst = new THREE.InstancedMesh(geo, mat, POOL);
+        inst.count = 0;
+        inst.frustumCulled = false;
+        scene.add(inst);
+        list.push(inst);
+      });
+    }
+    kitRoads = list;
+  }
+
+  function placeKitRoads(sim: Sim) {
+    ensureKitRoads();
+    if (!kitRoads) return;
+    let n = 0;
+    for (const ch of chunks) {
+      if (ch.index < 0) continue;
+      if (!chunkTileFit(sim, ch.index)) {
+        ch.road.visible = true;
+        ch.marks.visible = true;
+        continue;
+      }
+      const mid = sampleAt(sim.track, ch.index * SEG + Math.floor(SEG / 2));
+      kitMatrix.makeRotationY(Math.atan2(mid.tx, mid.tz));
+      kitMatrix.setPosition(mid.x, mid.y, mid.z);
+      for (const inst of kitRoads) inst.setMatrixAt(n, kitMatrix);
+      ch.road.visible = false;
+      ch.marks.visible = false;
+      n += 1;
+    }
+    for (const inst of kitRoads) {
+      inst.count = n;
+      inst.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // ?enemylod=phone|hero overrides the enemy LOD (used by the headless tests on software GL)

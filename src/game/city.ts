@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { COURSE_ORIGIN } from "./course";
+import { COURSE_ORIGIN, courseFor, sectionAt } from "./course";
 import { cityPlacements } from "./citycourse";
 
 type Inline = Record<string, string> | undefined;
@@ -16,6 +16,9 @@ const PIECES: [string, string][] = [
   ["kit", "sign_fork"], ["kit", "barrier_jersey_4m"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"],
   ["city", "barricade_3m"], ["city", "tunnel_40"], ["city", "tunnel_portal"], ["city", "ramp_kicker_1m"],
   ["city", "facade_fins_12"], ["city", "facade_balcony_12"], ["city", "facade_ac_12"],
+  ["city", "facade_ledge_12"], ["city", "facade_signbox_12"], ["city", "facade_inset_12"],
+  ["city", "bollard"], ["city", "vending_box"], ["city", "trash_bin"],
+  ["city", "utility_cabinet"], ["city", "cable_run_12"], ["city", "hydrant"],
   ["city", "billboard_roof_12x6"], ["city", "billboard_wall_8x4"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
 ];
@@ -25,8 +28,31 @@ let loaded = 0;
 export const cityReady = () => loaded >= PIECES.length;
 export const cityLoaded = () => loaded;
 
+const ROAD_PIECES: [string, string][] = [
+  ["kit", "road_straight_40"], ["kit", "lanepaint_straight_40"],
+];
+let roadLoaded = 0;
+export const roadKitReady = () => roadLoaded >= ROAD_PIECES.length && !!(lib.road_straight_40 && lib.lanepaint_straight_40);
+
+/** Piece ids the city loader asks for. roof_clutter_12 is not in this list. */
+export const cityPieceNames = () => PIECES.map(([, name]) => name);
+export const roadPieceNames = () => ROAD_PIECES.map(([, name]) => name);
+
+/**
+ * A rigid 40 m tile gaps on an authored bend and misses a ramp.
+ * Heading change above 4° or more than 0.35 m of relief keeps the ribbon.
+ * A gap in the chunk never takes a tile. Non-authored stages still take tiles.
+ */
+export const ROAD_TILE_BEND = (4 * Math.PI) / 180;
+export const ROAD_TILE_RELIEF = 0.35;
+export function roadTilesFit(authored: boolean, bendRad: number, relief: number, gap = false) {
+  if (gap) return false;
+  if (!authored) return true;
+  return bendRad <= ROAD_TILE_BEND && relief <= ROAD_TILE_RELIEF;
+}
+
 /** atlas A channel = roughness (KIT_README / CITY_README shader hook) */
-function roughHook(m: THREE.MeshStandardMaterial) {
+export function roughHook(m: THREE.MeshStandardMaterial) {
   if (!m.map || m.userData.rough) return;
   m.userData.rough = true;
   m.onBeforeCompile = (sh) => {
@@ -36,13 +62,27 @@ function roughHook(m: THREE.MeshStandardMaterial) {
 }
 
 export function loadCity() {
+  loadPieces(PIECES, () => { loaded++; });
+}
+
+/** Road tiles for every stage. Call once at world init. */
+export function loadRoadKit() {
+  loadPieces(ROAD_PIECES, () => { roadLoaded++; });
+}
+
+export function getPiece(name: string): THREE.Object3D | undefined {
+  return lib[name];
+}
+
+function loadPieces(list: [string, string][], onDone: () => void) {
   const mgr = new THREE.LoadingManager();
   mgr.setURLModifier((u) => {
     const f = u.split("/").pop() ?? "";
     const d = inl()?.[f];
     return d ?? u;
   });
-  for (const [dir, name] of PIECES) {
+  for (const [dir, name] of list) {
+    if (lib[name]) { onDone(); continue; }
     const d = inl()?.[`${dir}_${name}`];
     new GLTFLoader(mgr).load(d ?? `${BASE()}${dir}/${name}.glb`, (g) => {
       // strip hidden collider nodes (UCX_<piece>_NN): never rendered or merged
@@ -61,8 +101,8 @@ export function loadCity() {
         m.material = shared;
       });
       lib[name] = g.scene;
-      loaded++;
-    }, undefined, () => { loaded++; });
+      onDone();
+    }, undefined, () => { onDone(); });
   }
 }
 
@@ -73,9 +113,14 @@ const tmp = new THREE.Matrix4();
 /** Set pieces the procedural fill does not already scatter. Tunnels stay unmerged so the roof can hide. */
 const AUTHORED_IDS = new Set([
   "overpass_60x12", "tunnel_40", "tunnel_portal", "barricade_3m", "ramp_kicker_1m", "sign_fork",
-  "barrier_jersey_4m", "facade_fins_12", "facade_balcony_12", "facade_ac_12",
-  "billboard_pole_12x6", "billboard_roof_12x6", "billboard_wall_8x4",
+  "barrier_jersey_4m", "billboard_pole_12x6", "billboard_roof_12x6", "billboard_wall_8x4",
 ]);
+
+function chunkZone(index: number, k: number, seg: number) {
+  const course = courseFor("city");
+  if (!course) return "";
+  return sectionAt(course, index * seg * 2 + k * 2 - COURSE_ORIGIN)?.zone ?? "";
+}
 
 /** Authored Night City turns the old every-4th overpass and every-6th gate off. */
 export function cityChunkRules(index: number, authored: boolean) {
@@ -136,9 +181,28 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       const p = at(Math.min(seg, Math.max(0, Math.round(((z + front / 2 + 20) / 40) * seg))));
       const ry = side > 0 ? Math.PI : 0;
       const floors = 1 + Math.floor(rnd(index * 13 + n * 5 + side) * 4);
+      const zone = authored ? chunkZone(index, Math.min(seg, Math.max(0, Math.round(((z + front / 2 + 20) / 40) * seg))), seg) : "";
+      // Authored zones pick the trim. The bay offsets are the art-pass attach rules.
+      let trim: string | null = null;
+      if (zone === "glass" && n % 2 === 0) trim = "facade_fins_12";
+      else if (zone === "market") trim = rnd(index * 19 + n * 5 + side) < 0.5 ? "facade_balcony_12" : "facade_ac_12";
+      const frontLx = side * (half + 12.35);
+      const bays = front === 12 ? [0] : [-6, 6];
       add(`bldg_base_${key}`, p, lx, 0.22, 0, ry);
-      for (let f = 1; f < floors; f++) add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry + (f % 2 ? 0 : 0));
+      for (let f = 1; f < floors; f++) {
+        add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry);
+        if (!trim) continue;
+        for (const bz of bays) {
+          add(trim, p, frontLx, 0.22 + 12 * f, bz, ry);
+          if (trim === "facade_balcony_12") continue;
+          add("facade_ledge_12", p, frontLx, 0.22 + 12 * f, bz, ry);
+          if (trim === "facade_fins_12" && rnd(index * 29 + n * 3 + f + side) < 0.45) {
+            add("facade_inset_12", p, frontLx, 0.22 + 12 * f, bz, ry);
+          }
+        }
+      }
       add(`bldg_top_${key}`, p, lx, 0.22 + 12 * floors, 0, ry);
+      if (trim && trim !== "facade_balcony_12") add("facade_signbox_12", p, frontLx, 0.22, bays[0], ry);
       if (rnd(index * 17 + n * 3 + side) < 0.6) {
         const ns = ["neon_arrow", "neon_ring", "neon_bar", "neon_cup", "neon_bolt", "neon_bowl"][Math.floor(rnd(index * 23 + n) * 6)];
         add(ns, p, side * (half + 12.3), 6 + rnd(index + n * 11) * 10, 0, ry);
@@ -152,6 +216,24 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
     const p = at(Math.floor((k * seg) / 2));
     add("streetlight_city_twin_8m", p, k % 2 ? half + 1.2 : -(half + 1.2), 0.22, 0, k % 2 ? Math.PI : 0);
     add("streetlight_city_6m", at(Math.floor(((k + 0.5) * seg) / 2)), k % 2 ? -(half + 10) : half + 10, 0.22, 0, k % 2 ? 0 : Math.PI);
+  }
+  if (authored && chunkZone(index, Math.floor(seg / 2), seg) !== "tunnel") {
+    for (let k = 0; k < 4; k++) {
+      const p = at(Math.floor(((k + 0.5) / 4) * seg));
+      add("bollard", p, half + 1.6, 0.22, 0, 0);
+      add("bollard", p, -(half + 1.6), 0.22, 0, Math.PI);
+    }
+    if (rnd(index * 11 + 3) < 0.5) {
+      add("vending_box", mid, half + 10.4, 0.22, -8, Math.PI);
+      add("vending_box", mid, -(half + 10.4), 0.22, 8, 0);
+    }
+    if (rnd(index * 13 + 5) < 0.6) {
+      add("trash_bin", mid, half + 3.8, 0.22, 6, 0);
+      add("trash_bin", mid, -(half + 3.8), 0.22, -6, 0);
+    }
+    if (index % 5 === 1) add("utility_cabinet", mid, half + 10.8, 0.22, 12, Math.PI);
+    if (index % 6 === 2) add("cable_run_12", mid, half + 9.5, 0.22, 0, Math.PI);
+    if (index % 4 === 1) add("hydrant", mid, -(half + 2.4), 0.22, 4, 0);
   }
   // water barriers along the right kerb, sometimes a cone line
   if (rnd(index * 5 + 1) < 0.5) for (let k = 0; k < 6; k++) add("water_barrier_2m", at(Math.floor((k / 6) * seg)), -(half - 0.6), 0, 0, 0);

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COURSE_ORIGIN, NIGHT_CITY, NIGHT_CITY_OBSTACLES, courseFor, gatePhase, medianAt, respawnBlocked, sectionAt, sectionById, tunnelClearance } from "../../src/game/course.ts";
 import { botKeys } from "../../src/game/bot.ts";
-import { cityChunkRules, concealTunnelRoof } from "../../src/game/city.ts";
+import { cityChunkRules, cityPieceNames, concealTunnelRoof, roadPieceNames, roadTilesFit } from "../../src/game/city.ts";
 import { cityPlacements, tally, windowBudget } from "../../src/game/citycourse.ts";
 import { CAM_BACK, CAM_UP } from "../../src/game/world.ts";
 import * as THREE from "three";
@@ -626,6 +626,19 @@ test("Night City scenery matches the art list and stays off the road colliders",
     assert.ok(budget.draws <= 160, `${label} draws ${budget.draws}`);
     assert.ok(budget.tris <= 250000, `${label} tris ${budget.tris}`);
   }
+});
+
+test("road tiles skip authored bends, ramps, and gaps", () => {
+  assert.equal(cityPieceNames().includes("roof_clutter_12"), false);
+  assert.equal(cityPieceNames().includes("facade_ledge_12"), true);
+  assert.equal(cityPieceNames().includes("bollard"), true);
+  assert.deepEqual(roadPieceNames(), ["road_straight_40", "lanepaint_straight_40"]);
+  assert.equal(roadTilesFit(true, (9 * Math.PI) / 180, 0), false);
+  assert.equal(roadTilesFit(true, (2 * Math.PI) / 180, 0), true);
+  assert.equal(roadTilesFit(true, 0, 2), false);
+  assert.equal(roadTilesFit(true, 0, 0, true), false);
+  assert.equal(roadTilesFit(false, (9 * Math.PI) / 180, 2), true);
+  assert.equal(cityPlacements().some((p) => p.id === "roof_clutter_12"), false);
 });
 
 test("NC §9.15 the bot finishes Night City in each of the six cars", () => {
