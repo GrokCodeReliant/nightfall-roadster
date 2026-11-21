@@ -82,14 +82,15 @@ export function getPiece(name: string): THREE.Object3D | undefined {
   return lib[name];
 }
 
-export function loadPieces(list: [string, string][], onDone: () => void) {
+/** own: pieces whose materials stay private (not shared by glTF name), renamed `<mat>@<piece>` (coast foam v2 on atlas v3) */
+export function loadPieces(list: [string, string][], onDone: () => void, own?: Set<string>) {
   const mgr = new THREE.LoadingManager();
   mgr.setURLModifier((u) => {
     const f = u.split("/").pop() ?? "";
     const d = inl()?.[f];
     if (d) return d;
     // coast + shared kit GLBs point at ../road_kit/road_kit_atlas.png; the atlas ships as kit/
-    if (f === "road_kit_atlas.png" && u.includes("/road_kit/")) return `${BASE()}kit/road_kit_atlas.png`;
+    if (/^road_kit_atlas(_v3)?\.png$/.test(f) && u.includes("/road_kit/")) return `${BASE()}kit/${f}`;
     return u;
   });
   for (const [dir, name] of list) {
@@ -104,6 +105,10 @@ export function loadPieces(list: [string, string][], onDone: () => void) {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
         const mat = m.material as THREE.MeshStandardMaterial;
+        if (own?.has(name)) {
+          mat.name = `${mat.name}@${name}`;
+          return;
+        }
         const shared = mats.get(mat.name) ?? mat;
         if (!mats.has(mat.name)) {
           mats.set(mat.name, mat);

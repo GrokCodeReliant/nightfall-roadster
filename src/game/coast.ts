@@ -1,7 +1,7 @@
 // Week I: Coast Road stage scenery (art/nightfall-coast-20261120 + shared drop). Visual only; no sim changes.
 // Placement follows LEVELS/02_coast_road.md zones CR-0..CR-12 on course s (see course.ts). Same merge-per-material
 // as city.ts; the only separate meshes are the arch roof (hidden when the camera is above it), the lighthouse beam
-// (spins) and the foam ribs (travel + UV scroll).
+// (spins). Foam v2 scrolls in its own shader (cell-local UV wrap, atlas v3) and merges per foam material.
 import * as THREE from "three";
 import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
@@ -10,7 +10,7 @@ const COAST_PIECES: [string, string][] = [
   // new 2026-11-20
   ["coast", "coast_beach_shoulder_40"], ["coast", "coast_sand_drift_6x20"], ["coast", "coast_arch_40"], ["coast", "coast_arch_portal"],
   ["coast", "coast_lighthouse"], ["coast", "coast_umbrella"], ["coast", "coast_beach_hut"], ["coast", "coast_pier_deck_20"],
-  ["coast", "coast_boardwalk_40"], ["coast", "coast_dune_mound"], ["coast", "coast_foam_strip_24"],
+  ["coast", "coast_boardwalk_40"], ["coast", "coast_dune_mound"], ["coast", "coast_foam_strip_24_v2"],
   // existing coast set, first use
   ["coast", "coast_water_40"], ["coast", "coast_guardrail_4m"], ["coast", "coast_stone_wall_4m"], ["coast", "coast_palm"],
   ["coast", "coast_rock_a"], ["coast", "coast_rock_b"], ["coast", "coast_shrub"], ["coast", "coast_lifeguard_tower"], ["coast", "coast_cliff_40"],
@@ -23,7 +23,10 @@ export const coastReady = () => loaded >= COAST_PIECES.length;
 export function loadCoast() {
   if (asked) return;
   asked = true;
-  loadPieces(COAST_PIECES, () => { loaded++; });
+  loadPieces(COAST_PIECES, () => {
+    loaded++;
+    if (loaded >= COAST_PIECES.length) foamHook();
+  }, new Set([FOAM]));
 }
 
 /** sand drift patches on the asphalt: [s0, s1, lane lateral] (LEVELS/02 SD1..SD7; SD4 is not in the course list) */
@@ -34,36 +37,43 @@ const SD: [number, number, number][] = [
 const WASH: [number, number][] = [[2080, 2120], [2220, 2260], [2360, 2400]];
 const SOFT = new Set(["CR-0", "CR-3", "CR-8", "CR-11", "CR-12", "RUN"]);
 
-export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; ribs: THREE.Group[]; placed: string[] };
+export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; placed: string[] };
 
 /** placement log for the first lap: zone -> piece -> count (debug / report) */
 export const coastLog: Record<string, Record<string, number>> = {};
 const logged = new Set<number>();
 
-let ribMat: THREE.MeshStandardMaterial | null = null;
+const FOAM = "coast_foam_strip_24_v2";
+/** world.ts sets foamClock.value = seconds every frame once Coast Road is wired */
 export const foamClock = { value: 0 };
-function foamMaterial(src: THREE.Material) {
-  if (ribMat) return ribMat;
-  const m = (src as THREE.MeshStandardMaterial).clone();
-  m.name = "kit_emissive_foam";
-  // Spec: UV.v +1.0 every 0.9 s. A raw +1.0 scroll would sweep the whole atlas, so it is wrapped inside the
-  // foam swatch (atlas rows 576-607). That swatch is a flat colour, so the visible telegraph is the rib travel (world.ts).
-  m.onBeforeCompile = (sh) => {
-    sh.uniforms.uFoam = foamClock;
-    sh.fragmentShader = sh.fragmentShader
-      .replace("void main() {", "uniform float uFoam;\nvoid main() {")
-      .replace("#include <map_fragment>", "vec2 fUv = vec2(vMapUv.x, 0.5625 + mod(vMapUv.y - 0.5625 + fract(uFoam / 0.9) * 0.03125, 0.03125));\n#ifdef USE_MAP\n diffuseColor *= texture2D( map, fUv );\n#endif")
-      .replace("#include <emissivemap_fragment>", "#ifdef USE_EMISSIVEMAP\n totalEmissiveRadiance *= texture2D( emissiveMap, fUv ).rgb;\n#endif")
-      .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n roughnessFactor = texture2D( map, fUv ).a;");
-  };
-  m.customProgramCacheKey = () => "nf_foam";
-  ribMat = m;
-  return m;
+// Foam rect in atlas UV (mesh UVs, inset inside the 32x32 foam cell at px 224-255 x 576-607 of road_kit_atlas_v3).
+const FOAM_MIN = "vec2(226.0 / 1024.0, 578.0 / 1024.0)";
+const FOAM_MAX = "vec2(240.0 / 1024.0, 606.0 / 1024.0)";
+/** coast INTEGRATION.md foam v2: cell-local v += 1.0 per 0.9 s, wrapped back into the foam rect. Both foam materials
+ *  (kit@foam base, kit_emissive@foam glow) are private to this piece because they sample atlas v3, not the live v2. */
+function foamHook() {
+  const src = getPiece(FOAM);
+  src?.traverse((o) => {
+    const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+    if (!(o as THREE.Mesh).isMesh || !m || m.userData.foam) return;
+    m.userData.foam = true;
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uFoam = foamClock;
+      const wrap = `vec2 c0 = ${FOAM_MIN}; vec2 c1 = ${FOAM_MAX};\n vec2 fl = (vMapUv - c0) / (c1 - c0);\n fl.y = fract(fl.y + uFoam / 0.9);\n vec2 fUv = c0 + fl * (c1 - c0);\n`;
+      sh.fragmentShader = sh.fragmentShader
+        .replace("void main() {", "uniform float uFoam;\nvoid main() {")
+        .replace("#include <map_fragment>", `${wrap}#ifdef USE_MAP\n diffuseColor *= texture2D( map, fUv );\n#endif`)
+        .replace("#include <emissivemap_fragment>", "#ifdef USE_EMISSIVEMAP\n totalEmissiveRadiance *= texture2D( emissiveMap, fUv ).rgb;\n#endif")
+        .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n roughnessFactor = texture2D( map, fUv ).a;");
+    };
+    m.customProgramCacheKey = () => `nf_foam_${m.name}`;
+    m.needsUpdate = true;
+  });
 }
 
 export function buildCoastChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number,
   rnd: (n: number) => number, c: ChunkCourse): CoastChunkOut {
-  const out: CoastChunkOut = { roof: null, spin: null, ribs: [], placed: [] };
+  const out: CoastChunkOut = { roof: null, spin: null, placed: [] };
   if (!coastReady()) return out;
   const parts: Parts = new Map();
   const m4 = new THREE.Matrix4();
@@ -163,23 +173,11 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
       put("coast_sand_drift_6x20", at(Math.min(seg, kAt(cs))), -lat, 0.06, 0, 0);
     }
   }
-  // CR-7 foam wash: base strip merges with the chunk, emissive ribs are their own mesh (travel + UV scroll)
+  // CR-7 foam wash v2: base + glow merge per (private) foam material with the chunk; motion is the shader scroll
   for (const [a, b] of WASH) {
     const cs = (a + b) / 2;
     if (cs < s0 || cs >= s1) continue;
-    const p = at(kAt(cs));
-    put("coast_foam_strip_24", p, 0, 0, 0, 0, (o) => (o as THREE.Mesh).material && ((o as THREE.Mesh).material as THREE.Material).name !== "kit_emissive");
-    const rp: Parts = new Map();
-    const src = getPiece("coast_foam_strip_24");
-    if (src && bakePiece(rp, "coast_foam_strip_24", new THREE.Matrix4(), (o) => ((o as THREE.Mesh).material as THREE.Material)?.name === "kit_emissive")) {
-      const ribs = new THREE.Group();
-      placeMatrix(p, 0, 0, 0, 0, ox, oz, m4).decompose(ribs.position, ribs.quaternion, ribs.scale);
-      ribs.userData.base = ribs.position.clone();
-      ribs.userData.dir = new THREE.Vector3(p.tx, 0, p.tz).normalize();
-      for (const mesh of flushParts(rp, ribs)) mesh.material = foamMaterial(mesh.material as THREE.Material);
-      group.add(ribs);
-      out.ribs.push(ribs);
-    }
+    put(FOAM, at(kAt(cs)), 0, 0, 0, 0);
   }
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
