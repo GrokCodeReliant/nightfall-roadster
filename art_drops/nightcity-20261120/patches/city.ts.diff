@@ -1,0 +1,158 @@
+--- a/repo_v02/src/game/city.ts
++++ b/repo_v02/src/game/city.ts
+@@ -13,14 +13,27 @@ const PIECES: [string, string][] = [
+   ["city", "sidewalk_12x40"], ["city", "overpass_60x12"], ["city", "billboard_pole_12x6"], ["city", "water_barrier_2m"], ["city", "traffic_cone"],
+   ["kit", "sign_fork"], ["city", "streetlight_city_twin_8m"], ["city", "streetlight_city_6m"],
+   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
++  // Existing trim, first use (LEVELS/ART_LISTS/01_night_city_art.md §B)
++  ["city", "facade_fins_12"], ["city", "facade_balcony_12"], ["city", "facade_ac_12"],
++  // Night City scenery pass 2026-11-20 v2. Files: assets/v02/city/<name>.glb
++  // (staged at /workspace/studio/art/nightfall-nightcity-20261120/glb/<name>.glb)
++  ["city", "facade_ledge_12"], ["city", "facade_signbox_12"], ["city", "facade_inset_12"],
++  ["city", "bollard"], ["city", "vending_box"], ["city", "trash_bin"],
++  ["city", "utility_cabinet"], ["city", "cable_run_12"], ["city", "hydrant"],
+ ];
+ const lib: Record<string, THREE.Object3D> = {};
+ const mats = new Map<string, THREE.Material>();
+ let loaded = 0;
+ export const cityReady = () => loaded >= PIECES.length;
+ export const cityLoaded = () => loaded;
++
++const ROAD_PIECES: [string, string][] = [
++  ["kit", "road_straight_40"], ["kit", "lanepaint_straight_40"],
++];
++let roadLoaded = 0;
++export const roadKitReady = () => roadLoaded >= ROAD_PIECES.length && !!(lib.road_straight_40 && lib.lanepaint_straight_40);
+ 
+-/** atlas A channel = roughness (KIT_README / CITY_README shader hook) */
+-function roughHook(m: THREE.MeshStandardMaterial) {
++/** atlas A channel = roughness (KIT_README / CITY_README shader hook) */
++export function roughHook(m: THREE.MeshStandardMaterial) {
+   if (!m.map || m.userData.rough) return;
+   m.userData.rough = true;
+   m.onBeforeCompile = (sh) => {
+@@ -31,7 +44,8 @@ function roughHook(m: THREE.MeshStandardMaterial) {
+ }
+ 
+ export function loadCity() {
+-  const mgr = new THREE.LoadingManager();
++  loadPieces(PIECES, () => { loaded++; });
++}
++
++/** Load road-kit tiles for every stage (not only Night City). Call once at world init. */
++export function loadRoadKit() {
++  loadPieces(ROAD_PIECES, () => { roadLoaded++; });
++}
++
++function loadPieces(list: [string, string][], onDone: () => void) {
++  const mgr = new THREE.LoadingManager();
+   mgr.setURLModifier((u) => {
+     const f = u.split("/").pop() ?? "";
+     const d = inl()?.[f];
+     return d ?? u;
+   });
+-  for (const [dir, name] of PIECES) {
++  for (const [dir, name] of list) {
++    if (lib[name]) { onDone(); continue; }
+     const d = inl()?.[`${dir}_${name}`];
+     new GLTFLoader(mgr).load(d ?? `${BASE()}${dir}/${name}.glb`, (g) => {
+       // strip hidden collider nodes (UCX_<piece>_NN): never rendered or merged
+       const ucx: THREE.Object3D[] = [];
+       g.scene.traverse((o) => { if (/^UCX_/i.test(o.name)) ucx.push(o); });
+       for (const o of ucx) o.parent?.remove(o);
+       g.scene.traverse((o) => {
+         const m = o as THREE.Mesh;
+         if (!m.isMesh) return;
+         const mat = m.material as THREE.MeshStandardMaterial;
+         const shared = mats.get(mat.name) ?? mat;
+         if (!mats.has(mat.name)) {
+           mats.set(mat.name, mat);
+           roughHook(mat);
+         }
+         m.material = shared;
+       });
+       lib[name] = g.scene;
+-      loaded++;
+-    }, undefined, () => { loaded++; });
++      onDone();
++    }, undefined, () => { onDone(); });
+   }
+ }
+@@ -119,13 +148,42 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
+       const p = at(Math.min(seg, Math.max(0, Math.round(((z + front / 2 + 20) / 40) * seg))));
+       const ry = side > 0 ? Math.PI : 0;
+       const floors = 1 + Math.floor(rnd(index * 13 + n * 5 + side) * 4);
++      const frontLx = side * (half + 12.35);
++      const bays = front === 12 ? [0] : [-6, 6];
++      // Footprint stand-in for LEVELS/01 zones until BN-12 authored placement lands:
++      // 12x12 residential → balcony or AC; 24x24 glass → fins; 24x12 office → fins or AC.
++      const isRes = key === "12x12";
++      const isGls = key === "24x24";
++      let trim: string | null = null;
++      if (isGls) trim = "facade_fins_12";
++      else if (isRes) trim = rnd(index * 19 + n * 5 + side) < 0.5 ? "facade_balcony_12" : "facade_ac_12";
++      else trim = rnd(index * 21 + n + side) < 0.5 ? "facade_fins_12" : "facade_ac_12";
+       add(`bldg_base_${key}`, p, lx, 0.22, 0, ry);
+-      for (let f = 1; f < floors; f++) add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry + (f % 2 ? 0 : 0));
++      for (let f = 1; f < floors; f++) {
++        add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry);
++        if (trim) {
++          for (const bz of bays) {
++            add(trim, p, frontLx, 0.22 + 12 * f, bz, ry);
++            // Ledge may share a bay with fins or AC. Never stack ledge/inset/signbox on a balcony bay.
++            if (trim !== "facade_balcony_12") {
++              add("facade_ledge_12", p, frontLx, 0.22 + 12 * f, bz, ry);
++              // Insets are 384 tris: only on some glass/office (fins) bays.
++              if (trim === "facade_fins_12" && rnd(index * 29 + n * 3 + f + side) < 0.45) {
++                add("facade_inset_12", p, frontLx, 0.22 + 12 * f, bz, ry);
++              }
++            }
++          }
++        }
++      }
+       add(`bldg_top_${key}`, p, lx, 0.22 + 12 * floors, 0, ry);
++      // Sign boxes: base module only, bay centre, NEVER on a balcony stack.
++      if (trim !== "facade_balcony_12") {
++        add("facade_signbox_12", p, frontLx, 0.22, bays[0], ry);
++      }
+       if (rnd(index * 17 + n * 3 + side) < 0.6) {
+         const ns = ["neon_arrow", "neon_ring", "neon_bar", "neon_cup", "neon_bolt", "neon_bowl"][Math.floor(rnd(index * 23 + n) * 6)];
+         add(ns, p, side * (half + 12.3), 6 + rnd(index + n * 11) * 10, 0, ry);
+       }
+       z += front;
+       n++;
+@@ -136,6 +194,23 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
+     add("streetlight_city_twin_8m", p, k % 2 ? half + 1.2 : -(half + 1.2), 0.22, 0, k % 2 ? Math.PI : 0);
+     add("streetlight_city_6m", at(Math.floor(((k + 0.5) * seg) / 2)), k % 2 ? -(half + 10) : half + 10, 0.22, 0, k % 2 ? 0 : Math.PI);
+   }
++  // Roadside dressing (optional extras, not in LEVELS/01 §B counts). Keep sparse; same city_emissive merge.
++  for (let k = 0; k < 4; k++) {
++    const p = at(Math.floor(((k + 0.5) / 4) * seg));
++    add("bollard", p, (half + 1.6), 0.22, 0, 0);
++    add("bollard", p, -(half + 1.6), 0.22, 0, Math.PI);
++  }
++  if (rnd(index * 11 + 3) < 0.5) {
++    add("vending_box", mid, (half + 10.4), 0.22, -8, Math.PI);
++    add("vending_box", mid, -(half + 10.4), 0.22, 8, 0);
++  }
++  if (rnd(index * 13 + 5) < 0.6) {
++    add("trash_bin", mid, (half + 3.8), 0.22, 6, 0);
++    add("trash_bin", mid, -(half + 3.8), 0.22, -6, 0);
++  }
++  if (index % 5 === 1) add("utility_cabinet", mid, (half + 10.8), 0.22, 12, Math.PI);
++  if (index % 6 === 2) add("cable_run_12", mid, (half + 9.5), 0.22, 0, Math.PI);
++  if (index % 4 === 1) add("hydrant", mid, -(half + 2.4), 0.22, 4, 0);
+   // water barriers along the right kerb, sometimes a cone line
+   if (rnd(index * 5 + 1) < 0.5) for (let k = 0; k < 6; k++) add("water_barrier_2m", at(Math.floor((k / 6) * seg)), -(half - 0.6), 0, 0, 0);
+   // M1: raised ramp deck (former void) reads as a deck: barriers on both kerbs at deck height
+@@ -62,6 +75,10 @@ export function loadCity() {
+   }
+ }
+ 
++export function getPiece(name: string): THREE.Object3D | undefined {
++  return lib[name];
++}
++
+ type Pose = { x: number; y: number; z: number; rx: number; rz: number; tx: number; tz: number };
+ const yaw = (p: Pose) => Math.atan2(p.tx, p.tz);
+ const tmp = new THREE.Matrix4();
