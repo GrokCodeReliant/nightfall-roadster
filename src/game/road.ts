@@ -2,7 +2,9 @@
  * v0.2 endless one-way highway. Samples every 2 m along a seeded, gently curving
  * spline, generated lazily ahead of the player and trimmed behind. Rare set pieces
  * (kicker ramps and elevated void gaps) keep the thrusters relevant.
+ * An authored course (Night City) replaces the seeded bend and the random pieces.
  */
+import { bendAt, COURSE_ORIGIN, type Course } from "./course";
 
 export type Sample = {
   x: number;
@@ -41,6 +43,11 @@ export type Track = {
   width: number;
   pieces: Piece[];
   seed: number;
+  /** Authored course: no seeded bend and no random extendPieces. */
+  authored: boolean;
+  courseId: string;
+  /** Curvature at an absolute s. Null on the procedural highway. */
+  bend: ((absS: number) => number) | null;
   gen: { i: number; x: number; z: number; h: number };
 };
 
@@ -67,6 +74,7 @@ export function yawFromDir(tx: number, tz: number) {
 }
 
 function curvature(track: Track, s: number) {
+  if (track.bend) return track.bend(s);
   const p = track.seed;
   const ease = Math.min(1, Math.max(0, (s - START_STRAIGHT) / 260));
   return ease * (0.0042 * Math.sin(s / 330 + p * 6.1) + 0.0028 * Math.sin(s / 151 + p * 2.3));
@@ -85,7 +93,7 @@ function extendPieces(track: Track, upTo: number) {
 }
 
 function pieceAt(track: Track, s: number): Piece | null {
-  extendPieces(track, s + 400);
+  if (!track.authored) extendPieces(track, s + 400);
   for (const p of track.pieces) {
     if (s >= p.s && s <= p.s + p.len) return p;
     if (p.s > s) break;
@@ -116,8 +124,46 @@ function profile(track: Track, s: number) {
 }
 
 export function buildTrack(seed = 0.37): Track {
-  const track: Track = { samples: [], first: 0, width: WIDTH, pieces: [], seed, gen: { i: 0, x: 0, z: 0, h: 0 } };
+  const track: Track = {
+    samples: [],
+    first: 0,
+    width: WIDTH,
+    pieces: [],
+    seed,
+    authored: false,
+    courseId: "",
+    bend: null,
+    gen: { i: 0, x: 0, z: 0, h: 0 },
+  };
   ensureTrack(track, 900);
+  return track;
+}
+
+/** Centreline for one authored course, plus a straight run-out past the finish. */
+export function buildCourseTrack(course: Course): Track {
+  const track: Track = {
+    samples: [],
+    first: 0,
+    width: course.width,
+    pieces: [],
+    seed: 0.37,
+    authored: true,
+    courseId: course.id,
+    bend: (absS) => bendAt(course, absS),
+    gen: { i: 0, x: 0, z: 0, h: 0 },
+  };
+  for (const sec of course.sections) {
+    if (sec.type !== "ramp" && sec.type !== "deck") continue;
+    const s = COURSE_ORIGIN + sec.s0;
+    track.pieces.push({
+      kind: sec.type === "ramp" ? "ramp" : "void",
+      s,
+      len: sec.len,
+      signS: sec.type === "ramp" ? s - 130 : -1e9,
+      label: sec.type === "ramp" ? "RAMP" : "",
+    });
+  }
+  ensureTrack(track, COURSE_ORIGIN + course.length + course.runout);
   return track;
 }
 
@@ -258,7 +304,7 @@ export function gapAhead(track: Track, s: number, dist: number) {
 }
 
 export function nextPiece(track: Track, s: number): Piece | null {
-  extendPieces(track, s + 600);
+  if (!track.authored) extendPieces(track, s + 600);
   for (const p of track.pieces) if (p.s + p.len >= s) return p;
   return null;
 }

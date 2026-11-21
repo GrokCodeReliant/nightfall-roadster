@@ -3,6 +3,7 @@ import {
   gapAhead,
   LANES,
   nextPiece,
+  buildCourseTrack,
   buildTrack,
   poseAt,
   queryTrack,
@@ -677,8 +678,9 @@ function place(sim: Sim, car: Car, along: number, speed: number) {
 function park(sim: Sim) {
   // A course rebuilds at every begin(), including a stage switch (the old park only
   // rebuilt a trimmed or very long procedural track).
-  if (courseFor(sim.stageId)) sim.track = buildTrack();
-  else if (sim.track.first > 0 || sim.track.gen.i > 2000) sim.track = buildTrack();
+  const course = courseFor(sim.stageId);
+  if (course) sim.track = buildCourseTrack(course);
+  else if (sim.track.authored || sim.track.first > 0 || sim.track.gen.i > 2000) sim.track = buildTrack();
   const hero = sim.cars[0];
   hero.lane = 0;
   place(sim, hero, START_S, 0);
