@@ -27,6 +27,22 @@ export function loadHighway() {
 
 /** near-only dress the far trim drops past ~120 m (cityDetailRange) */
 const BENT = new Set(["woods_gravel_decal"]);
+/** OH-9 salt flats: the tile samples the atlas' near-white paint cells, which glare at night; a dimmed clone of its
+ *  material (one extra draw in OH-9 chunks only) keeps the pale shoulder read without the white blowout. */
+export const SALT_TINT = 0x5c5a58;
+const saltMats = new WeakMap<THREE.Material, THREE.Material>();
+function saltMat(m: THREE.Material) {
+  let c = saltMats.get(m);
+  if (!c) {
+    c = (m as THREE.MeshStandardMaterial).clone();
+    (c as THREE.MeshStandardMaterial).color.setHex(SALT_TINT);
+    c.name = `${m.name}@salt`;
+    c.onBeforeCompile = m.onBeforeCompile;
+    c.customProgramCacheKey = m.customProgramCacheKey;
+    saltMats.set(m, c);
+  }
+  return c;
+}
 
 /** Tan sand cell on road_kit_atlas (px 224-255 x 512-543, ~rgb 158,140,107), sampled by every desert-patch vertex. */
 export const DESERT_PATCH_UV: [number, number] = [0.234, 0.515];
@@ -61,6 +77,7 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
   if (!highwayReady()) return out;
   const parts: Parts = new Map();
   const detail: Parts = new Map();
+  const salt: Parts = new Map();
   const m4 = new THREE.Matrix4();
   const s0 = c.cs0;
   const s1 = c.cs0 + seg * 2;
@@ -87,8 +104,10 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     if (!p.ground && (pose as Pose & { gap?: boolean }).gap) continue;
     // Mesa Cut: the chase cam rides above the 9.7 m roof (as Night City's tunnel on phone), so the roof node is not baked
     if (p.name === "tunnel_40") { put(p, parts, (o) => !inNode(o, "tunnel_roof")); continue; }
+    if (p.name === "salt_flat_tile_40") { put(p, salt); continue; }
     put(p, p.detail ? detail : parts);
   }
+  for (const [m, l] of salt) parts.set(saltMat(m), [...(parts.get(saltMat(m)) ?? []), ...l]);
   if (c.grid && bakePieceBent(parts, "start_grid_paint_40", chunkFrame(at, Math.floor(seg / 2), seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("start_grid_paint_40");
   for (const k of c.kick) if (bakePieceBent(parts, "ramp_lip_chevron_24", chunkFrame(at, k, seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("ramp_lip_chevron_24");
   if (c.finishK >= 0 && bakePiece(parts, "finish_gantry_24", placeMatrix(at(c.finishK), 0, 0.05, 0, 0, ox, oz, m4))) out.placed.push("finish_gantry_24");

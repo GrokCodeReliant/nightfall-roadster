@@ -140,7 +140,7 @@ export function highwayIn(s0: number, s1: number): HighwayPlace[] {
 
 /** Desert floor (terrain beyond the shoulders): flat sand / caliche / rock patches on the floor plane, one InstancedMesh on
  *  the kit atlas tan cell (instance tone). Same generator shape as the Pine Woods floor patches, wider and sparser. */
-export const DESERT_PATCH = { perChunk: 18, clear: 13.5, lxMax: 70, rMin: 2.5, rMax: 7, y: -0.04, cap: 256, far: 200 };
+export const DESERT_PATCH = { perChunk: 20, clear: 13.5, lxMax: 70, rMin: 1.8, rMax: 4.5, y: -0.04, cap: 256, far: 200 };
 export type DesertPatch = { s: number; lx: number; r: number; ry: number; tone: number; sx: number };
 export function desertPatches(s0: number, s1: number): DesertPatch[] {
   const out: DesertPatch[] = [];
@@ -150,7 +150,7 @@ export function desertPatches(s0: number, s1: number): DesertPatch[] {
     const side = i % 2 ? 1 : -1;
     const r = DESERT_PATCH.rMin + h(i * 1.9 + 11) * (DESERT_PATCH.rMax - DESERT_PATCH.rMin);
     const lx = side * (DESERT_PATCH.clear + r + h(i * 2.9 + 17) * (DESERT_PATCH.lxMax - DESERT_PATCH.clear - 2 * r));
-    out.push({ s, lx, r, ry: h(i * 4.3 + 23) * Math.PI * 2, tone: 0.45 + h(i * 6.7 + 29) * 0.55, sx: 1 + h(i * 8.1 + 31) * 1.4 });
+    out.push({ s, lx, r, ry: h(i * 4.3 + 23) * Math.PI * 2, tone: 0.5 + h(i * 6.7 + 29) * 0.3, sx: 1 + h(i * 8.1 + 31) * 0.8 });
   }
   return out;
 }
