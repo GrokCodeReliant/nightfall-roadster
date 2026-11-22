@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { CAR_LOD_FAR, carLodFar } from "./carlod";
-import { BEND_STEP, bendGeometry, lerpPose, sliceZ } from "./roadbend";
+import { BEND_STEP, bendGeometry, bendStep, lerpPose, sliceZ } from "./roadbend";
 import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityDetailRange, cityReady, roughHook, roadTilesFit } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -1078,7 +1078,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   loadRoadKit();
   // kit road + lane paint, bent along the track per chunk and merged into ONE mesh per material (coast seam fix: was a
   // rigid InstancedMesh tile at each chunk midpoint, with the 0.05 m ribbon on bends > 4 deg / ramps). Same draws.
-  type KitRoad = { mesh: THREE.Mesh; src: THREE.BufferGeometry; cache: Map<number, { p: Float32Array; n: Float32Array }>; track: unknown };
+  type KitRoad = { mesh: THREE.Mesh; base: THREE.BufferGeometry; sliced: Map<number, THREE.BufferGeometry>; cache: Map<number, { p: Float32Array; n: Float32Array; uv: Float32Array }>; track: unknown };
   let kitRoads: KitRoad[] | null = null;
   let kitKey = "";
   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
@@ -1391,23 +1391,20 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g1.setAttribute(a, g0.getAttribute(a));
         if (!g1.getAttribute("uv") || !g1.getAttribute("normal")) return;
         g1.applyMatrix4(mesh.matrixWorld);
-        const sliced = sliceZ(g1);
         const mat = mesh.material as THREE.MeshStandardMaterial;
         if (mat?.isMeshStandardMaterial) roughHook(mat);
-        const nv = sliced.getAttribute("position").count;
+        // capacity: every chunk at the finest slicing; chunks take the coarsest slicing their bend allows (bendStep)
+        const nv = sliceZ(g1, BEND_STEP).getAttribute("position").count;
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(nv * 3 * POOL), 3).setUsage(THREE.DynamicDrawUsage));
         geo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(nv * 3 * POOL), 3).setUsage(THREE.DynamicDrawUsage));
-        const uv = new Float32Array(nv * 2 * POOL);
-        const su = sliced.getAttribute("uv").array as Float32Array;
-        for (let c = 0; c < POOL; c++) uv.set(su, c * nv * 2);
-        geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+        geo.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(nv * 2 * POOL), 2).setUsage(THREE.DynamicDrawUsage));
         geo.setDrawRange(0, 0);
         const m = new THREE.Mesh(geo, mat);
         m.frustumCulled = false;
         m.name = `kitroad:${name}`;
         scene.add(m);
-        list.push({ mesh: m, src: sliced, cache: new Map(), track: null });
+        list.push({ mesh: m, base: g1, sliced: new Map(), cache: new Map(), track: null });
       });
     }
     kitRoads = list;
@@ -1457,27 +1454,36 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (key === kitKey && kitRoads.every((k) => k.track === sim.track)) return;
     kitKey = key;
     for (const k of kitRoads) {
-      const nv = k.src.getAttribute("position").count;
       const pos = k.mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
       const nor = k.mesh.geometry.getAttribute("normal") as THREE.BufferAttribute;
+      const uvs = k.mesh.geometry.getAttribute("uv") as THREE.BufferAttribute;
       if (k.track !== sim.track) { k.cache.clear(); k.track = sim.track; }
       for (const i of [...k.cache.keys()]) if (!idx.includes(i)) k.cache.delete(i);
-      idx.forEach((i, slot) => {
+      let at = 0;
+      for (const i of idx) {
         let c = k.cache.get(i);
         if (!c) {
-          const g = k.src.clone();
           const i0 = i * SEG;
-          bendGeometry(g, (z) => lerpPose((n) => sampleAt(sim.track, n), i0 + SEG / 2 + z / BEND_STEP, i0, i0 + SEG), true);
-          c = { p: g.getAttribute("position").array as Float32Array, n: g.getAttribute("normal").array as Float32Array };
+          const frame = (z: number) => lerpPose((n) => sampleAt(sim.track, n), i0 + SEG / 2 + z / BEND_STEP, i0, i0 + SEG);
+          const step = bendStep(frame);
+          let src = k.sliced.get(step);
+          if (!src) { src = sliceZ(k.base, step); k.sliced.set(step, src); }
+          const g = src.clone();
+          bendGeometry(g, frame, true);
+          c = { p: g.getAttribute("position").array as Float32Array, n: g.getAttribute("normal").array as Float32Array, uv: g.getAttribute("uv").array as Float32Array };
           g.dispose();
           k.cache.set(i, c);
         }
-        (pos.array as Float32Array).set(c.p, slot * nv * 3);
-        (nor.array as Float32Array).set(c.n, slot * nv * 3);
-      });
+        if ((at + c.p.length / 3) * 3 > pos.array.length) break;
+        (pos.array as Float32Array).set(c.p, at * 3);
+        (nor.array as Float32Array).set(c.n, at * 3);
+        (uvs.array as Float32Array).set(c.uv, at * 2);
+        at += c.p.length / 3;
+      }
       pos.needsUpdate = true;
       nor.needsUpdate = true;
-      k.mesh.geometry.setDrawRange(0, idx.length * nv);
+      uvs.needsUpdate = true;
+      k.mesh.geometry.setDrawRange(0, at);
     }
   }
 

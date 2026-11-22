@@ -1,6 +1,6 @@
 // v0.2 final: Night City stage scenery (Art's assets_v02/env/city + road_kit). Visual only; no sim changes.
 import * as THREE from "three";
-import { BEND_STEP, bendGeometry, lerpPose, sliceZ, type BendPose } from "./roadbend";
+import { BEND_STEP, bendGeometry, bendStep, lerpPose, sliceZ, type BendPose } from "./roadbend";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { COURSE_ORIGIN, courseFor, sectionAt } from "./course";
@@ -183,7 +183,10 @@ export function bakePieceBent(parts: Parts, name: string, frame: (z: number) => 
     const g1 = new THREE.BufferGeometry();
     for (const a of ["position", "normal", "uv"]) g1.setAttribute(a, g0.getAttribute(a));
     g1.applyMatrix4(tmp.multiplyMatrices(local, m.matrixWorld));
-    const g = sliceZ(g1);
+    g1.computeBoundingBox();
+    const bb = g1.boundingBox!;
+    // coarsest slicing that keeps the piece on the curve (BEND_TOL); a straight, flat stretch is not sliced at all
+    const g = sliceZ(g1, bendStep(frame, bb.min.z, bb.max.z));
     bendGeometry(g, frame, followY, ox, oz);
     g.userData.piece = name;
     const l = parts.get(m.material as THREE.Material) ?? [];

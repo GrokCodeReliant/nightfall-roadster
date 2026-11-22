@@ -12,6 +12,33 @@ import * as THREE from "three";
 
 /** track sample spacing (road.ts STEP); slice planes sit on samples so bent edges follow the sample polyline */
 export const BEND_STEP = 2;
+/**
+ * Max distance (m) a bent piece's centreline may leave the true sample polyline between two slice planes. Slicing
+ * every 2 m everywhere cost ~+20k tris at NC-4 (desktop combat cap 250k); bendStep() picks the coarsest slice that
+ * stays inside this (straight chunks: no slicing at all, most bends 10 m, the tightest 4–8 m; 5 cm is under the 0.22 m kerb).
+ */
+export const BEND_TOL = 0.05;
+const STEPS = [Infinity, 20, 10, 8, 4, 2];
+
+/** coarsest slice step for a piece spanning z0..z1 along frame(), keeping the chord error under tol */
+export function bendStep(frame: (z: number) => BendPose, z0 = -20, z1 = 20, tol = BEND_TOL) {
+  for (const step of STEPS) {
+    const planes = [z0];
+    if (Number.isFinite(step)) for (let z = Math.ceil(z0 / step + 1e-6) * step; z < z1 - 1e-6; z += step) planes.push(z);
+    planes.push(z1);
+    let ok = true;
+    for (let i = 0; ok && i + 1 < planes.length; i++) {
+      const a = frame(planes[i]), b = frame(planes[i + 1]);
+      const len = planes[i + 1] - planes[i];
+      for (let z = Math.ceil(planes[i] / BEND_STEP + 1e-6) * BEND_STEP; z < planes[i + 1] - 1e-6; z += BEND_STEP) {
+        const t = (z - planes[i]) / len, f = frame(z);
+        if (Math.hypot(f.x - (a.x + (b.x - a.x) * t), f.y - (a.y + (b.y - a.y) * t), f.z - (a.z + (b.z - a.z) * t)) > tol) { ok = false; break; }
+      }
+    }
+    if (ok) return step;
+  }
+  return BEND_STEP;
+}
 
 export type BendPose = { x: number; y: number; z: number; tx: number; tz: number };
 
@@ -53,6 +80,7 @@ function clip(poly: V[], lo: number, keepAbove: boolean): V[] {
  * sides, so no T-junction (and no crack) appears once the slices are bent.
  */
 export function sliceZ(g: THREE.BufferGeometry, step = BEND_STEP): THREE.BufferGeometry {
+  if (!Number.isFinite(step)) return g.clone();
   const p = g.getAttribute("position"), n = g.getAttribute("normal"), uv = g.getAttribute("uv");
   const P: number[] = [], N: number[] = [], U: number[] = [];
   const emit = (v: V) => { P.push(v[0], v[1], v[2]); N.push(v[3], v[4], v[5]); U.push(v[6], v[7]); };
