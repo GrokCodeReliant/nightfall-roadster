@@ -8,7 +8,7 @@
 // Look pass v3 (Art & Assets, art/nightfall-coast-v3-20261121): arch v3 (vault baked into tunnel_roof), portal v3
 // (lintel on child portal_crown), shorter lighthouse v3 (32 m lamp_beam), broken shore foam v3, cliff v2 (no flat lid).
 import * as THREE from "three";
-import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
+import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
 import { COAST_GATES, COAST_KICKERS, COAST_OBSTACLES, COAST_ROAD, COAST_SAND, COAST_WASH } from "./course";
 
@@ -243,6 +243,8 @@ export function rockSwatchUvs(g: THREE.BufferGeometry) {
 /** CR-6 lighthouse v3 (Art INTEGRATION v3): s 1880, just seaward of the rail at x -16, base on the cliff-sea
  *  (y -12 - mid.y, dy 0). The shorter tower (lantern world y ~8) does the lowering; the whole tower and beam read
  *  45-85 m before it, so the lighthouse shot is taken ~55 m before (race s 1825). */
+/** sea cliff drop under the deck (coast seam fix: was -24.15, its 24.20 cap ridge then stood 0.05 m over the road) */
+export const SEA_CLIFF_Y = -24.45;
 export const LIGHTHOUSE = { s: 1880, lx: -16, dy: 0 };
 /** tris re-projected per piece (report / debug) */
 export const swatchLog: Record<string, number> = {};
@@ -271,6 +273,12 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     if (bakePiece(into, name, placeMatrix(p, lx, ly, lz, ry, ox, oz, m4), keep)) out.placed.push(name);
   };
   const mid = at(Math.floor(seg / 2));
+  // coast seam fix: 40 m strips (shoulder, cliffs, sea, shore, boardwalk, arch, paint) are bent along the road from
+  // sample k0 instead of laid rigid at one pose; followY rides the road profile, otherwise the strip keeps k0's height
+  const midK = Math.floor(seg / 2);
+  const putB = (name: string, k0: number, lx: number, ly: number, ry: number, followY: boolean, keep?: (o: THREE.Object3D) => boolean, into = parts) => {
+    if (bakePieceBent(into, name, chunkFrame(at, k0, seg), followY, lx, ly, ry, ox, oz, keep)) out.placed.push(name);
+  };
   const s0 = c.cs0;
   const s1 = c.cs0 + seg * 2;
   const kAt = (s: number) => Math.round((s - s0) / 2);
@@ -285,15 +293,15 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
 
   if (soft) {
     // beach: sand shoulder at the chunk origin, sea at y -1.5 beyond the water edge (x -32)
-    put("coast_beach_shoulder_40_v2", mid, 0, 0, 0, 0);
-    put("coast_water_40", mid, -52, -1.5, 0, 0);
-    put("coast_water_40", mid, -92, -1.5, 0, 0);
-    put("coast_water_glow_40", mid, -52, -1.45, 0, 0);
-    put("coast_water_glow_40", mid, -92, -1.45, 0, 0);
+    putB("coast_beach_shoulder_40_v2", midK, 0, 0, 0, true);
+    putB("coast_water_40", midK, -52, -1.5, 0, false);
+    putB("coast_water_40", midK, -92, -1.5, 0, false);
+    putB("coast_water_glow_40", midK, -52, -1.45, 0, false);
+    putB("coast_water_glow_40", midK, -92, -1.45, 0, false);
     // coast_moon_glint_80 is staged but not placed: one 80 m glint per 40 m chunk reads in-engine as white bars across
     // the sea every chunk (Art's HONEST_LOOK "hot dart" risk), and it shares kit_emissive so it cannot be dimmed alone.
-    put("coast_horizon_bar_40", mid, -108, -1.5, 0, 0);
-    put(SHORE, mid, -32, -1.45, 0, 0);
+    putB("coast_horizon_bar_40", midK, -108, -1.5, 0, false);
+    putB(SHORE, midK, -32, -1.45, 0, false);
     if (!wash) {
       for (const lz of [-12, 8]) if (R(lz) < 0.7) put("coast_palm", mid, half + 5 + R(lz + 3) * 3, 0, lz, R(lz + 5) * 6.28);
       put("coast_shrub", mid, half + 3, 0, R(7) * 30 - 15, R(8) * 6.28);
@@ -320,7 +328,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     }
     // CR-12 boardwalk (with its string lights) on the sand; beach huts land side stand in for the shopfront row
     if (z === "CR-12" || z === "RUN") {
-      put("coast_boardwalk_40", mid, -16, 0, 0, 0);
+      putB("coast_boardwalk_40", midK, -16, 0, 0, true);
       if (R(60) < 0.6) put("coast_beach_hut", mid, half + 8, 0, R(61) * 20 - 10, Math.PI / 2);
     }
   } else {
@@ -333,16 +341,17 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
         if (k % 4 === 1) put("coast_seawall_lamp", p, -(half + 0.9), 0, 0, 0);
       }
     }
-    put(CLIFF, mid, half + 5, ramp ? -mid.y : 0, 0, Math.PI);
-    // sea cliff: its 14 m top sits under the sea lanes (lat +1.6..+16), so drop it 0.15 m below the deck or its
-    // flat top z-fights over the road tiles on straight chunks
-    put(CLIFF, mid, -(half + 1), -24.15 - (ramp ? mid.y : 0), 0, Math.PI);
-    put("coast_water_40", mid, -40, -12 - mid.y, 0, 0);
-    put("coast_water_40", mid, -80, -12 - mid.y, 0, 0);
-    put("coast_water_glow_40", mid, -40, -11.95 - mid.y, 0, 0);
-    put("coast_water_glow_40", mid, -80, -11.95 - mid.y, 0, 0);
-    put("coast_horizon_bar_40", mid, -96, -12 - mid.y, 0, 0);
-    put(SHORE, mid, -22, -11.9 - mid.y, 0, 0);
+    putB(CLIFF, midK, half + 5, ramp ? -mid.y : 0, Math.PI, false);
+    // sea cliff: it sits under the sea lanes. Cliff v2 still has a 24.20 m cap ridge (lateral 9.2..13.0 after the
+    // flip), so at -24.15 the ridge stood 0.05 m ABOVE the kit deck (deck top y 0) along the sea lane edge on every
+    // cliff chunk (coast seam spot "cliff cap"). -24.45 keeps the whole cliff top >= 0.25 m under the deck.
+    putB(CLIFF, midK, -(half + 1), SEA_CLIFF_Y - (ramp ? mid.y : 0), Math.PI, false);
+    putB("coast_water_40", midK, -40, -12 - mid.y, 0, false);
+    putB("coast_water_40", midK, -80, -12 - mid.y, 0, false);
+    putB("coast_water_glow_40", midK, -40, -11.95 - mid.y, 0, false);
+    putB("coast_water_glow_40", midK, -80, -11.95 - mid.y, 0, false);
+    putB("coast_horizon_bar_40", midK, -96, -12 - mid.y, 0, false);
+    putB(SHORE, midK, -22, -11.9 - mid.y, 0, false);
     put(R(70) < 0.5 ? "coast_rock_a" : "coast_rock_b", mid, -(30 + R(71) * 30), -12.4 - mid.y, R(72) * 30 - 15, R(73) * 6.28);
     if (R(74) < 0.5) put("coast_rock_b", mid, -(45 + R(75) * 20), -12.4 - mid.y, R(76) * 30 - 15, R(77) * 6.28);
     if (ramp) {
@@ -354,18 +363,19 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     const rp: Parts = new Map();
     // v3 bakes the over-road vault into tunnel_roof: walls (and side-wall vault lamps) stay in the chunk, the roof child
     // goes to the hide-able group (no load-time triangle split any more)
-    put(ARCH, mid, 0, 0, 0, 0, (o) => !inNode(o, "tunnel_roof"));
-    put(ARCH, mid, 0, 0, 0, 0, (o) => inNode(o, "tunnel_roof"), rp);
+    putB(ARCH, midK, 0, 0, 0, true, (o) => !inNode(o, "tunnel_roof"));
+    putB(ARCH, midK, 0, 0, 0, true, (o) => inNode(o, "tunnel_roof"), rp);
     const roof = new THREE.Group();
     roof.userData.roofY = mid.y + 8; // v2 crown is taller (was +6.08)
     flushParts(rp, roof);
     group.add(roof);
     out.roof = roof;
+    // portals sit on the chunk's end samples (not mid + lz ±20 along the mid tangent), so they meet the bent arch ends
     if (s0 === 1580) {
-      put(PORTAL, mid, 0, 0, -20, 0, (o) => !inNode(o, "portal_crown"));
-      put(PORTAL, mid, 0, 0, -20, 0, (o) => inNode(o, "portal_crown"), crown);
+      put(PORTAL, at(0), 0, 0, 0, 0, (o) => !inNode(o, "portal_crown"));
+      put(PORTAL, at(0), 0, 0, 0, 0, (o) => inNode(o, "portal_crown"), crown);
     }
-    if (s0 === 1660) put(PORTAL, mid, 0, 0, 20, Math.PI);
+    if (s0 === 1660) put(PORTAL, at(seg), 0, 0, 0, Math.PI);
   }
   // CR-6 lighthouse on the sea side headland, beam spins about the tower axis
   if (s0 <= LIGHTHOUSE.s && LIGHTHOUSE.s < s1) {
@@ -387,7 +397,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   for (const [a, b, lat] of SD) {
     for (let cs = a + 10; cs - 10 < b; cs += 20) {
       if (cs < s0 || cs >= s1) continue;
-      put("coast_sand_drift_6x20", at(Math.min(seg, kAt(cs))), -lat, 0.06, 0, 0);
+      putB("coast_sand_drift_6x20", Math.min(seg, kAt(cs)), -lat, 0.06, 0, true);
     }
   }
   // CR-7 foam wash v2: base + glow merge per (private) foam material with the chunk; motion is the shader scroll
@@ -422,8 +432,8 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     if (inChunk(m.s1 + 2)) put("coast_guardrail_end_4m", atS(m.s1 + 2), 0, 0, 0, Math.PI);
   }
   for (const [s, lat] of CRATES) if (inChunk(s)) put("coast_crate", atS(s), -lat, 0, 0, 0.3);
-  if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
-  for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
+  if (c.grid) putB("start_grid_paint_40", midK, 0, 0.05, 0, true);
+  for (const k of c.kick) putB("ramp_lip_chevron_24", k, 0, 0.05, 0, true);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);
   privateShore(parts);
   foldV2Emissive(parts);

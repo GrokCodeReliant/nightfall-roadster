@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { CAR_LOD_FAR, carLodFar } from "./carlod";
+import { BEND_STEP, bendGeometry, lerpPose, sliceZ } from "./roadbend";
 import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityDetailRange, cityReady, roughHook, roadTilesFit } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -1075,8 +1076,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [] });
   }
   loadRoadKit();
-  let kitRoads: THREE.InstancedMesh[] | null = null;
-  const kitMatrix = new THREE.Matrix4();
+  // kit road + lane paint, bent along the track per chunk and merged into ONE mesh per material (coast seam fix: was a
+  // rigid InstancedMesh tile at each chunk midpoint, with the 0.05 m ribbon on bends > 4 deg / ramps). Same draws.
+  type KitRoad = { mesh: THREE.Mesh; src: THREE.BufferGeometry; cache: Map<number, { p: Float32Array; n: Float32Array }>; track: unknown };
+  let kitRoads: KitRoad[] | null = null;
+  let kitKey = "";
   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
   let stage: StageId = "city";
   let gateBoost = 0;
@@ -1365,28 +1369,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
   }
 
+  /** a chunk takes the kit road unless the track has a bridge gap in it (the ribbon skips gap segments) */
   function chunkTileFit(sim: Sim, index: number) {
     const track = sim.track;
-    const a = sampleAt(track, index * SEG);
-    const b = sampleAt(track, index * SEG + SEG);
-    let bend = Math.atan2(b.tx, b.tz) - Math.atan2(a.tx, a.tz);
-    while (bend > Math.PI) bend -= Math.PI * 2;
-    while (bend < -Math.PI) bend += Math.PI * 2;
-    let lo = Infinity;
-    let hi = -Infinity;
-    let gap = false;
-    for (let k = 0; k <= SEG; k++) {
-      const s = sampleAt(track, index * SEG + k);
-      if (s.gap) gap = true;
-      if (s.y < lo) lo = s.y;
-      if (s.y > hi) hi = s.y;
-    }
-    return roadTilesFit(!!track.authored, Math.abs(bend), hi - lo, gap);
+    for (let k = 0; k <= SEG; k++) if (sampleAt(track, index * SEG + k).gap) return roadTilesFit(!!track.authored, 0, 0, true);
+    return true;
   }
 
   function ensureKitRoads() {
     if (kitRoads || !roadKitReady()) return;
-    const list: THREE.InstancedMesh[] = [];
+    const list: KitRoad[] = [];
     for (const name of ["road_straight_40", "lanepaint_straight_40"] as const) {
       const src = getPiece(name);
       if (!src) continue;
@@ -1394,21 +1386,34 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       src.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
-        const geo = mesh.geometry.clone();
-        geo.applyMatrix4(mesh.matrixWorld);
+        const g0 = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        const g1 = new THREE.BufferGeometry();
+        for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g1.setAttribute(a, g0.getAttribute(a));
+        if (!g1.getAttribute("uv") || !g1.getAttribute("normal")) return;
+        g1.applyMatrix4(mesh.matrixWorld);
+        const sliced = sliceZ(g1);
         const mat = mesh.material as THREE.MeshStandardMaterial;
         if (mat?.isMeshStandardMaterial) roughHook(mat);
-        const inst = new THREE.InstancedMesh(geo, mat, POOL);
-        inst.count = 0;
-        inst.frustumCulled = false;
-        scene.add(inst);
-        list.push(inst);
+        const nv = sliced.getAttribute("position").count;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(nv * 3 * POOL), 3).setUsage(THREE.DynamicDrawUsage));
+        geo.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(nv * 3 * POOL), 3).setUsage(THREE.DynamicDrawUsage));
+        const uv = new Float32Array(nv * 2 * POOL);
+        const su = sliced.getAttribute("uv").array as Float32Array;
+        for (let c = 0; c < POOL; c++) uv.set(su, c * nv * 2);
+        geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+        geo.setDrawRange(0, 0);
+        const m = new THREE.Mesh(geo, mat);
+        m.frustumCulled = false;
+        m.name = `kitroad:${name}`;
+        scene.add(m);
+        list.push({ mesh: m, src: sliced, cache: new Map(), track: null });
       });
     }
     kitRoads = list;
+    kitKey = "";
     applyRoadLook();
   }
-
   // Coast Road only: a damped clone of each road material (wet-asphalt puddles stay matte enough that the sky/env
   // reflection does not read as a white blob). Night City and every other stage keep the shared originals untouched.
   const coastRoadMats = new Map<THREE.Material, THREE.MeshStandardMaterial>();
@@ -1432,32 +1437,47 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
       mesh.material = on && base.isMeshStandardMaterial && base.map ? coastRoadMat(base) : base;
     };
-    for (const inst of kitRoads ?? []) swap(inst);
+    for (const k of kitRoads ?? []) swap(k.mesh);
     for (const ch of chunks) swap(ch.road);
   }
 
   function placeKitRoads(sim: Sim) {
     ensureKitRoads();
     if (!kitRoads) return;
-    let n = 0;
+    const idx: number[] = [];
     for (const ch of chunks) {
       if (ch.index < 0) continue;
-      if (!chunkTileFit(sim, ch.index)) {
-        ch.road.visible = true;
-        ch.marks.visible = true;
-        continue;
-      }
-      const mid = sampleAt(sim.track, ch.index * SEG + Math.floor(SEG / 2));
-      kitMatrix.makeRotationY(Math.atan2(mid.tx, mid.tz));
-      kitMatrix.setPosition(mid.x, mid.y, mid.z);
-      for (const inst of kitRoads) inst.setMatrixAt(n, kitMatrix);
-      ch.road.visible = false;
-      ch.marks.visible = false;
-      n += 1;
+      const fit = chunkTileFit(sim, ch.index);
+      ch.road.visible = !fit;
+      ch.marks.visible = !fit;
+      if (fit) idx.push(ch.index);
     }
-    for (const inst of kitRoads) {
-      inst.count = n;
-      inst.instanceMatrix.needsUpdate = true;
+    idx.sort((a, b) => a - b);
+    const key = idx.join(",");
+    if (key === kitKey && kitRoads.every((k) => k.track === sim.track)) return;
+    kitKey = key;
+    for (const k of kitRoads) {
+      const nv = k.src.getAttribute("position").count;
+      const pos = k.mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+      const nor = k.mesh.geometry.getAttribute("normal") as THREE.BufferAttribute;
+      if (k.track !== sim.track) { k.cache.clear(); k.track = sim.track; }
+      for (const i of [...k.cache.keys()]) if (!idx.includes(i)) k.cache.delete(i);
+      idx.forEach((i, slot) => {
+        let c = k.cache.get(i);
+        if (!c) {
+          const g = k.src.clone();
+          const i0 = i * SEG;
+          bendGeometry(g, (z) => lerpPose((n) => sampleAt(sim.track, n), i0 + SEG / 2 + z / BEND_STEP, i0, i0 + SEG), true);
+          c = { p: g.getAttribute("position").array as Float32Array, n: g.getAttribute("normal").array as Float32Array };
+          g.dispose();
+          k.cache.set(i, c);
+        }
+        (pos.array as Float32Array).set(c.p, slot * nv * 3);
+        (nor.array as Float32Array).set(c.n, slot * nv * 3);
+      });
+      pos.needsUpdate = true;
+      nor.needsUpdate = true;
+      k.mesh.geometry.setDrawRange(0, idx.length * nv);
     }
   }
 
