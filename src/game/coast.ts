@@ -3,6 +3,8 @@
 // Placement follows LEVELS/02_coast_road.md zones CR-0..CR-12 on course s (see course.ts). Same merge-per-material
 // as city.ts; the only separate meshes are the arch roof (hidden when the camera is above it), the lighthouse beam
 // (spins). Foam v2 scrolls in its own shader (cell-local UV wrap, atlas v3) and merges per foam material.
+// Look pass v2 (Art & Assets, art/nightfall-coast-v2-20261121): sea glow / shore foam / horizon, lighthouse blade, arch,
+// pier approach, seawall lamps, beach dress, crate + guardrail end. All on the official kit atlas (kit / kit_emissive).
 import * as THREE from "three";
 import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
@@ -13,6 +15,11 @@ const COAST_PIECES: [string, string][] = [
   ["coast", "coast_beach_shoulder_40"], ["coast", "coast_sand_drift_6x20"], ["coast", "coast_arch_40"], ["coast", "coast_arch_portal"],
   ["coast", "coast_lighthouse"], ["coast", "coast_umbrella"], ["coast", "coast_beach_hut"], ["coast", "coast_pier_deck_20"],
   ["coast", "coast_boardwalk_40"], ["coast", "coast_dune_mound"], ["coast", "coast_foam_strip_24_v2"],
+  // look pass v2 (art/nightfall-coast-v2-20261121); the v1 pieces above stay loaded as fallback
+  ["coast", "coast_beach_shoulder_40_v2"], ["coast", "coast_arch_40_v2"], ["coast", "coast_arch_portal_v2"],
+  ["coast", "coast_lighthouse_v2"], ["coast", "coast_water_glow_40"],
+  ["coast", "coast_horizon_bar_40"], ["coast", "coast_shore_foam_40"], ["coast", "coast_pier_approach_16"],
+  ["coast", "coast_driftwood"], ["coast", "coast_seawall_lamp"], ["coast", "coast_crate"], ["coast", "coast_guardrail_end_4m"],
   // existing coast set, first use
   ["coast", "coast_water_40"], ["coast", "coast_guardrail_4m"], ["coast", "coast_stone_wall_4m"], ["coast", "coast_palm"],
   ["coast", "coast_rock_a"], ["coast", "coast_rock_b"], ["coast", "coast_shrub"], ["coast", "coast_lifeguard_tower"], ["coast", "coast_cliff_40"],
@@ -87,37 +94,25 @@ function foamHook() {
 
 /** Spec crates (§2): L4 at 1350 (Fork A sea side) and L4 at 2160 (Fork B sea side). */
 const CRATES: [number, number][] = [[1350, 9], [2160, 9]];
-const NOSE = new THREE.Matrix4().makeScale(1, 1.15, 0.5);
-/** A box on the material of `src`'s first mesh, UVs squeezed into a small patch of that mesh's own UV area. */
-function bakeBox(parts: Parts, src: string, size: number, m4: THREE.Matrix4) {
-  const piece = getPiece(src);
-  let mesh: THREE.Mesh | null = null;
-  piece?.traverse((o) => { if (!mesh && (o as THREE.Mesh).isMesh) mesh = o as THREE.Mesh; });
-  if (!mesh) return false;
-  const m = mesh as THREE.Mesh;
-  const uv = m.geometry.getAttribute("uv");
-  if (!uv) return false;
-  let u = 0, v = 0;
-  for (let i = 0; i < uv.count; i++) { u += uv.getX(i); v += uv.getY(i); }
-  u /= uv.count; v /= uv.count;
-  const g = new THREE.BoxGeometry(size, size, size).toNonIndexed();
-  const bu = g.getAttribute("uv");
-  for (let i = 0; i < bu.count; i++) bu.setXY(i, u + (bu.getX(i) - 0.5) * 0.01, v + (bu.getY(i) - 0.5) * 0.01);
-  const out = new THREE.BufferGeometry();
-  for (const a of ["position", "normal", "uv"]) out.setAttribute(a, g.getAttribute(a));
-  out.applyMatrix4(m4);
-  out.userData.piece = "crate*";
-  const l = parts.get(m.material as THREE.Material) ?? [];
-  l.push(out);
-  parts.set(m.material as THREE.Material, l);
-  return true;
+const ARCH = "coast_arch_40_v2";
+const beamMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+function beamMat(m: THREE.MeshStandardMaterial) {
+  let b = beamMats.get(m);
+  if (!b) {
+    b = m.clone();
+    b.blending = THREE.AdditiveBlending;
+    b.transparent = true;
+    b.depthWrite = false;
+    b.side = THREE.DoubleSide;
+    beamMats.set(m, b);
+  }
+  return b;
 }
-
 /** Bake the arch shell split by triangle: the inner vault over the road (centroid y > 5.5, |x| < 11 in piece space)
  *  goes with tunnel_roof into the hide-able group, the walls stay in the chunk. Without this the vault ceiling (32 of
  *  the shell's 96 tris) still covers the hero under the high chase cam once tunnel_roof hides. */
 function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
-  const src = getPiece("coast_arch_40");
+  const src = getPiece(ARCH);
   if (!src) return false;
   src.updateMatrixWorld(true);
   const w = new THREE.Matrix4();
@@ -142,7 +137,7 @@ function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
         g.setAttribute(a, new THREE.BufferAttribute(arr, src.itemSize));
       }
       g.applyMatrix4(w.copy(m4));
-      g.userData.piece = "coast_arch_40";
+      g.userData.piece = ARCH;
       const into = k ? vault : walls;
       const l = into.get(m.material as THREE.Material) ?? [];
       l.push(g);
@@ -169,16 +164,23 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   const overlaps = (a: number, b: number) => a < s1 && b > s0;
   const z = c.zone;
   const wash = WASH.some(([a, b]) => overlaps(a, b));
-  const soft = SOFT.has(z) || wash;
+  // wash (CR-7 Breaker Run) is a rail-edged zone with sea, not a beach: no sand pad there (look pass v2)
+  const soft = SOFT.has(z);
   const arch = z === "CR-5" && c.flat;
   const ramp = z === "CR-2" || z === "CR-9";
   const R = (n: number) => rnd(index * 41 + n);
 
   if (soft) {
     // beach: sand shoulder at the chunk origin, sea at y -1.5 beyond the water edge (x -32)
-    put("coast_beach_shoulder_40", mid, 0, 0, 0, 0);
+    put("coast_beach_shoulder_40_v2", mid, 0, 0, 0, 0);
     put("coast_water_40", mid, -52, -1.5, 0, 0);
     put("coast_water_40", mid, -92, -1.5, 0, 0);
+    put("coast_water_glow_40", mid, -52, -1.45, 0, 0);
+    put("coast_water_glow_40", mid, -92, -1.45, 0, 0);
+    // coast_moon_glint_80 is staged but not placed: one 80 m glint per 40 m chunk reads in-engine as white bars across
+    // the sea every chunk (Art's HONEST_LOOK "hot dart" risk), and it shares kit_emissive so it cannot be dimmed alone.
+    put("coast_horizon_bar_40", mid, -108, -1.5, 0, 0);
+    put("coast_shore_foam_40", mid, -32, -1.45, 0, 0);
     if (!wash) {
       for (const lz of [-12, 8]) if (R(lz) < 0.7) put("coast_palm", mid, half + 5 + R(lz + 3) * 3, 0, lz, R(lz + 5) * 6.28);
       put("coast_shrub", mid, half + 3, 0, R(7) * 30 - 15, R(8) * 6.28);
@@ -186,6 +188,8 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
         const n = 1 + Math.floor(R(11) * 3);
         for (let u = 0; u < n; u++) put("coast_umbrella", mid, -(20 + R(u * 3 + 12) * 6), 0, -15 + u * 12 + R(u + 30) * 4, R(u + 40) * 6.28);
         if ((z === "CR-0" || z === "CR-3") && R(50) < 0.5) put("coast_beach_hut", mid, -28, 0, R(51) * 20 - 10, -Math.PI / 2);
+        if (R(90) < 0.7) put("coast_driftwood", mid, -(16 + R(91) * 8), 0, R(92) * 24 - 12, R(93) * 6.28);
+        if (R(94) < 0.6) put("coast_rock_a", mid, -(20 + R(95) * 6), -0.15, R(96) * 24 - 12, R(97) * 6.28);
       }
     }
     // lifeguard towers: CR-0 x1, CR-8 x2, CR-11 x1, on the sand facing the sea
@@ -193,10 +197,13 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     // CR-8 pier: 8 x 20 m modules straight out to sea from the shoulder water edge, end_hut on the last only
     if (s0 <= 2560 && 2560 < s1) {
       const p = at(kAt(2560));
+      // approach sits on the sand (centre x=-24) and meets the first 20 m module at the water edge (x=-32)
+      put("coast_pier_approach_16", p, -24, 0, 0, -Math.PI / 2);
       for (let j = 0; j < 8; j++) put("coast_pier_deck_20", p, -(32 + 10 + 20 * j), 0, 0, -Math.PI / 2, j === 7 ? undefined : (o) => !inNode(o, "end_hut"));
       put("coast_water_40", p, -132, -1.5, 0, 0);
       put("coast_water_40", p, -172, -1.5, 0, 0);
       put("coast_water_40", p, -212, -1.5, 0, 0);
+      for (const x of [-132, -172, -212]) put("coast_water_glow_40", p, x, -1.45, 0, 0);
     }
     // CR-12 boardwalk (with its string lights) on the sand; beach huts land side stand in for the shopfront row
     if (z === "CR-12" || z === "RUN") {
@@ -210,6 +217,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
         const p = at(k);
         put("coast_guardrail_4m", p, -(half + 0.6), 0, 0, 0);
         put("coast_stone_wall_4m", p, half + 1, 0, 0, 0);
+        if (k % 4 === 1) put("coast_seawall_lamp", p, -(half + 0.9), 0, 0, 0);
       }
     }
     put("coast_cliff_40", mid, half + 5, ramp ? -mid.y : 0, 0, Math.PI);
@@ -218,6 +226,10 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     put("coast_cliff_40", mid, -(half + 1), -24.15 - (ramp ? mid.y : 0), 0, Math.PI);
     put("coast_water_40", mid, -40, -12 - mid.y, 0, 0);
     put("coast_water_40", mid, -80, -12 - mid.y, 0, 0);
+    put("coast_water_glow_40", mid, -40, -11.95 - mid.y, 0, 0);
+    put("coast_water_glow_40", mid, -80, -11.95 - mid.y, 0, 0);
+    put("coast_horizon_bar_40", mid, -96, -12 - mid.y, 0, 0);
+    put("coast_shore_foam_40", mid, -22, -11.9 - mid.y, 0, 0);
     put(R(70) < 0.5 ? "coast_rock_a" : "coast_rock_b", mid, -(30 + R(71) * 30), -12.4 - mid.y, R(72) * 30 - 15, R(73) * 6.28);
     if (R(74) < 0.5) put("coast_rock_b", mid, -(45 + R(75) * 20), -12.4 - mid.y, R(76) * 30 - 15, R(77) * 6.28);
     if (ramp) {
@@ -227,25 +239,27 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   }
   if (arch) {
     const rp: Parts = new Map();
-    if (bakeArch(parts, rp, placeMatrix(mid, 0, 0, 0, 0, ox, oz, m4))) out.placed.push("coast_arch_40");
-    put("coast_arch_40", mid, 0, 0, 0, 0, (o) => inNode(o, "tunnel_roof"), rp);
+    if (bakeArch(parts, rp, placeMatrix(mid, 0, 0, 0, 0, ox, oz, m4))) out.placed.push(ARCH);
+    put(ARCH, mid, 0, 0, 0, 0, (o) => inNode(o, "tunnel_roof"), rp);
     const roof = new THREE.Group();
-    roof.userData.roofY = mid.y + 6.08;
+    roof.userData.roofY = mid.y + 8; // v2 crown is taller (was +6.08)
     flushParts(rp, roof);
     group.add(roof);
     out.roof = roof;
-    if (s0 === 1580) put("coast_arch_portal", mid, 0, 0, -20, 0);
-    if (s0 === 1660) put("coast_arch_portal", mid, 0, 0, 20, Math.PI);
+    if (s0 === 1580) put("coast_arch_portal_v2", mid, 0, 0, -20, 0);
+    if (s0 === 1660) put("coast_arch_portal_v2", mid, 0, 0, 20, Math.PI);
   }
   // CR-6 lighthouse on the sea side headland, beam spins about the tower axis
   if (s0 <= 1880 && 1880 < s1) {
     const p = at(kAt(1880));
-    put("coast_lighthouse", p, -60, -12 - p.y, 0, 0, (o) => !inNode(o, "lamp_beam"));
+    put("coast_lighthouse_v2", p, -30, -12 - p.y, 0, 0, (o) => !inNode(o, "lamp_beam"));
     const bp: Parts = new Map();
-    if (bakePiece(bp, "coast_lighthouse", new THREE.Matrix4(), (o) => inNode(o, "lamp_beam"))) {
+    if (bakePiece(bp, "coast_lighthouse_v2", new THREE.Matrix4(), (o) => inNode(o, "lamp_beam"))) {
       const spin = new THREE.Group();
-      placeMatrix(p, -60, -12 - p.y, 0, 0, ox, oz, m4).decompose(spin.position, spin.quaternion, spin.scale);
-      flushParts(bp, spin);
+      placeMatrix(p, -30, -12 - p.y, 0, 0, ox, oz, m4).decompose(spin.position, spin.quaternion, spin.scale);
+      // 70 m lamp_beam blade: additive, no depth write, so it reads over the water without z-fighting. Own material
+      // instance (the spin group is already its own mesh/draw), so the shared kit_emissive is untouched.
+      for (const mesh of flushParts(bp, spin)) mesh.material = beamMat(mesh.material as THREE.MeshStandardMaterial);
       group.add(spin);
       out.spin = spin;
     }
@@ -282,14 +296,13 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   for (const s of SIGN_RIGHT) if (inChunk(s)) for (const lat of [10.6, 1.6]) put("sign_fork", atS(s), -lat, 0, 0, Math.PI);
   for (const o of COAST_OBSTACLES) if (inChunk(o.s)) put("coast_rock_a", atS(o.s), -o.lat, 0, 0, 0);
   for (const k of COAST_KICKERS) if (inChunk(k.s)) put("ramp_kicker_1m", atS(k.s), -k.lat, 0, 0, 0);
-  // stand-ins (no studio mesh yet), merged into the existing kit material: guardrail_end_4m = a 2 m jersey nose at each
-  // median end, crate = a 1.44 m box textured from the beach hut planks. Visual only, like Night City's crates.
+  // Art v2 crate + guardrail terminal (merged per material, visual only like Night City's crates). The terminal's end
+  // is local -Z: at a median's start it faces oncoming traffic, at its end it is turned round.
   for (const m of COAST_ROAD.medians) {
-    for (const s of [m.s0 - 2, m.s1 + 2]) {
-      if (inChunk(s) && bakePiece(parts, "barrier_jersey_4m", placeMatrix(atS(s), 0, 0, 0, 0, ox, oz, m4).multiply(NOSE))) out.placed.push("guardrail_end_4m*");
-    }
+    if (inChunk(m.s0 - 2)) put("coast_guardrail_end_4m", atS(m.s0 - 2), 0, 0, 0, 0);
+    if (inChunk(m.s1 + 2)) put("coast_guardrail_end_4m", atS(m.s1 + 2), 0, 0, 0, Math.PI);
   }
-  for (const [s, lat] of CRATES) if (inChunk(s) && bakeBox(parts, "coast_beach_hut", 1.44, placeMatrix(atS(s), -lat, 0.72, 0, 0.3, ox, oz, m4))) out.placed.push("crate*");
+  for (const [s, lat] of CRATES) if (inChunk(s)) put("coast_crate", atS(s), -lat, 0, 0, 0.3);
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);
