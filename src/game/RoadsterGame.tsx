@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
+import { raceBestLine, recordRace, sanitizeRaceBests, type RaceBests } from "./records";
 import { CAR_STATS, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, raceStandings, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
 import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
@@ -60,10 +61,11 @@ function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
   return <p className="nf-carpick-sub">{bits.join(" · ")}</p>;
 }
 
-type Save = { bestScore: number; bestWave: number; bestTime: number; credits: number; shop: ShopSave };
+/** race: optional per-course race records (records.ts). Missing in older saves; defaults to {}. */
+type Save = { bestScore: number; bestWave: number; bestTime: number; credits: number; shop: ShopSave; race: RaceBests };
 
 function loadSave(): Save {
-  const empty = { bestScore: 0, bestWave: 0, bestTime: 0, credits: 0, shop: emptyShop() };
+  const empty = { bestScore: 0, bestWave: 0, bestTime: 0, credits: 0, shop: emptyShop(), race: {} };
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return empty;
@@ -75,6 +77,7 @@ function loadSave(): Save {
       bestTime: typeof p.bestTime === "number" ? p.bestTime : 0,
       credits,
       shop: sanitizeShop(p.shop),
+      race: sanitizeRaceBests(p.race),
     };
   } catch {
     return empty;
@@ -89,6 +92,7 @@ function writeSave(patch: Partial<Save>) {
     bestTime: patch.bestTime ?? prev.bestTime,
     credits: patch.credits ?? prev.credits,
     shop: patch.shop ?? prev.shop,
+    race: patch.race ?? prev.race,
   };
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(next));
@@ -191,6 +195,7 @@ export function RoadsterGame() {
   const [phase, setPhase] = useState<Phase>("menu");
   const [result, setResult] = useState<Result | null>(null);
   const [best, setBest] = useState("Highway record loads with the night.");
+  const [raceBests, setRaceBests] = useState<RaceBests>({});
   const [credits, setCredits] = useState(() => loadSave().credits);
   const [shop, setShop] = useState<ShopSave>(() => loadSave().shop);
   const shopRef = useRef(shop);
@@ -244,6 +249,7 @@ export function RoadsterGame() {
     simRef.current = sim;
     audioRef.current = audio;
     setBest(bestLine(loadSave()));
+    setRaceBests(loadSave().race);
 
     // Test hook only for harness runs (?debug); never exposed in normal play.
     if (new URLSearchParams(window.location.search).has("debug")) {
@@ -285,6 +291,8 @@ export function RoadsterGame() {
       };
       Object.assign(w, {
         __nfFade: () => world.debugFade(),
+        __nfSnapCam: () => world.debugSnapCamera(),
+        __nfPick: (x: number, y: number) => world.debugPick(x, y),
         __nfProject: (id: number) => world.project(sim, id),
         __nfCar: () => world.carInfo(),
         __nfRollout: () => world.rolloutState(),
@@ -483,6 +491,7 @@ export function RoadsterGame() {
           const bank = bankFinish(prev.credits, sim.result, sim.lives);
           const waveRun = sim.result.mode !== "race";
           const next = writeSave({
+            race: recordRace(prev.race, sim.stageId, sim.result),
             bestScore: Math.max(prev.bestScore, sim.result.score),
             bestWave: waveRun ? Math.max(prev.bestWave, sim.result.wave) : prev.bestWave,
             bestTime: waveRun ? Math.max(prev.bestTime, sim.result.time) : prev.bestTime,
@@ -491,6 +500,7 @@ export function RoadsterGame() {
           });
           setCredits(next.credits);
           setBest(bestLine(next));
+          setRaceBests(next.race);
         }
       }
       const cross = crossRef.current;
@@ -1064,7 +1074,7 @@ export function RoadsterGame() {
                 <button type="button" className={hubRow(3, "nf-shop-open")} aria-current={hubPad && padFocus === 3 ? "true" : undefined} onClick={openShop}>Shop</button>
                 <button type="button" className={hubRow(4, "nf-shop-open")} aria-current={hubPad && padFocus === 4 ? "true" : undefined} onClick={openSettings}>Settings</button>
                 <p className="nf-credits">Credits {credits}</p>
-                <p className="nf-best">{best}</p>
+                <p className="nf-best">{isRaceStage(STAGES[stageIdx].id) ? raceBestLine(raceBests, STAGES[stageIdx].id, STAGES[stageIdx].name) : best}</p>
               </div>
             </div>
           </div>
@@ -1199,7 +1209,7 @@ export function RoadsterGame() {
               <button type="button" className="nf-shop-open" onClick={openShop}>Shop</button>
               <button type="button" className="nf-btn nf-btn-ghost" onClick={toTitle}>Title</button>
               <p className="nf-credits">Credits {credits}</p>
-              <p className="nf-best">{best}</p>
+              <p className="nf-best">{raceResult ? raceBestLine(raceBests, resultStage, stageName(resultStage)) : best}</p>
             </div>
           </div>
         </div>

@@ -154,6 +154,7 @@ export function bakePiece(parts: Parts, name: string, m4: THREE.Matrix4, keep?: 
     for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g.setAttribute(a, g0.getAttribute(a));
     if (!g.getAttribute("uv") || !g.getAttribute("normal")) return;
     g.applyMatrix4(tmp.multiplyMatrices(m4, m.matrixWorld));
+    g.userData.piece = name;
     const l = parts.get(m.material as THREE.Material) ?? [];
     l.push(g);
     parts.set(m.material as THREE.Material, l);
@@ -163,10 +164,12 @@ export function bakePiece(parts: Parts, name: string, m4: THREE.Matrix4, keep?: 
 export function flushParts(parts: Parts, group: THREE.Object3D) {
   const out: THREE.Mesh[] = [];
   for (const [mat, list] of parts) {
+    const names = [...new Set(list.map((x) => x.userData.piece as string).filter(Boolean))];
     const g = mergeGeometries(list, false);
     for (const x of list) x.dispose();
     if (!g) continue;
     const mesh = new THREE.Mesh(g, mat);
+    mesh.userData.pieces = names;
     group.add(mesh);
     out.push(mesh);
   }

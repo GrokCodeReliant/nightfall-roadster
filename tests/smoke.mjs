@@ -235,6 +235,7 @@ for (const prof of profiles) {
     return { text: (card?.textContent || "").replace(/\s+/g, " ").trim(), place: card?.querySelector(".nf-row-place strong")?.textContent?.trim() || "", time: row(".nf-row-time"), best: (card?.querySelector(".nf-best")?.textContent || "").trim() };
   });
   check(P, "NC results: no Wave text, shows Place + Finish time (best line has no wave 0)", !!ncCard.text && !/wave/i.test(ncCard.text) && /^P[1-4]$/.test(ncCard.place) && /^Finish time\s*\d+:\d{2}/.test(ncCard.time) && /course/i.test(ncCard.text) && !/wave 0/i.test(ncCard.best), JSON.stringify(ncCard));
+  check(P, "NC results best line is Night City's race best (place + time, no wave/pts)", /^Night City best P[1-4] · \d+:\d{2}/.test(ncCard.best) && !/wave|pts/i.test(ncCard.best), ncCard.best);
   {
     const c = await cardBank();
     const shown = (c.purse ?? 0) + (c.lives ?? 0);
@@ -332,6 +333,18 @@ for (const prof of profiles) {
     };
     const crDraws = { cr0: await crAt(60), cr5: await crAt(1640), cr8: await crAt(2470) };
     await page.screenshot({ path: `${SHOTS}/${P}-coast-cr8.png` });
+    // "Ramp ahead" only inside 150 m of a ramp: none at CR-8 (230 m before CR-9), shown at 2610 (90 m before it)
+    const rampToast = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r((document.querySelector(".nf-toast")?.textContent || "").trim())))));
+    const hint8 = await rampToast();
+    await page.evaluate(() => {
+      const s = window.__nf, h = s.cars[0];
+      const sm = s.track.samples[Math.round((s.race.originAlong + 2610) / 2) - s.track.first];
+      h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.lane = 0; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
+      h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.offT = 0; s.race.dnfT = 0;
+      s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+    });
+    const hint9 = await rampToast();
+    check(P, "Coast Road ramp hint: hidden at CR-8 (230 m out), \"Ramp ahead\" 90 m before CR-9", !/^ramp/i.test(hint8) && /^Ramp/.test(hint9), JSON.stringify({ hint8, hint9 }));
     for (const [k, d] of Object.entries(crDraws)) console.log(`DRAW [${P}] coast ${k}: ${d.draws} draws, ${d.tris} tris`);
     const worst = Math.max(...Object.values(crDraws).map((d) => d.draws));
     check(P, `Coast Road scenery streams and draws stay under the ceiling at CR-0 / CR-5 / CR-8 (${P === "phone" ? "≤160" : "logged"})`, Object.values(crDraws).every((d) => d.stage === "coast" && d.cityChunks >= 4 && d.framed && d.draws > 20) && drawGate(P, worst), JSON.stringify(crDraws));
@@ -353,6 +366,7 @@ for (const prof of profiles) {
       return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim(), place: card?.querySelector(".nf-row-place strong")?.textContent?.trim() || "", time: (card?.querySelector(".nf-row-time")?.textContent || "").trim() };
     });
     check(P, "Coast Road finish -> results: place + finish time, Coast Road 4.0 km, no Wave text (best line has no wave 0)", crOver && crFin.ok && crFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(crCard.title) && /^P[1-4]$/.test(crCard.place) && /^Finish time\s*\d+:\d{2}/.test(crCard.time) && /Coast Road · 4\.0 km course/.test(crCard.text) && !/wave/i.test(crCard.text) && !/wave 0/i.test(crCard.best), JSON.stringify({ crFin, crCard }));
+    check(P, "Coast Road results best line is the course's race best (place + time, no wave/pts)", /^Coast Road best P[1-4] · \d+:\d{2}/.test(crCard.best) && !/wave|pts/i.test(crCard.best), crCard.best);
     {
       const c = await cardBank();
       const shown = (c.purse ?? 0) + (c.lives ?? 0);
@@ -380,6 +394,9 @@ for (const prof of profiles) {
     await page.waitForSelector(".nf-carpick");
     await page.click("[aria-label='Previous stage']");
     const backTo = await page.textContent(".nf-stagepick .nf-carpick-name");
+    // wave stages keep the old best line (score/wave record), not a course race best
+    const clBest = await page.evaluate(() => (document.querySelector(".nf-best")?.textContent || "").trim());
+    check(P, "Classic Night title keeps the wave best line (Best … pts), not a race best", /^(Best \d+ pts|No record yet)/.test(clBest) && !/ best P\d/.test(clBest), clBest);
     await page.click(".nf-btn");
     await page.waitForSelector(".nf-hud");
     await page.evaluate(() => window.__nfSkipRollout());

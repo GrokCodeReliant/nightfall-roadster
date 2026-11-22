@@ -63,6 +63,14 @@ function foamHook() {
     const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
     if (!(o as THREE.Mesh).isMesh || !m || m.userData.foam) return;
     m.userData.foam = true;
+    // The glow sheet ships at emissive strength 3.2 over the whole strip; under the high chase cam that reads as a
+    // flat white slab. Keep the glow as a hint so the scrolling texture (and the telegraph) shows through.
+    // The atlas alpha is roughness, not opacity, so the sheet is fully opaque: blend it at half strength so the sea and
+    // sand read through and the strip looks like wash, not a slab (same draw, no new material).
+    if (m.emissive && m.emissiveMap) m.emissiveIntensity = 0.45;
+    m.transparent = true;
+    m.opacity = 0.5;
+    m.depthWrite = false;
     m.onBeforeCompile = (sh) => {
       sh.uniforms.uFoam = foamClock;
       const wrap = `vec2 c0 = ${FOAM_MIN}; vec2 c1 = ${FOAM_MAX};\n vec2 fl = (vMapUv - c0) / (c1 - c0);\n fl.y = fract(fl.y + uFoam / 0.9);\n vec2 fUv = c0 + fl * (c1 - c0);\n`;
@@ -75,6 +83,74 @@ function foamHook() {
     m.customProgramCacheKey = () => `nf_foam_${m.name}`;
     m.needsUpdate = true;
   });
+}
+
+/** Spec crates (§2): L4 at 1350 (Fork A sea side) and L4 at 2160 (Fork B sea side). */
+const CRATES: [number, number][] = [[1350, 9], [2160, 9]];
+const NOSE = new THREE.Matrix4().makeScale(1, 1.15, 0.5);
+/** A box on the material of `src`'s first mesh, UVs squeezed into a small patch of that mesh's own UV area. */
+function bakeBox(parts: Parts, src: string, size: number, m4: THREE.Matrix4) {
+  const piece = getPiece(src);
+  let mesh: THREE.Mesh | null = null;
+  piece?.traverse((o) => { if (!mesh && (o as THREE.Mesh).isMesh) mesh = o as THREE.Mesh; });
+  if (!mesh) return false;
+  const m = mesh as THREE.Mesh;
+  const uv = m.geometry.getAttribute("uv");
+  if (!uv) return false;
+  let u = 0, v = 0;
+  for (let i = 0; i < uv.count; i++) { u += uv.getX(i); v += uv.getY(i); }
+  u /= uv.count; v /= uv.count;
+  const g = new THREE.BoxGeometry(size, size, size).toNonIndexed();
+  const bu = g.getAttribute("uv");
+  for (let i = 0; i < bu.count; i++) bu.setXY(i, u + (bu.getX(i) - 0.5) * 0.01, v + (bu.getY(i) - 0.5) * 0.01);
+  const out = new THREE.BufferGeometry();
+  for (const a of ["position", "normal", "uv"]) out.setAttribute(a, g.getAttribute(a));
+  out.applyMatrix4(m4);
+  out.userData.piece = "crate*";
+  const l = parts.get(m.material as THREE.Material) ?? [];
+  l.push(out);
+  parts.set(m.material as THREE.Material, l);
+  return true;
+}
+
+/** Bake the arch shell split by triangle: the inner vault over the road (centroid y > 5.5, |x| < 11 in piece space)
+ *  goes with tunnel_roof into the hide-able group, the walls stay in the chunk. Without this the vault ceiling (32 of
+ *  the shell's 96 tris) still covers the hero under the high chase cam once tunnel_roof hides. */
+function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
+  const src = getPiece("coast_arch_40");
+  if (!src) return false;
+  src.updateMatrixWorld(true);
+  const w = new THREE.Matrix4();
+  src.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || inNode(o, "tunnel_roof")) return;
+    const g0 = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrixWorld);
+    const pos = g0.getAttribute("position");
+    const sides: [number[], number[]] = [[], []];
+    for (let t = 0; t < pos.count; t += 3) {
+      const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3, cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
+      sides[cy > 5.5 && Math.abs(cx) < 11 ? 1 : 0].push(t);
+    }
+    sides.forEach((tris, k) => {
+      if (!tris.length) return;
+      const g = new THREE.BufferGeometry();
+      for (const a of ["position", "normal", "uv"]) {
+        const src = g0.getAttribute(a) as THREE.BufferAttribute | undefined;
+        if (!src) return;
+        const arr = new Float32Array(tris.length * 3 * src.itemSize);
+        tris.forEach((t, i) => arr.set((src.array as Float32Array).subarray(t * src.itemSize, (t + 3) * src.itemSize), i * 3 * src.itemSize));
+        g.setAttribute(a, new THREE.BufferAttribute(arr, src.itemSize));
+      }
+      g.applyMatrix4(w.copy(m4));
+      g.userData.piece = "coast_arch_40";
+      const into = k ? vault : walls;
+      const l = into.get(m.material as THREE.Material) ?? [];
+      l.push(g);
+      into.set(m.material as THREE.Material, l);
+    });
+    g0.dispose();
+  });
+  return true;
 }
 
 export function buildCoastChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number,
@@ -150,8 +226,8 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     }
   }
   if (arch) {
-    put("coast_arch_40", mid, 0, 0, 0, 0, (o) => !inNode(o, "tunnel_roof"));
     const rp: Parts = new Map();
+    if (bakeArch(parts, rp, placeMatrix(mid, 0, 0, 0, 0, ox, oz, m4))) out.placed.push("coast_arch_40");
     put("coast_arch_40", mid, 0, 0, 0, 0, (o) => inNode(o, "tunnel_roof"), rp);
     const roof = new THREE.Group();
     roof.userData.roofY = mid.y + 6.08;
@@ -206,6 +282,14 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   for (const s of SIGN_RIGHT) if (inChunk(s)) for (const lat of [10.6, 1.6]) put("sign_fork", atS(s), -lat, 0, 0, Math.PI);
   for (const o of COAST_OBSTACLES) if (inChunk(o.s)) put("coast_rock_a", atS(o.s), -o.lat, 0, 0, 0);
   for (const k of COAST_KICKERS) if (inChunk(k.s)) put("ramp_kicker_1m", atS(k.s), -k.lat, 0, 0, 0);
+  // stand-ins (no studio mesh yet), merged into the existing kit material: guardrail_end_4m = a 2 m jersey nose at each
+  // median end, crate = a 1.44 m box textured from the beach hut planks. Visual only, like Night City's crates.
+  for (const m of COAST_ROAD.medians) {
+    for (const s of [m.s0 - 2, m.s1 + 2]) {
+      if (inChunk(s) && bakePiece(parts, "barrier_jersey_4m", placeMatrix(atS(s), 0, 0, 0, 0, ox, oz, m4).multiply(NOSE))) out.placed.push("guardrail_end_4m*");
+    }
+  }
+  for (const [s, lat] of CRATES) if (inChunk(s) && bakeBox(parts, "coast_beach_hut", 1.44, placeMatrix(atS(s), -lat, 0.72, 0, 0.3, ox, oz, m4))) out.placed.push("crate*");
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);

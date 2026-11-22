@@ -778,6 +778,11 @@ function armRace(sim: Sim) {
   sim.race.dist = RACE_DIST;
 }
 
+/** "Ramp ahead" shows only within RAMP_HINT_M of a ramp's foot (the board sits 130 m out). */
+export const RAMP_HINT = "Ramp ahead";
+export const RAMP_HINT_BOOST = "Ramp — boost if you want more air";
+export const RAMP_HINT_M = 150;
+
 function toast(sim: Sim, text: string, force = false) {
   if (!force && sim.toastT > 1.15) return;
   sim.toast = text;
@@ -1551,10 +1556,13 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
 
   if (car.hero && car.alive) {
     const p = nextPiece(sim.track, car.along);
-    if (p && sim.hinted !== p.s && car.along > p.signS && car.along < p.s) {
+    const rampWindow = !!p && car.along > p.signS && car.along < p.s && p.s - car.along <= RAMP_HINT_M;
+    if (p && rampWindow && sim.hinted !== p.s) {
       sim.hinted = p.s;
-      toast(sim, boost ? "Ramp — boost if you want more air" : "Ramp ahead", true);
+      toast(sim, boost ? RAMP_HINT_BOOST : RAMP_HINT, true);
     }
+    // The ramp hint only stands while a ramp is actually ahead inside the window (a reset or a teleport clears it).
+    if (!rampWindow && sim.toastT > 0 && (sim.toast === RAMP_HINT || sim.toast === RAMP_HINT_BOOST)) sim.toastT = 0;
     if (blown) toast(sim, "Back on track", true);
   }
 

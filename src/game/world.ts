@@ -142,6 +142,10 @@ export type World = {
   resize: (w: number, h: number, dpr: number) => void;
   dispose: () => void;
   debugFade: () => number[];
+  /** test harness: the next frame puts the chase cam straight on its target (after a teleport). Gameplay easing unchanged. */
+  debugSnapCamera: () => void;
+  /** test harness: what is under a screen point (NDC): material name, texture, and the pieces merged into that mesh. */
+  debugPick: (x: number, y: number) => { mat: string; map: boolean; color: string; emissive: string; pieces: string[]; dist: number }[];
   carInfo: () => CarInfo;
   setCar: (id: CarId) => void;
   setStage: (id: StageId) => void;
@@ -844,7 +848,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   scene.environment = pmrem.fromScene(env, 0.04).texture;
   pmrem.dispose();
 
-  scene.add(new THREE.HemisphereLight(0x2e4460, 0x14110e, 0.9));
+  const hemi = new THREE.HemisphereLight(0x2e4460, 0x14110e, 0.9);
+  scene.add(hemi);
   const moon = new THREE.DirectionalLight(0xc5d4ea, 1.35);
   moon.position.set(-30, 48, 18);
   scene.add(moon);
@@ -853,6 +858,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   scene.add(fill);
 
   const camera = new THREE.PerspectiveCamera(68, 1, 0.1, 700);
+  let snapCam = false;
   const camPos = new THREE.Vector3(0, 4, 12);
   const projA = new THREE.Vector3();
   const projB = new THREE.Vector3();
@@ -895,10 +901,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   loadCar("model3");
   const views: CarView[] = [];
 
-  const sea = new THREE.Mesh(
-    new THREE.CircleGeometry(900, 48),
-    new THREE.MeshStandardMaterial({ color: 0x0b1420, metalness: 0.72, roughness: 0.22 }),
-  );
+  const seaMat = new THREE.MeshStandardMaterial({ color: 0x0b1420, metalness: 0.72, roughness: 0.22 });
+  let seaY = -1.6;
+  const sea = new THREE.Mesh(new THREE.CircleGeometry(900, 48), seaMat);
   sea.rotation.x = -Math.PI / 2;
   sea.position.y = -1.6;
   scene.add(sea);
@@ -1091,6 +1096,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     (scene.fog as THREE.FogExp2).color.setHex(st.sky);
     (scene.fog as THREE.FogExp2).density = st.fog;
     renderer.setClearColor(st.sky);
+    // Coast Road: sunset fill so the rock arch and cliffs read; sea plane drops to the cliff-foot sea level (-12) in a
+    // lit blue so the sea side is water, not a black void. Intensity/colour only: no new lights, no shader recompile.
+    const coastLook = stage === "coast";
+    hemi.intensity = coastLook ? 1.6 : 0.9;
+    fill.intensity = coastLook ? 0.9 : 0.22;
+    seaMat.color.setHex(coastLook ? 0x1d4d6b : 0x0b1420);
+    seaMat.metalness = coastLook ? 0.35 : 0.72;
+    seaMat.roughness = coastLook ? 0.42 : 0.22;
+    seaY = coastLook ? -12.4 : -1.6; // just under the -12 cliff water tiles (no z-fight)
+    sea.position.y = seaY;
     buildings.visible = !scenic();
     for (const ch of chunks) {
       ch.built = false;
@@ -1746,7 +1761,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const hero = sim.cars[0];
     gateBoost -= dt;
     streamRoad(sim, hero.along);
-    sea.position.set(hero.x, -1.6, hero.z);
+    sea.position.set(hero.x, seaY, hero.z);
     const k = 1 - Math.exp(-4.2 * Math.max(0.0001, dt));
 
     for (let i = 0; i < views.length; i++) {
@@ -1965,8 +1980,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const dist = CAM_BACK + Math.min(1.5, Math.abs(hero.speed) * 0.025);
       const desired = new THREE.Vector3(hero.x - fx * dist, hero.y + CAM_UP, hero.z - fz * dist);
       const look = new THREE.Vector3(hero.x - fx * CAM_LOOK_BACK, hero.y + 0.5, hero.z - fz * CAM_LOOK_BACK);
-      camPos.lerp(desired, k);
-      lookPos.lerp(look, k);
+      const kk = snapCam ? 1 : k;
+      snapCam = false;
+      camPos.lerp(desired, kk);
+      lookPos.lerp(look, kk);
       const t = performance.now() * 0.001;
       camera.position.set(
         camPos.x + Math.sin(t * 18) * 0.22 * shake,
@@ -2016,6 +2033,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     dispose,
     project,
     debugFade: () => views.map((v) => v.fade),
+    debugSnapCamera: () => { snapCam = true; },
+    debugPick: (x: number, y: number) => {
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(x, y), camera);
+      return ray.intersectObjects(scene.children, true).filter((h) => h.object.visible).slice(0, 6).map((h) => {
+        const m = (h.object as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance) };
+      });
+    },
     carInfo: () => carInfo,
     setCar,
     rolloutSeek(t: number) {
