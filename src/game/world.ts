@@ -1072,6 +1072,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const pineStands: THREE.InstancedMesh[] = [];
   /** Pine Woods forest-floor patches: one InstancedMesh (one draw) on the kit atlas, rebuilt per frame like the stands */
   let floorPatchMesh: THREE.InstancedMesh | null = null;
+  /** Open Highway: desert floor patches: one InstancedMesh (one draw), rebuilt per frame from the live chunks' patch lists */
+  let desertPatchMesh: THREE.InstancedMesh | null = null;
+  let far: { group: THREE.Group; rotors: THREE.Object3D[] } | null = null;
+  let farTrack: unknown = null;
   const trucks: THREE.Group[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -1443,10 +1447,6 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
   // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
   // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
-  /** desert floor patches: one InstancedMesh (one draw), rebuilt per frame from the live chunks' patch lists */
-  let desertPatchMesh: THREE.InstancedMesh | null = null;
-  let far: { group: THREE.Group; rotors: THREE.Object3D[] } | null = null;
-  let farTrack: unknown = null;
   const highwayStat = { patches: 0, far: false, rotors: 0 };
   function highwayFrame(sim: Sim, cityLo: number, cityHi: number) {
     if (!desertPatchMesh && highwayReady()) {
