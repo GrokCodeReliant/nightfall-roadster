@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityReady, roughHook, roadTilesFit } from "./city";
+import { CAR_LOD_FAR, carLodFar } from "./carlod";
+import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityDetailRange, cityReady, roughHook, roadTilesFit } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -30,6 +31,9 @@ type CarView = {
   glb?: THREE.Object3D;
   procWheels?: Wheel[];
   inst?: Partial<Record<Kind, EnemyInst>>;
+  /** desktop distant-car LOD: the phone-GLB instance per kind, and whether this view is past the far line */
+  instLo?: Partial<Record<Kind, EnemyInst>>;
+  lodFar?: boolean;
   kindSrc?: string;
   active?: EnemyInst | null;
 };
@@ -1022,6 +1026,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const AHEAD = coarse ? 7 : 9;
   /** desktop Night City dressing window (chunks ahead of the hero's chunk); the phone window is c-1..c+3 */
   const CITY_AHEAD_DESKTOP = 5;
+  /** desktop: chunks further ahead than this draw without CITY_DETAIL (props, awnings, parapets, facade trim); past ~120 m the fog hides >55%, ~80-120 m about 30-55% */
+  const CITY_DETAIL_AHEAD = 2;
   const POOL = BEHIND + AHEAD + 1;
   const BLD_PER = 4;
   const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
@@ -1248,6 +1254,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       for (const ch of chunks) {
         if (ch.index < 0) continue;
         ch.city.visible = ch.index >= cityLo && ch.index <= cityHi;
+        // desktop: chunks past CITY_DETAIL_AHEAD draw only their core range (no CITY_DETAIL props/trim); phone unchanged
+        if (!coarse && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
         if (!ch.lamp) continue;
         const col = gateColor(now + ch.index);
         ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
@@ -1377,6 +1385,59 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
   }
 
+  // Desktop distant-car LOD: also load the phone enemy GLBs (same nodes/pivots/bbox/materials as the desktop GLBs,
+  // ~half the tris). Rivals and enemies past CAR_LOD_FAR m from the hero draw these (the chase cam sits behind the hero,
+  // so a car ahead is even further from the camera; one that far behind is behind the camera). Off on phone and with ?enemylod.
+  // single file: only the phone enemy GLBs are inlined, so the "hero" enemy is already the phone mesh: nothing to switch
+  const singleFilePhoneOnly = !!inlineGlb("rammer_phone") && !inlineGlb("rammer_hero");
+  const carLodOn = !coarse && enemyLod === "hero" && lodParam !== "hero" && !singleFilePhoneOnly;
+  const enemyModelsLo: Partial<Record<Kind, THREE.Object3D>> = {};
+  if (carLodOn) {
+    for (const kind of Object.keys(ENEMY_FILE) as Exclude<Kind, "hero">[]) {
+      new GLTFLoader().load(
+        enemyUrl(kind, "phone"),
+        (g) => {
+          mergeStatic(g.scene); // desktop merge (not phoneEnemyLod): keeps trim/rim/lamp/tire materials as on the desktop GLB
+          enemyModelsLo[kind] = g.scene;
+        },
+        undefined,
+        () => {},
+      );
+    }
+  }
+  const carLodInfo = { on: carLodOn, far: CAR_LOD_FAR, views: [] as string[] };
+  /** pick the desktop or phone GLB instance for a non-hero view (hysteresis in carLodFar); copies turret/rotor pose on a switch */
+  function applyCarLod(view: CarView, kind: Kind, dist: number, hero: boolean) {
+    const hi = view.inst?.[kind];
+    if (!hi || !carLodOn || hero) {
+      view.lodFar = false;
+      return;
+    }
+    const far = carLodFar(!!view.lodFar, dist, hero, true);
+    let lo = view.instLo?.[kind];
+    if (far && !lo && enemyModelsLo[kind]) {
+      try {
+        view.instLo ??= {};
+        lo = view.instLo[kind] = makeEnemyInst(view, kind, enemyModelsLo[kind]!);
+      } catch {
+        lo = undefined;
+      }
+    }
+    const want = far && lo ? lo : hi;
+    view.lodFar = want === lo && !!lo;
+    if (view.active === want) return;
+    const prev = view.active;
+    for (const i of Object.values(view.instLo ?? {})) i!.root.visible = false;
+    hi.root.visible = false;
+    want.root.visible = true;
+    if (prev) {
+      if (prev.turret && want.turret) want.turret.rotation.copy(prev.turret.rotation);
+      want.rotors.forEach((r, n) => prev.rotors[n] && r.rotation.copy(prev.rotors[n].rotation));
+    }
+    view.active = want;
+    view.wheels = want.wheels;
+  }
+
   /** Show the GLB for this kind if it has loaded, else the procedural placeholder (with its boss scale). */
   function useKind(view: CarView, kind: Kind) {
     if (!view.procWheels) view.procWheels = view.wheels;
@@ -1391,6 +1452,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
     }
     for (const i of Object.values(view.inst)) i!.root.visible = i === inst;
+    for (const i of Object.values(view.instLo ?? {})) i!.root.visible = false;
+    view.lodFar = false;
     view.active = inst;
     if (inst) {
       view.chassis.visible = false;
@@ -1696,7 +1759,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     camera.updateProjectionMatrix();
   }
 
+  let lastSim: Sim | null = null;
   function sync(sim: Sim, dt: number, attractMode: boolean) {
+    lastSim = sim;
     ensureViews(sim);
     attachCar();
     const hero = sim.cars[0];
@@ -1714,6 +1779,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         useKind(view, car.kind);
       }
       if (!car.hero) view.body.color.setHex(car.racer ? RIVAL_TINT[(car.id - 1) % RIVAL_TINT.length] : KIND_COLOR[car.kind]);
+      if (!car.hero) applyCarLod(view, car.kind, Math.hypot(car.x - hero.x, car.y - hero.y, car.z - hero.z), false);
       const act = view.active;
       if (act && !car.hero) {
         for (const r of act.rotors) r.rotation.y += dt * 40;
@@ -2026,7 +2092,24 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         inside: reticleV.z < 1 && Math.abs(reticleV.x) <= 1.05 && Math.abs(reticleV.y) <= 1.05,
       };
     },
-    enemyInfo: () => ({ ...enemyInfo, lod: enemyLod, shown: views.slice(1).map((v) => v.kindSrc ?? "") }),
+    enemyInfo: () => ({
+      ...enemyInfo,
+      lod: enemyLod,
+      shown: views.slice(1).map((v) => v.kindSrc ?? ""),
+      // distant-car LOD per view: "<id>:<hero|near|far>:<distance to hero m>" (alive, visible cars only)
+      carLod: {
+        ...carLodInfo,
+        loLoaded: Object.keys(enemyModelsLo).length,
+        views: views.map((v, i) => {
+          const c = lastSim?.cars[i];
+          if (!c || !v.root.visible) return "";
+          const h = lastSim!.cars[0];
+          const d = Math.hypot(c.x - h.x, c.y - h.y, c.z - h.z);
+          const lo = !!v.active && Object.values(v.instLo ?? {}).includes(v.active);
+          return `${i}:${i === 0 ? (lo ? "hero-LOW" : "hero") : lo ? "far" : "near"}:${d.toFixed(1)}`;
+        }).filter(Boolean),
+      },
+    }),
   };
 }
 

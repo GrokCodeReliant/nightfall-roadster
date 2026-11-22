@@ -205,6 +205,9 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   }
   if (!cityReady()) return null;
   const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  // small street props + v3 facade trim: merged after the core pieces in the same mesh, so a far chunk can draw
+  // only the core range (geometry.drawRange, userData.core) with no extra draw. See cityDetailRange().
+  const detail = new Map<THREE.Material, THREE.BufferGeometry[]>();
   let skipRoof = false;
   const add = (name: string, p: Pose, lx: number, ly: number, lz: number, ry: number) => {
     const src = lib[name];
@@ -230,9 +233,10 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       for (const a of ["position", "normal", "uv"]) if (g0.getAttribute(a)) g.setAttribute(a, g0.getAttribute(a));
       if (!g.getAttribute("uv") || !g.getAttribute("normal")) return;
       g.applyMatrix4(tmp.multiplyMatrices(q.matrixWorld, m.matrixWorld));
-      const l = parts.get(m.material as THREE.Material) ?? [];
+      const bin = CITY_DETAIL.has(name) ? detail : parts;
+      const l = bin.get(m.material as THREE.Material) ?? [];
       l.push(g);
-      parts.set(m.material as THREE.Material, l);
+      bin.set(m.material as THREE.Material, l);
     });
   };
   const mid = at(Math.floor(seg / 2));
@@ -395,11 +399,35 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       }
     }
   }
-  for (const [mat, list] of parts) {
-    const g = mergeGeometries(list, false);
-    if (g) group.add(new THREE.Mesh(g, mat));
+  for (const mat of new Set([...parts.keys(), ...detail.keys()])) {
+    const core = parts.get(mat) ?? [];
+    const extra = detail.get(mat) ?? [];
+    const coreVerts = core.reduce((n, g) => n + g.getAttribute("position").count, 0);
+    const g = mergeGeometries([...core, ...extra], false);
+    if (!g) continue;
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.userData.core = coreVerts; // vertices [0, core) = core pieces; the rest = CITY_DETAIL props
+    group.add(mesh);
   }
   return lamp;
+}
+
+/** Pieces a far desktop chunk may skip (drawRange): street props, v4 awnings/parapets and v3 facade trim. Buildings, lamps, neon stay. */
+export const CITY_DETAIL = new Set([
+  "facade_awning_12_v4", "facade_parapet_12_v4", "bollard_v4", "planter_box_v4", "scooter_parked_v4", "kiosk_2m_v4", "bus_shelter_4m_v4",
+  "vending_box", "trash_bin", "utility_cabinet", "cable_run_12", "hydrant",
+  "facade_fins_12_v3", "facade_balcony_12_v3", "facade_ac_12_v3", "facade_ledge_12_v3", "facade_signbox_12",
+]);
+
+/** Show (full) or hide (core only) a built chunk's CITY_DETAIL range. No draw-count change either way. */
+export function cityDetailRange(group: THREE.Object3D, full: boolean) {
+  for (const c of group.children) {
+    const m = c as THREE.Mesh;
+    const core = m.userData?.core as number | undefined;
+    if (!m.isMesh || core == null) continue;
+    const count = full ? Infinity : core;
+    if (m.geometry.drawRange.count !== count) m.geometry.setDrawRange(0, count);
+  }
 }
 
 /** Chase cam sits above the 9.7 m roof, so the roof node stays hidden. Camera itself does not move. */
