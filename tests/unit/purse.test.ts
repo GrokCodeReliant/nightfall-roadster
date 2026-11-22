@@ -81,7 +81,7 @@ test("Night City out-of-lives DNF banks the shown 25", () => {
 });
 
 test("Open Highway banking is unchanged (same as the old highway bankRun path) and matches the card", () => {
-  for (const sim of [finishFirst("highway", RACE_DIST), fieldDnf("highway")]) {
+  for (const sim of [finishFirst("highway", 5200), fieldDnf("highway")]) {
     const r = sim.result!;
     const old = bankRun(7, r.score, false, { highway: true, purse: highwayPurse(r), lives: sim.lives });
     const now = bankFinish(7, r, sim.lives);

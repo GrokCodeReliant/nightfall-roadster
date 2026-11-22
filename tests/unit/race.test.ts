@@ -237,7 +237,7 @@ test("highway finish freezes place from living rivals and does not add a pack sc
   const origin = sim.race.originAlong;
   const before = sim.score;
   for (const car of rivals(sim)) car.alive = false;
-  put(sim, hero, origin + RACE_DIST + 5);
+  put(sim, hero, origin + sim.race.dist + 5);
   step(sim, dt);
   assert.equal(sim.phase, "finished");
   assert.equal(sim.toast, "1st");
@@ -259,10 +259,10 @@ test("place at the line is 2nd, 3rd, or 4th from living rivals only", () => {
     const hero = sim.cars[0];
     const origin = sim.race.originAlong;
     const field = rivals(sim).sort((a, b) => a.along - b.along);
-    put(sim, hero, origin + RACE_DIST + 5);
+    put(sim, hero, origin + sim.race.dist + 5);
     field.forEach((car, i) => {
       const lead = i >= field.length - ahead;
-      put(sim, car, origin + RACE_DIST + (lead ? 80 + i * 40 : -400));
+      put(sim, car, origin + sim.race.dist + (lead ? 80 + i * 40 : -400));
     });
     const score = sim.score;
     step(sim, dt);

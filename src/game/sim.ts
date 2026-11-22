@@ -1475,6 +1475,7 @@ function passGates(sim: Sim, car: Car, prevAlong: number, nowAlong: number, lat:
   for (const g of gates) {
     if (!(prev < g.s && now >= g.s)) continue;
     if (g.side === "right" && lat <= 0) continue;
+    if (g.side === "left" && lat >= 0) continue;
     if (gatePhase(g.s, sim.time) !== "green") continue;
     car.speed = Math.min(raised, car.speed + 10);
     sim.gateCapT = 2;

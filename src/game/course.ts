@@ -4,6 +4,7 @@
  * Night City layout: docs/levels/01_night_city.md v1.1.
  * Coast Road layout: LEVELS/02_coast_road.md v1.1 (locked).
  * Pine Woods layout: LEVELS/03_pine_woods.md v1.0 (locked).
+ * Open Highway layout: LEVELS/04_open_highway.md v1.0 (locked).
  */
 export const COURSE_ORIGIN = 140;
 export const COURSE_RUNOUT = 300;
@@ -176,13 +177,43 @@ export const PINE_WOODS: Course = {
   ],
 };
 
-const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS };
+/** Locked Open Highway section table (LEVELS/04_open_highway.md §1). Lat > 0 is the driver's right (L3/L4: bridge side
+ *  of Fork A, inside of Fork B). */
+export const OPEN_HIGHWAY: Course = {
+  id: "highway",
+  length: 5200,
+  runout: COURSE_RUNOUT,
+  width: 24,
+  medians: [
+    { s0: 2020, s1: 2480, half: 0.3 },
+    { s0: 3510, s1: 4090, half: 0.3 },
+  ],
+  sections: [
+    { id: "OH-0", type: "road", s0: 0, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "flats", curves: [] },
+    { id: "OH-1", type: "road", s0: 300, len: 800, width: 24, edgeL: "soft", edgeR: "soft", zone: "sweep", curves: [curve(300, 800, -1200)] },
+    { id: "OH-2", type: "road", s0: 1100, len: 400, width: 24, edgeL: "soft", edgeR: "soft", zone: "gates-1", curves: [] },
+    { id: "OH-3", type: "road", s0: 1500, len: 500, width: 24, edgeL: "soft", edgeR: "soft", zone: "pump", curves: [curve(1500, 500, 1500)] },
+    { id: "OH-4", type: "split", s0: 2000, len: 500, width: 24, edgeL: "rail", edgeR: "rail", zone: "bridge", curves: [] },
+    { id: "OH-5", type: "tunnel", s0: 2500, len: 200, width: 24, edgeL: "rail", edgeR: "rail", zone: "mesa-cut", curves: [] },
+    { id: "OH-6a", type: "road", s0: 2700, len: 60, width: 24, edgeL: "soft", edgeR: "soft", zone: "mesa", curves: [] },
+    { id: "OH-6", type: "ramp", s0: 2760, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "hump", curves: [] },
+    { id: "OH-7", type: "road", s0: 2910, len: 590, width: 24, edgeL: "soft", edgeR: "soft", zone: "gates-2", curves: [curve(2910, 590, 1000)] },
+    { id: "OH-8", type: "split", s0: 3500, len: 600, width: 24, edgeL: "soft", edgeR: "soft", zone: "service", curves: [curve(3500, 600, -800)] },
+    { id: "OH-9", type: "road", s0: 4100, len: 400, width: 24, edgeL: "soft", edgeR: "soft", zone: "dry-lake", curves: [] },
+    // OH-9 carries Ramp R2 at 4500-4650 (§3); split out so the track builds the ramp profile there (rail on the R2 span)
+    { id: "OH-9r", type: "ramp", s0: 4500, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "dry-lake", curves: [] },
+    { id: "OH-9b", type: "road", s0: 4650, len: 250, width: 24, edgeL: "soft", edgeR: "soft", zone: "dry-lake", curves: [] },
+    { id: "OH-10", type: "road", s0: 4900, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "mirage", curves: [] },
+  ],
+};
+
+const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS, highway: OPEN_HIGHWAY };
 
 export function courseFor(stageId: string): Course | null {
   return COURSES[stageId] ?? null;
 }
 
-/** Finish distance armed for this stage. Highway keeps the shipped 2200 constant. */
+/** Finish distance armed for this stage (authored course length; 2200 only for a stage without one). */
 export function raceDistance(stageId: string, highwayDist: number): number {
   return courseFor(stageId)?.length ?? highwayDist;
 }
@@ -267,7 +298,10 @@ export const WOODS_OBSTACLES: Obstacle[] = [
   logRow("LOG-K4", 3568, "L4"),
 ];
 
-const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES, woods: WOODS_OBSTACLES };
+/** Open Highway roadworks (§5 OB): barricade rows on the main (left) side of Fork A. */
+export const HIGHWAY_OBSTACLES: Obstacle[] = [barricade("OB-1", 2150, "L2"), barricade("OB-2", 2330, "L1")];
+
+const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES, woods: WOODS_OBSTACLES, highway: HIGHWAY_OBSTACLES };
 
 export function obstaclesFor(stageId: string): readonly Obstacle[] {
   return OBSTACLES[stageId] ?? [];
@@ -291,6 +325,12 @@ export const WOODS_KICKERS: LaneKicker[] = [
   { id: "LK4", s: 3560, lat: LANE_LAT.L4, len: 5.3, half: 3 },
 ];
 
+/** Open Highway bridge-lip kickers KA3 / KA4 (L3, L4, lip at 2252, §3). */
+export const HIGHWAY_KICKERS: LaneKicker[] = [
+  { id: "KA3", s: 2252, lat: LANE_LAT.L3, len: 5.3, half: 3 },
+  { id: "KA4", s: 2252, lat: LANE_LAT.L4, len: 5.3, half: 3 },
+];
+
 export function laneKickerAt(stageId: string, raceS: number, lat: number): boolean {
   for (const k of stageIdKickers(stageId)) {
     if (raceS >= k.s && raceS <= k.s + k.len && Math.abs(lat - k.lat) <= k.half) return true;
@@ -298,8 +338,8 @@ export function laneKickerAt(stageId: string, raceS: number, lat: number): boole
   return false;
 }
 
-/** `right` fires only for lat > 0 (the right roadway). */
-export type Gate = { id: string; s: number; side: "both" | "right" };
+/** `right` fires only for lat > 0 (the right roadway), `left` only for lat < 0. */
+export type Gate = { id: string; s: number; side: "both" | "right" | "left" };
 
 export const NIGHT_CITY_GATES: Gate[] = [
   { id: "G1", s: 480, side: "both" },
@@ -324,7 +364,20 @@ export const WOODS_GATES: Gate[] = [
   { id: "G3", s: 4180, side: "both" },
 ];
 
-const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES };
+/** Open Highway: gate chains GC1-3 (OH-2) and GC4-6 (OH-7), G-A on the bridge (right) side of Fork A, G-B on the
+ *  outside (left) of Fork B. Chain phasing (GC2 = GC1 + 2.3 s ...) and the BN-9 cap raise are not wired yet. */
+export const HIGHWAY_GATES: Gate[] = [
+  { id: "GC1", s: 1200, side: "both" },
+  { id: "GC2", s: 1320, side: "both" },
+  { id: "GC3", s: 1440, side: "both" },
+  { id: "G-A", s: 2340, side: "right" },
+  { id: "GC4", s: 3100, side: "both" },
+  { id: "GC5", s: 3220, side: "both" },
+  { id: "GC6", s: 3340, side: "both" },
+  { id: "G-B", s: 3900, side: "left" },
+];
+
+const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES };
 
 export function gatesFor(stageId: string): readonly Gate[] {
   return GATES[stageId] ?? [];
@@ -357,7 +410,7 @@ export function tunnelClearance(course: Course): { ok: boolean; nearest: string;
   return { ok: true, nearest, gap };
 }
 
-const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS, woods: WOODS_KICKERS };
+const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS, woods: WOODS_KICKERS, highway: HIGHWAY_KICKERS };
 
 export function stageIdKickers(id: string): readonly LaneKicker[] {
   return KICKERS[id] ?? [];
@@ -481,7 +534,13 @@ export const COAST_SAND: Surface[] = [
   { id: "SD6", s0: 3150, s1: 3190, lat: LANE_LAT.L3, half: 3 },
   { id: "SD7", s0: 3460, s1: 3490, lat: LANE_LAT.L3, half: 3 },
 ];
-const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL };
+/** Open Highway gravel (§5 GV): GV1 roadworks lane, GV2 / GV3 staggered on the inside of Fork B. */
+export const HIGHWAY_GRAVEL: Surface[] = [
+  { id: "GV1", s0: 2200, s1: 2280, lat: LANE_LAT.L1, half: 3, kind: "gravel" },
+  { id: "GV2", s0: 3600, s1: 3680, lat: LANE_LAT.L3, half: 3, kind: "gravel" },
+  { id: "GV3", s0: 3800, s1: 3880, lat: LANE_LAT.L4, half: 3, kind: "gravel" },
+];
+const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL, highway: HIGHWAY_GRAVEL };
 export function sandFor(stageId: string): readonly Surface[] {
   return SANDS[stageId] ?? [];
 }

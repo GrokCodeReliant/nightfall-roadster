@@ -14,6 +14,8 @@ import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, floorPatchGeometry, loadWoods, 
 import { FLOOR_PATCH, woodsFog } from "./woodscourse";
 import { PAINT_GLSL } from "./roadpaint";
 import { WOODS_LOOK } from "./woodscourse";
+import { buildHighwayChunk, desertPatchGeometry, highwayFarGroup, highwayReady, loadHighway } from "./highway";
+import { DESERT_PATCH, HIGHWAY_LOOK } from "./highwaycourse";
 import { TRUCK } from "./trucks";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -162,6 +164,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
+  highwayInfo: () => { patches: number; far: boolean; rotors: number };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
@@ -1100,8 +1103,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   let stage: StageId = "city";
   let gateBoost = 0;
   /** Stages dressed by a GLB kit (Night City, Coast Road, Pine Woods). Every other id keeps the procedural skyline. */
-  const scenic = () => stage === "city" || stage === "coast" || stage === "woods";
-  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : cityReady());
+  const scenic = () => stage === "city" || stage === "coast" || stage === "woods" || stage === "highway";
+  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : stage === "highway" ? highwayReady() : cityReady());
   function releaseScenery(ch: Chunk) {
     ch.lamp = null;
     ch.roof = null;
@@ -1159,6 +1162,20 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       seaMat.roughness = 1;
       seaY = -0.08;
     }
+    if (stage === "highway") {
+      // openhighway-v1: night desert. The plane is the desert floor (matte sand) just under the road; brighter hemi /
+      // moon so the open terrain, cacti and the far mesas read under the long 0.004 fog. Open Highway only.
+      hemi.color.setHex(HIGHWAY_LOOK.hemiSky);
+      hemi.groundColor.setHex(HIGHWAY_LOOK.hemiGround);
+      hemi.intensity = HIGHWAY_LOOK.hemi;
+      moon.color.setHex(HIGHWAY_LOOK.moonColor);
+      moon.intensity = HIGHWAY_LOOK.moon;
+      fill.intensity = HIGHWAY_LOOK.fill;
+      seaMat.color.setHex(HIGHWAY_LOOK.floor);
+      seaMat.metalness = 0;
+      seaMat.roughness = 1;
+      seaY = -0.08;
+    }
     sea.position.y = seaY;
     buildings.visible = !scenic();
     applyRoadLook();
@@ -1171,6 +1188,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "city") loadCity();
     if (stage === "coast") loadCoast();
     if (stage === "woods") loadWoods();
+    if (stage === "highway") loadHighway();
+    if (desertPatchMesh) desertPatchMesh.count = 0;
+    if (far) far.group.visible = false;
+    farTrack = null;
     for (const t of trucks) t.visible = false;
     for (const m of pineStands) m.count = 0;
     if (floorPatchMesh) floorPatchMesh.count = 0;
@@ -1189,6 +1210,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       ch.spin = out.spin;
       ch.wash = out.wash;
       ch.crown = out.crown;
+      ch.city.position.set(o.x, 0, o.z);
+      ch.built = true;
+      return;
+    }
+    if (stage === "highway") {
+      releaseScenery(ch);
+      const at = (k: number) => sampleAt(sim.track, i0 + k);
+      const ramps = sim.track.pieces.filter((p) => p.kind === "ramp").map((p) => p.s);
+      const cc = chunkCourse("highway", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
+      const out = buildHighwayChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
+      ch.patches = out.patches;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
       return;
@@ -1363,6 +1395,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     placeKitRoads(sim);
     if (stage === "coast") coastFrame(sim);
     if (stage === "woods") woodsFrame(sim, cityLo, cityHi);
+    if (stage === "highway") highwayFrame(sim, cityLo, cityHi);
     if (scenic()) {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
@@ -1371,7 +1404,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         // desktop: chunks past CITY_DETAIL_AHEAD draw only their core range (no CITY_DETAIL props/trim); phone unchanged
         if (!coarse && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
         // Pine Woods far trim (both platforms): ferns / stumps / slash / sawdust only within ~120 m (chunk c+2)
-        else if (stage === "woods" && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
+        else if ((stage === "woods" || stage === "highway") && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
         if (!ch.lamp) continue;
         const col = gateColor(now + ch.index);
         ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
@@ -1409,6 +1442,58 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
   // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
+  // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
+  /** desert floor patches: one InstancedMesh (one draw), rebuilt per frame from the live chunks' patch lists */
+  let desertPatchMesh: THREE.InstancedMesh | null = null;
+  let far: { group: THREE.Group; rotors: THREE.Object3D[] } | null = null;
+  let farTrack: unknown = null;
+  const highwayStat = { patches: 0, far: false, rotors: 0 };
+  function highwayFrame(sim: Sim, cityLo: number, cityHi: number) {
+    if (!desertPatchMesh && highwayReady()) {
+      const src = desertPatchGeometry();
+      if (src) {
+        desertPatchMesh = new THREE.InstancedMesh(src.geo, src.mat, DESERT_PATCH.cap);
+        desertPatchMesh.name = "highway_desert_patches";
+        desertPatchMesh.count = 0;
+        desertPatchMesh.frustumCulled = false;
+        desertPatchMesh.setColorAt(0, new THREE.Color(1, 1, 1));
+        scene.add(desertPatchMesh);
+      }
+    }
+    const hero = sim.cars[0];
+    if (desertPatchMesh) {
+      let n = 0;
+      for (const ch of chunks) {
+        if (ch.index < cityLo || ch.index > cityHi || !ch.built) continue;
+        for (const p of ch.patches) {
+          if (n >= DESERT_PATCH.cap) break;
+          const e = p.m.elements;
+          if (Math.hypot(e[12] - hero.x, e[14] - hero.z) > DESERT_PATCH.far) continue;
+          desertPatchMesh.setMatrixAt(n, p.m);
+          desertPatchMesh.setColorAt(n++, patchTone.setScalar(p.tone));
+        }
+      }
+      desertPatchMesh.count = n;
+      desertPatchMesh.instanceMatrix.needsUpdate = true;
+      if (desertPatchMesh.instanceColor) desertPatchMesh.instanceColor.needsUpdate = true;
+      highwayStat.patches = n;
+    }
+    // far backdrop: built once per race track (course s -> track pose, absolute world coords)
+    if (highwayReady() && sim.race.armed && farTrack !== sim.track) {
+      if (far) { scene.remove(far.group); far.group.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && !far!.rotors.includes(m)) m.geometry.dispose(); }); }
+      const origin = sim.race.originAlong;
+      far = highwayFarGroup((s) => { const n = Math.round((origin + s) / STEP) - sim.track.first; return sim.track.samples[n] ?? null; });
+      if (far) scene.add(far.group);
+      farTrack = sim.track;
+    }
+    if (far) {
+      far.group.visible = sim.race.armed;
+      const t = performance.now() / 1000;
+      far.rotors.forEach((r, i) => (r.rotation.z = t * 0.35 + i * 0.7));
+      highwayStat.far = far.group.visible;
+      highwayStat.rotors = far.rotors.length;
+    }
+  }
   const WOODS_AHEAD_DESKTOP = 4;
   /** near A, near B, lod_far A, lod_far B: one draw each, rebuilt every frame from the live chunks' pine lists */
   const PINE_CAP = 512;
@@ -1622,7 +1707,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
   function applyRoadLook() {
     const on = stage === "coast";
-    const yellow = stage === "coast" || stage === "woods";
+    const yellow = stage === "coast" || stage === "woods" || stage === "highway";
     const swap = (mesh: THREE.Mesh) => {
       const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
       const paint = yellow && mesh.name === "kitroad:lanepaint_straight_40" && base.isMeshStandardMaterial && !!base.map;
@@ -2384,6 +2469,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       applyStage();
     },
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
+    highwayInfo: () => ({ ...highwayStat }),
     woodsInfo: () => ({ ...woodsStat, stands: pineStands.length, truckPool: trucks.length, roofs: chunks.filter((c) => c.roof).length }),
     startRollout,
     skipRollout,

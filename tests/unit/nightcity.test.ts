@@ -45,7 +45,8 @@ test("NC §9.1 course table is contiguous, sums to 3600, and finishes at 3600", 
   assert.equal(sectionAt(NIGHT_CITY, 3600)?.id, "NC-12");
   assert.equal(sectionById(NIGHT_CITY, "NC-6")?.type, "tunnel");
   assert.equal(courseFor("classic"), null);
-  assert.equal(courseFor("highway"), null);
+  // Open Highway is authored since openhighway-v1 (LEVELS/04_open_highway.md)
+  assert.equal(courseFor("highway")?.length, 5200);
 });
 
 test("NC §9.3 begin(city) arms a 3600 m race with the H3.2 field and no waves", () => {

@@ -3,6 +3,7 @@
 // the track's own ramp/deck pieces stay where road.ts puts them.
 
 import { PW_LEN, PW_ZONES } from "./woodscourse";
+import { OH_LEN, OH_ZONES } from "./highwaycourse";
 
 /** Hero start (sim START_S). Course s = along - START. */
 export const COURSE_START = 140;
@@ -55,10 +56,10 @@ export function zoneOf(zones: Zone[], len: number, s: number) {
 }
 
 /** course context for a 40 m chunk starting at track distance along0 */
-export function chunkCourse(stage: "city" | "coast" | "woods", along0: number, chunk: number, step: number,
+export function chunkCourse(stage: "city" | "coast" | "woods" | "highway", along0: number, chunk: number, step: number,
   flatAt: (k: number) => boolean, rampStarts: number[]): ChunkCourse {
-  const zones = stage === "city" ? NC_ZONES : stage === "woods" ? PW_ZONES : CR_ZONES;
-  const len = stage === "city" ? NC_LEN : stage === "woods" ? PW_LEN : CR_LEN;
+  const zones = stage === "city" ? NC_ZONES : stage === "woods" ? PW_ZONES : stage === "highway" ? OH_ZONES : CR_ZONES;
+  const len = stage === "city" ? NC_LEN : stage === "woods" ? PW_LEN : stage === "highway" ? OH_LEN : CR_LEN;
   const cyc = len + RUNOUT;
   const raw = along0 - COURSE_START;
   const lap = raw < 0 ? 0 : Math.floor(raw / cyc);
