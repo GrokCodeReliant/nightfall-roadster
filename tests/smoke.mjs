@@ -21,6 +21,32 @@ const EXPECT = {
 const results = [];
 let failed = 0;
 const check = (p, n, ok, d = "") => { results.push({ p, n, ok, d }); if (!ok) failed++; console.log(`${ok ? "PASS" : "FAIL"} [${p}] ${n}${d ? " — " + d : ""}`); };
+// Week I compact menus: on phone, a menu screen fits with no scrolling or clipping and every button is
+// ≥ 44x44 CSS px, in portrait (390x844) and landscape (844x390). Root = last element matching rootSel.
+const menuFit = async (page, P, name, rootSel) => {
+  if (P !== "phone") return;
+  const measure = () => page.evaluate((rootSel) => {
+    const roots = [...document.querySelectorAll(rootSel)];
+    const root = roots[roots.length - 1];
+    if (!root) return { missing: rootSel };
+    const vw = innerWidth, vh = innerHeight;
+    const boxes = [root, ...root.querySelectorAll(".nf-panel, .nf-card, .nf-scroll, .nf-foot")];
+    const overflow = boxes.filter((e) => e.scrollHeight > e.clientHeight + 1 || e.scrollWidth > e.clientWidth + 1).map((e) => `${e.className.split(" ")[0]} ${e.scrollWidth}x${e.scrollHeight}>${e.clientWidth}x${e.clientHeight}`);
+    const btns = [...root.querySelectorAll("button, input[type=range]")].map((e) => ({ n: (e.getAttribute("aria-label") || e.textContent || e.type).trim().slice(0, 18), b: e.getBoundingClientRect() })).filter((x) => x.b.width > 0 && x.b.height > 0);
+    const outside = btns.filter(({ b }) => b.left < -0.5 || b.top < -0.5 || b.right > vw + 0.5 || b.bottom > vh + 0.5).map((x) => x.n);
+    const small = btns.filter(({ b }) => b.width < 43.99 || b.height < 43.99).map(({ n, b }) => `${n} ${b.width.toFixed(1)}x${b.height.toFixed(1)}`);
+    return { vw, vh, buttons: btns.length, overflow, outside, small };
+  }, rootSel);
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const portrait = await measure();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await settle();
+  const landscape = await measure();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settle();
+  const ok = (m) => !m.missing && m.buttons > 0 && !m.overflow.length && !m.outside.length && !m.small.length;
+  check(P, `menu fits on phone: ${name} (portrait + landscape: no scroll/clip, buttons in view, ≥44x44)`, ok(portrait) && ok(landscape), JSON.stringify({ portrait, landscape }));
+};
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 for (const prof of profiles) {
   const P = prof.name;
@@ -58,6 +84,18 @@ for (const prof of profiles) {
   for (let i = 0; i < 7; i++) { st.push(await page.textContent(".nf-stagepick .nf-carpick-name")); if (i === 2) { await page.screenshot({ path: `${SHOTS}/${P}-stageselect.png` }); st.push("disabled=" + (await page.isDisabled(".nf-btn"))); } await page.click("[aria-label='Next stage']"); }
   const back = await page.textContent(".nf-stagepick .nf-carpick-name");
   check(P, "stage select (all seven playable, no Coming soon)", back === "Night City" && !st.some((s) => String(s).includes("Coming soon") || s === "disabled=true") && !(await page.isDisabled(".nf-btn")), st.join(" | "));
+  await menuFit(page, P, "title (car + stage pick)", ".nf-menu");
+  if (P === "phone") {
+    await page.click(".nf-launch >> text=Shop");
+    await page.waitForSelector(".nf-shop");
+    await menuFit(page, P, "shop (title)", ".nf-shop");
+    await page.click(".nf-shop-close");
+    await page.click(".nf-launch >> text=Settings");
+    await page.waitForSelector(".nf-settings");
+    await menuFit(page, P, "settings (title)", ".nf-settings");
+    await page.click(".nf-settings .nf-foot .nf-btn");
+    await page.waitForSelector(".nf-settings", { state: "detached" });
+  }
   // start: rollout
   await page.waitForFunction(() => { const e = window.__nfEnemies(); return ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => e[k] !== "loading"); }, null, { timeout: 90000 });
   await page.waitForTimeout(1500); // let the rig GLB finish too
@@ -173,6 +211,14 @@ for (const prof of profiles) {
   const over = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
   const ov = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
   check(P, "finish results", over && finished.ok && ov.phase === "finished" && /^(1st|2nd|3rd|4th)$/.test(ov.title), JSON.stringify({ ov, finished }));
+  await menuFit(page, P, "race results", ".nf-overlay");
+  if (P === "phone") {
+    await page.click(".nf-foot >> text=Shop");
+    await page.waitForSelector(".nf-shop");
+    await menuFit(page, P, "shop (results)", ".nf-shop");
+    await page.click(".nf-shop-close");
+    await page.waitForSelector(".nf-shop", { state: "detached" });
+  }
   await page.screenshot({ path: `${SHOTS}/${P}-gameover.png` });
   await page.click("text=Run it again");
   await page.waitForSelector(".nf-hud");
@@ -203,6 +249,7 @@ for (const prof of profiles) {
   const wreckOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
   const wv = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
   check(P, "wrecked game over", wreckOver && wv.phase === "finished" && wv.title.includes("Wrecked"), JSON.stringify(wv));
+  await menuFit(page, P, "wrecked game over", ".nf-overlay");
   await page.click("text=Run it again");
   await page.waitForSelector(".nf-hud");
   const wrs = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return { phase: s.phase, wave: s.wave, kills: s.takedowns, lives: s.lives, alive: h.alive, enemies: s.cars.filter((c) => !c.hero && c.alive).length, roll: window.__nfRollout().active }; });
@@ -221,6 +268,14 @@ for (const prof of profiles) {
   const t1 = await page.evaluate(() => window.__nf.time);
   check(P, "pause button opens menu; sim paused", t1 === t0 && (await page.evaluate(() => window.__nf.phase)) === "paused", `time ${t0} -> ${t1}`);
   await page.screenshot({ path: `${SHOTS}/${P}-pause.png` });
+  await menuFit(page, P, "pause", ".nf-overlay");
+  if (P === "phone") {
+    await page.click(".nf-pausemenu >> text=Settings");
+    await page.waitForSelector(".nf-settings");
+    await menuFit(page, P, "settings (pause)", ".nf-settings");
+    await page.click(".nf-settings .nf-foot .nf-btn");
+    await page.waitForSelector(".nf-settings", { state: "detached" });
+  }
   await page.click(".nf-pausemenu >> text=Resume");
   check(P, "Resume", (await page.evaluate(() => window.__nf.phase)) === "playing");
   await page.keyboard.press("Escape");
@@ -258,6 +313,7 @@ for (const prof of profiles) {
   await page.keyboard.press("Escape");
   await page.click(".nf-pausemenu >> text=Back to menu");
   const asks = await page.isVisible("text=Yes, back to menu");
+  await menuFit(page, P, "pause: back-to-menu confirm", ".nf-overlay");
   await page.click("text=Yes, back to menu");
   await page.waitForSelector(".nf-carpick");
   const atMenu = await page.evaluate(() => ({ phase: window.__nf.phase, audio: window.__nfAudio().loopNodes, roll: window.__nfRollout().active, enemies: window.__nf.cars.filter((c) => !c.hero && c.alive).length }));

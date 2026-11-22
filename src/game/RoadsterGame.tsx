@@ -1203,14 +1203,21 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
   ctx.lineCap = "butt";
   const from = hero.along - 70;
   const to = hero.along + 230;
-  for (const pass of [0, 1]) {
-    ctx.lineWidth = pass === 0 ? sim.track.width * sc : 4;
-    ctx.strokeStyle = pass === 0 ? "rgba(156,148,136,0.55)" : "#e23b2f";
+  // Phone HUD shows this canvas as a ~44 px tile (160 px backing store): paint a solid backing and
+  // draw the road, hero and rivals thicker so they read at that size. Larger tiles (desktop) are unchanged.
+  const tiny = canvas.clientWidth > 0 && canvas.clientWidth < 64;
+  if (tiny) {
+    ctx.fillStyle = "rgba(7,8,12,0.94)";
+    ctx.fillRect(0, 0, w, h);
+  }
+  for (const pass of tiny ? [2, 0, 3, 1] : [0, 1]) {
+    ctx.lineWidth = pass === 2 ? Math.max(30, sim.track.width * sc * 2.2) + 8 : pass === 0 ? (tiny ? Math.max(30, sim.track.width * sc * 2.2) : sim.track.width * sc) : pass === 3 ? 3 : tiny ? 10 : 4;
+    ctx.strokeStyle = pass === 2 ? "#000" : pass === 0 ? (tiny ? "#8f8a82" : "rgba(156,148,136,0.55)") : pass === 3 ? "#f2e6cf" : "#e23b2f";
     ctx.beginPath();
     let pen = false;
     for (let s = from; s <= to; s += 6) {
       const p = poseAt(sim.track, s);
-      const draw = pass === 0 ? !p.gap : p.gap;
+      const draw = pass === 1 ? p.gap : !p.gap;
       if (!draw) {
         pen = false;
         continue;
@@ -1224,17 +1231,22 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
   for (let i = sim.cars.length - 1; i >= 0; i--) {
     const c = sim.cars[i];
     if (!c.alive) continue;
-    ctx.fillStyle = c.hero ? "#c4161c" : c.racer ? "#f0d38a" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
+    ctx.fillStyle = c.hero ? (tiny ? "#ff2a2a" : "#c4161c") : c.racer ? "#f0d38a" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
     ctx.beginPath();
-    ctx.arc(X(c.x, c.z), Y(c.x, c.z), c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
+    ctx.arc(X(c.x, c.z), Y(c.x, c.z), tiny ? (c.hero ? 14 : 9) : c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();
+    if (tiny) {
+      ctx.lineWidth = c.hero ? 5 : 3;
+      ctx.strokeStyle = c.hero ? "#fff" : "#000";
+      ctx.stroke();
+    }
   }
   if (sim.race.armed) {
     const p = poseAt(sim.track, sim.race.paceAlong);
     ctx.strokeStyle = "#c6a36a";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = tiny ? 5 : 2;
     ctx.beginPath();
-    ctx.arc(X(p.x, p.z), Y(p.x, p.z), 6.5, 0, Math.PI * 2);
+    ctx.arc(X(p.x, p.z), Y(p.x, p.z), tiny ? 16 : 6.5, 0, Math.PI * 2);
     ctx.stroke();
   }
 }
