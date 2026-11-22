@@ -20,7 +20,7 @@ export const linear = (c: readonly number[]) => c.map(lin) as [number, number, n
 export function magentaMask(r: number, g: number, b: number) {
   const l = Math.max(r, g, b, 1e-4);
   const [R, G, B] = [r / l, g / l, b / l];
-  return Math.min(1, Math.max(0, (Math.min(R, B * 2.2) - G - 0.12) / 0.1));
+  return Math.min(1, Math.max(0, (Math.min(R, B * 2.2) - G - 0.25) / 0.1));
 }
 /** Remap a linear colour: magenta texels take the target hue at the texel's own brightness. */
 export function remap(c: readonly number[], target: readonly number[]) {
@@ -36,7 +36,7 @@ export const PAINT_GLSL = `
 vec3 nfPaint( vec3 c, vec3 t ) {
   float l = max( c.r, max( c.g, max( c.b, 1e-4 ) ) );
   vec3 n = c / l;
-  float m = clamp( ( min( n.r, n.b * 2.2 ) - n.g - 0.12 ) / 0.1, 0.0, 1.0 );
+  float m = clamp( ( min( n.r, n.b * 2.2 ) - n.g - 0.25 ) / 0.1, 0.0, 1.0 );
   return mix( c, t * l, m );
 }
 #define NF_YELLOW vec3( ${f(YELLOW)} )
