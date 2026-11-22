@@ -156,6 +156,8 @@ function quietCity(carId = "model3") {
   begin(sim);
   sim.keysOverride = new Set();
   for (const c of sim.cars) if (!c.hero) c.alive = false;
+  // random roadside crates (4 hp on contact) would make hp checks flaky
+  sim.nextCrate = 1e9;
   return sim;
 }
 

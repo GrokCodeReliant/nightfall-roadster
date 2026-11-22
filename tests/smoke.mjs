@@ -297,6 +297,96 @@ for (const prof of profiles) {
   check(P, "wreck retry resets the run", wrs.phase === "playing" && wrs.kills === 0 && wrs.wave <= 1 && wrs.lives === 3 && wrs.alive && wrs.enemies === 0 && wrs.roll, JSON.stringify(wrs));
   await page.evaluate(() => window.__nfSkipRollout());
   await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
+  // ---- Coast Road (LEVELS/02): an authored 4000 m race like Night City. Start, scenery + draws at CR-0/5/8, finish,
+  // results (place + time, banks the shown purse), restart, lives-out DNF (banks 25). Then back to Classic for the pause loop.
+  {
+    await page.keyboard.press("Escape");
+    await page.click(".nf-pausemenu >> text=Back to menu");
+    await page.click("text=Yes, back to menu");
+    await page.waitForSelector(".nf-carpick");
+    await page.click("[aria-label='Next stage']");
+    const crStage = await page.textContent(".nf-stagepick .nf-carpick-name");
+    const crLede = await page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+    check(P, "Coast Road title shows the race blurb", crStage === "Coast Road" && crLede.mode === "race" && /^Race six rivals to the finish\./.test(crLede.text) && !/wave/i.test(crLede.text), JSON.stringify({ crStage, crLede }));
+    const crCredits0 = await page.evaluate(() => Number(((document.querySelector(".nf-launch .nf-credits")?.textContent) || "").match(/\d+/)?.[0] ?? NaN));
+    await page.click(".nf-btn");
+    await page.waitForSelector(".nf-hud");
+    await page.evaluate(() => window.__nfSkipRollout());
+    await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+    const crStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, lives: s.lives }; });
+    check(P, "Coast Road start: race armed at 4000 m, 6 rivals, no waves, drives", crStart.stage === "coast" && crStart.armed && crStart.dist === 4000 && crStart.rivals === 6 && crStart.wave === 0 && crStart.phase === "playing" && crStart.m > 10 && crStart.lives === 3, JSON.stringify(crStart));
+    // frozen-sim teleport to race s (ascending: the track trims behind the hero); real frames stream the chunks
+    const crAt = async (raceS) => {
+      await page.evaluate((raceS) => {
+        const s = window.__nf, h = s.cars[0];
+        const sm = s.track.samples[Math.round((s.race.originAlong + raceS) / 2) - s.track.first];
+        h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.lane = 0; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
+        h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.offT = 0; s.race.dnfT = 0;
+        s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+      }, raceS);
+      // the chase cam eases after a long teleport: wait until the hero is framed again, then let the chunks settle
+      await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
+      await page.waitForTimeout(P === "phone" ? 5000 : 3000);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      return page.evaluate(() => ({ ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside }));
+    };
+    const crDraws = { cr0: await crAt(60), cr5: await crAt(1640), cr8: await crAt(2470) };
+    await page.screenshot({ path: `${SHOTS}/${P}-coast-cr8.png` });
+    for (const [k, d] of Object.entries(crDraws)) console.log(`DRAW [${P}] coast ${k}: ${d.draws} draws, ${d.tris} tris`);
+    const worst = Math.max(...Object.values(crDraws).map((d) => d.draws));
+    check(P, `Coast Road scenery streams and draws stay under the ceiling at CR-0 / CR-5 / CR-8 (${P === "phone" ? "≤160" : "logged"})`, Object.values(crDraws).every((d) => d.stage === "coast" && d.cityChunks >= 4 && d.framed && d.draws > 20) && drawGate(P, worst), JSON.stringify(crDraws));
+    await page.evaluate(() => { window.__nf.hitstop = 0; });
+    const crFin = await page.evaluate(() => {
+      const s = window.__nf, h = s.cars[0];
+      h.alive = true; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.max(h.hp, 1);
+      const sm = s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first];
+      if (!sm) return { ok: false };
+      h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.speed = 30;
+      window.__nfAdvance(0.2, "idle");
+      return { ok: true, phase: s.phase, place: s.race.place, mode: s.result && s.result.mode };
+    });
+    const crOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+    const crCard = await page.evaluate(() => {
+      const card = document.querySelector(".nf-overlay .nf-card");
+      const best = (card?.querySelector(".nf-best")?.textContent || "").trim();
+      const body = (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim();
+      return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim(), place: card?.querySelector(".nf-row-place strong")?.textContent?.trim() || "", time: (card?.querySelector(".nf-row-time")?.textContent || "").trim() };
+    });
+    check(P, "Coast Road finish -> results: place + finish time, Coast Road 4.0 km, no Wave text (best line has no wave 0)", crOver && crFin.ok && crFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(crCard.title) && /^P[1-4]$/.test(crCard.place) && /^Finish time\s*\d+:\d{2}/.test(crCard.time) && /Coast Road · 4\.0 km course/.test(crCard.text) && !/wave/i.test(crCard.text) && !/wave 0/i.test(crCard.best), JSON.stringify({ crFin, crCard }));
+    {
+      const c = await cardBank();
+      const shown = (c.purse ?? 0) + (c.lives ?? 0);
+      check(P, "Coast Road finish banks the shown purse: credits gained == purse + lives bonus", c.purse != null && c.purse > 0 && c.credits - crCredits0 === shown, JSON.stringify({ before: crCredits0, ...c, shown, gained: c.credits - crCredits0 }));
+      creditsBefore = c.credits;
+    }
+    await menuFit(page, P, "Coast Road results", ".nf-overlay");
+    await page.screenshot({ path: `${SHOTS}/${P}-coast-results.png` });
+    await page.click("text=Run it again");
+    await page.waitForSelector(".nf-hud");
+    const crRs = await page.evaluate(() => { const s = window.__nf, h = s.cars[0]; return { phase: s.phase, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, time: s.time, kills: s.takedowns, lives: s.lives, hp: h.hp, maxHp: h.maxHp, alive: h.alive, rivals: s.cars.filter((c) => c.racer && c.alive).length, roll: window.__nfRollout().active, race: h.along - s.race.originAlong }; });
+    check(P, "Coast Road restart resets the race (rollout, 6 rivals, 3 lives, full hull, back on the grid)", crRs.phase === "playing" && crRs.stage === "coast" && crRs.armed && crRs.dist === 4000 && crRs.time < 1 && crRs.kills === 0 && crRs.lives === 3 && crRs.alive && crRs.hp === crRs.maxHp && crRs.rivals === 6 && crRs.roll && Math.abs(crRs.race) < 5, JSON.stringify(crRs));
+    await page.evaluate(() => window.__nfSkipRollout());
+    await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
+    await page.evaluate(() => { window.__nf.lives = 1; });
+    await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.phase === "playing"; i++) { const s = window.__nf, h = s.cars[0]; if (h.alive) { h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.min(h.hp, 0.01); } s.race.dnfT = 0; window.__nfAdvance(0.5, "idle"); } });
+    const crDnfOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+    {
+      const c = await cardBank();
+      const txt = await page.evaluate(() => { const card = document.querySelector(".nf-overlay .nf-card"); const best = (card?.querySelector(".nf-best")?.textContent || "").trim(); return (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim(); });
+      check(P, "Coast Road DNF -> results banks the shown 25 (no lives bonus), no Wave text outside the best-record line", crDnfOver && /^(DNF|Fell behind the field)$/.test(c.title) && c.purse === 25 && c.lives == null && c.credits - creditsBefore === 25 && !/wave/i.test(txt), JSON.stringify({ before: creditsBefore, ...c, gained: c.credits - creditsBefore }));
+      creditsBefore = c.credits;
+    }
+    await page.click("button:has-text('Title')");
+    await page.waitForSelector(".nf-carpick");
+    await page.click("[aria-label='Previous stage']");
+    const backTo = await page.textContent(".nf-stagepick .nf-carpick-name");
+    await page.click(".nf-btn");
+    await page.waitForSelector(".nf-hud");
+    await page.evaluate(() => window.__nfSkipRollout());
+    await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+    const cl = await page.evaluate(() => ({ stage: window.__nfStageInfo().stage, armed: window.__nf.race.armed }));
+    check(P, "after Coast Road, Classic Night still runs waves (scenery released, no race armed)", backTo === "Classic Night" && cl.stage === "classic" && !cl.armed, JSON.stringify({ backTo, cl }));
+  }
   // ---- pause menu loop: pause -> Resume; pause -> Restart; pause -> Back to menu (confirm) -> different car + stage -> play; no growth
   const settle = async () => { await page.evaluate(() => { window.__nf.hitstop = 0; }); await page.waitForTimeout(2500); };
   const snap = () => page.evaluate(() => ({ ...window.__nfScene(), ...window.__nfDraws(), audio: window.__nfAudio().loopNodes, phase: window.__nf.phase }));

@@ -1,10 +1,12 @@
-// Week I: Coast Road stage scenery (art/nightfall-coast-20261120 + shared drop). Visual only; no sim changes.
+// Week I: Coast Road stage scenery (art/nightfall-coast-20261120 + shared drop). Visual only; the sim reads the
+// same course.ts tables (gates, medians, rocks, kicker K1, sand drift, wave wash), so mesh and collider share one source.
 // Placement follows LEVELS/02_coast_road.md zones CR-0..CR-12 on course s (see course.ts). Same merge-per-material
 // as city.ts; the only separate meshes are the arch roof (hidden when the camera is above it), the lighthouse beam
 // (spins). Foam v2 scrolls in its own shader (cell-local UV wrap, atlas v3) and merges per foam material.
 import * as THREE from "three";
 import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
+import { COAST_GATES, COAST_KICKERS, COAST_OBSTACLES, COAST_ROAD, COAST_SAND, COAST_WASH } from "./course";
 
 const COAST_PIECES: [string, string][] = [
   // new 2026-11-20
@@ -16,6 +18,8 @@ const COAST_PIECES: [string, string][] = [
   ["coast", "coast_rock_a"], ["coast", "coast_rock_b"], ["coast", "coast_shrub"], ["coast", "coast_lifeguard_tower"], ["coast", "coast_cliff_40"],
   // shared drop: finish gantry is a city_atlas piece (city_emissive); start grid / ramp lip come in with the road kit
   ["city", "finish_gantry_24"],
+  // race course road band (same kit pieces Night City uses): gates / fork signs, median jersey, lane kicker, grid, lip boards
+  ["kit", "sign_fork"], ["kit", "barrier_jersey_4m"], ["city", "ramp_kicker_1m"], ["kit", "start_grid_paint_40"], ["kit", "ramp_lip_chevron_24"],
 ];
 let loaded = 0;
 let asked = false;
@@ -30,14 +34,16 @@ export function loadCoast() {
 }
 
 /** sand drift patches on the asphalt: [s0, s1, lane lateral] (LEVELS/02 SD1..SD7; SD4 is not in the course list) */
-const SD: [number, number, number][] = [
-  [950, 1010, 9], [1280, 1340, -9], [1420, 1480, -3], [3000, 3040, -3], [3150, 3190, 3], [3460, 3490, 3],
-];
+const SD: [number, number, number][] = COAST_SAND.map((p) => [p.s0, p.s1, p.lat]);
 /** CR-7 foam wash windows */
-const WASH: [number, number][] = [[2080, 2120], [2220, 2260], [2360, 2400]];
+const WASH: [number, number][] = COAST_WASH.map((w) => [w.s0, w.s1]);
+/** Fork signs (1090, 1910) and both-side gates get a pair on the kerbs; sea-side gates sit on the sea kerb and the median. */
+const SIGN_PAIRS = [1090, 1910, ...COAST_GATES.filter((g) => g.side === "both").map((g) => g.s)];
+const SIGN_RIGHT = COAST_GATES.filter((g) => g.side === "right").map((g) => g.s);
 const SOFT = new Set(["CR-0", "CR-3", "CR-8", "CR-11", "CR-12", "RUN"]);
 
-export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; placed: string[] };
+/** wash: on-road foam per wave-wash zone (userData.wash = zone id), shown only during the telegraph and the wash. */
+export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; placed: string[] };
 
 /** placement log for the first lap: zone -> piece -> count (debug / report) */
 export const coastLog: Record<string, Record<string, number>> = {};
@@ -73,7 +79,7 @@ function foamHook() {
 
 export function buildCoastChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number,
   rnd: (n: number) => number, c: ChunkCourse): CoastChunkOut {
-  const out: CoastChunkOut = { roof: null, spin: null, placed: [] };
+  const out: CoastChunkOut = { roof: null, spin: null, wash: [], placed: [] };
   if (!coastReady()) return out;
   const parts: Parts = new Map();
   const m4 = new THREE.Matrix4();
@@ -131,7 +137,9 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
       }
     }
     put("coast_cliff_40", mid, half + 5, ramp ? -mid.y : 0, 0, Math.PI);
-    put("coast_cliff_40", mid, -(half + 1), -24 - (ramp ? mid.y : 0), 0, Math.PI);
+    // sea cliff: its 14 m top sits under the sea lanes (lat +1.6..+16), so drop it 0.15 m below the deck or its
+    // flat top z-fights over the road tiles on straight chunks
+    put("coast_cliff_40", mid, -(half + 1), -24.15 - (ramp ? mid.y : 0), 0, Math.PI);
     put("coast_water_40", mid, -40, -12 - mid.y, 0, 0);
     put("coast_water_40", mid, -80, -12 - mid.y, 0, 0);
     put(R(70) < 0.5 ? "coast_rock_a" : "coast_rock_b", mid, -(30 + R(71) * 30), -12.4 - mid.y, R(72) * 30 - 15, R(73) * 6.28);
@@ -174,11 +182,30 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     }
   }
   // CR-7 foam wash v2: base + glow merge per (private) foam material with the chunk; motion is the shader scroll
-  for (const [a, b] of WASH) {
-    const cs = (a + b) / 2;
+  for (const w of COAST_WASH) {
+    const cs = (w.s0 + w.s1) / 2;
     if (cs < s0 || cs >= s1) continue;
     put(FOAM, at(kAt(cs)), 0, 0, 0, 0);
+    // telegraph on the asphalt: the same strip shifted onto the two sea lanes (mesh x -25.6..-13.6 -> lat 0..12)
+    const wp: Parts = new Map();
+    put(FOAM, at(kAt(cs)), 13.6, 0.08, 0, 0, undefined, wp);
+    const g = new THREE.Group();
+    g.userData.wash = w.id;
+    flushParts(wp, g);
+    g.visible = false;
+    group.add(g);
+    out.wash.push(g);
   }
+  // race road band: median jersey every 4 m, fork signs and gates, fallen rocks, lane kicker K1 (colliders live in course.ts)
+  const inChunk = (s: number) => s >= s0 && s < s1;
+  const atS = (s: number) => at(Math.max(0, Math.min(seg, kAt(s))));
+  for (const m of COAST_ROAD.medians) {
+    for (let s = m.s0; s <= m.s1; s += 4) if (inChunk(s)) put("barrier_jersey_4m", atS(s), 0, 0, 0, 0);
+  }
+  for (const s of SIGN_PAIRS) if (inChunk(s)) for (const lat of [10.6, -10.6]) put("sign_fork", atS(s), -lat, 0, 0, Math.PI);
+  for (const s of SIGN_RIGHT) if (inChunk(s)) for (const lat of [10.6, 1.6]) put("sign_fork", atS(s), -lat, 0, 0, Math.PI);
+  for (const o of COAST_OBSTACLES) if (inChunk(o.s)) put("coast_rock_a", atS(o.s), -o.lat, 0, 0, 0);
+  for (const k of COAST_KICKERS) if (inChunk(k.s)) put("ramp_kicker_1m", atS(k.s), -k.lat, 0, 0, 0);
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);

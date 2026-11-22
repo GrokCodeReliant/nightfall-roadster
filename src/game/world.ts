@@ -5,7 +5,9 @@ import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.j
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
-import { courseFor } from "./course";
+import { courseFor, washFor, washPhase } from "./course";
+import { buildCoastChunk, coastReady, foamClock, loadCoast } from "./coast";
+import { chunkCourse } from "./coastcourse";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
 type CarView = {
@@ -1033,7 +1035,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   roughHook(roadMat);
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.8, metalness: 0.2 });
   const markMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-  type Chunk = { index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null };
+  /** city: the stage scenery group (Night City GLB kit or Coast Road kit). roof/spin/wash are Coast Road extras. */
+  type Chunk = {
+    index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null;
+    roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[];
+  };
   const chunks: Chunk[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -1053,7 +1059,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     };
     const city = new THREE.Group();
     scene.add(city);
-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null });
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [] });
   }
   loadRoadKit();
   let kitRoads: THREE.InstancedMesh[] | null = null;
@@ -1061,34 +1067,57 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
   let stage: StageId = "city";
   let gateBoost = 0;
+  /** Stages dressed by a GLB kit (Night City, Coast Road). Every other id keeps the procedural skyline. */
+  const scenic = () => stage === "city" || stage === "coast";
+  const sceneryReady = () => (stage === "coast" ? coastReady() : cityReady());
+  function releaseScenery(ch: Chunk) {
+    ch.lamp = null;
+    ch.roof = null;
+    ch.spin = null;
+    ch.wash = [];
+    for (const c of [...ch.city.children]) {
+      ch.city.remove(c);
+      c.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.geometry.dispose();
+        if (m.material instanceof THREE.MeshBasicMaterial) m.material.dispose();
+      });
+    }
+  }
   function applyStage() {
     const st = STAGES.find((x) => x.id === stage) ?? STAGES[0];
     (scene.background as THREE.Color).setHex(st.sky);
     (scene.fog as THREE.FogExp2).color.setHex(st.sky);
     (scene.fog as THREE.FogExp2).density = st.fog;
     renderer.setClearColor(st.sky);
-    buildings.visible = stage !== "city";
+    buildings.visible = !scenic();
     for (const ch of chunks) {
       ch.built = false;
-      ch.lamp = null;
-      ch.city.visible = stage === "city";
-      // leaving/entering a stage: release this chunk's merged city meshes (geometry + gate lamp materials)
-      for (const c of [...ch.city.children]) {
-        ch.city.remove(c);
-        c.traverse((o) => {
-          const m = o as THREE.Mesh;
-          if (!m.isMesh) return;
-          m.geometry.dispose();
-          if (m.material instanceof THREE.MeshBasicMaterial) m.material.dispose();
-        });
-      }
+      ch.city.visible = scenic();
+      // leaving/entering a stage: release this chunk's merged scenery meshes (geometry + gate lamp materials)
+      releaseScenery(ch);
     }
     if (stage === "city") loadCity();
+    if (stage === "coast") loadCoast();
   }
   function cityChunk(ch: Chunk, sim: Sim) {
-    if (stage !== "city" || ch.index < 0 || ch.built || !cityReady()) return;
+    if (!scenic() || ch.index < 0 || ch.built || !sceneryReady()) return;
     const i0 = ch.index * SEG;
     const o = sampleAt(sim.track, i0);
+    if (stage === "coast") {
+      releaseScenery(ch);
+      const at = (k: number) => sampleAt(sim.track, i0 + k);
+      const ramps = sim.track.pieces.filter((p) => p.kind === "ramp").map((p) => p.s);
+      const cc = chunkCourse("coast", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
+      const out = buildCoastChunk(ch.city, ch.index, at, SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n), cc);
+      ch.roof = out.roof;
+      ch.spin = out.spin;
+      ch.wash = out.wash;
+      ch.city.position.set(o.x, 0, o.z);
+      ch.built = true;
+      return;
+    }
         ch.lamp = buildCityChunk(ch.city, ch.index, (k) => sampleAt(sim.track, i0 + k), SEG, sim.track.width / 2, o.x, o.z, (n) => hash(n), sim.track.courseId === "city", coarse);
     ch.city.position.set(o.x, 0, o.z);
     ch.built = true;
@@ -1228,10 +1257,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     let cityBudget = 1;
     for (const ch of chunks) {
       if (ch.index !== -1) {
-        if (stage === "city" && (ch.index < cityLo || ch.index > cityHi)) continue;
-        if (!cityBudget && stage === "city" && !ch.built) continue;
+        if (scenic() && (ch.index < cityLo || ch.index > cityHi)) continue;
+        if (!cityBudget && scenic() && !ch.built) continue;
         if (!cityBudget) continue;
-        if (stage === "city" && !ch.built && cityReady()) cityBudget = 0;
+        if (scenic() && !ch.built && sceneryReady()) cityBudget = 0;
         cityChunk(ch, sim);
         continue;
       }
@@ -1239,7 +1268,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       ch.city.visible = false;
     }
     placeKitRoads(sim);
-    if (stage === "city") {
+    if (stage === "coast") coastFrame(sim);
+    if (scenic()) {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
         if (ch.index < 0) continue;
@@ -1277,6 +1307,24 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       }
       sg.group.visible = true;
     });
+  }
+
+  /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
+  let beamYaw = 0;
+  function coastFrame(sim: Sim) {
+    const now = performance.now() / 1000;
+    foamClock.value = now;
+    beamYaw = (now * 0.6) % (Math.PI * 2);
+    const washes = washFor("coast");
+    for (const ch of chunks) {
+      if (ch.index < 0 || !ch.built) continue;
+      if (ch.roof) ch.roof.visible = camera.position.y <= (ch.roof.userData.roofY as number);
+      if (ch.spin) ch.spin.children.forEach((m) => (m.rotation.y = beamYaw));
+      for (const g of ch.wash) {
+        const w = washes.find((x) => x.id === g.userData.wash);
+        g.visible = !!w && washPhase(w, sim.time) !== "off";
+      }
+    }
   }
 
   function chunkTileFit(sim: Sim, index: number) {

@@ -12,7 +12,7 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sectionAt } from "./course";
+import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, SAND, sandAt, sectionAt, WASH, washAt, washPhase } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -167,6 +167,10 @@ export type Car = {
   offT: number;
   /** Per-obstacle contact cooldown (seconds). Indexed like the stage obstacle list. */
   bumpCd: number[];
+  /** Surface under the car this frame: "" | sand id (SD1..) | wash id while on (W1..). Coast Road only. */
+  surf: string;
+  /** Rival-only speed deficit from sand / wave wash (m/s below cruise). 0 off Coast Road. */
+  surfDef: number;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -583,6 +587,8 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     slideT: 0,
     offT: 0,
     bumpCd: [],
+    surf: "",
+    surfDef: 0,
   };
 }
 
@@ -961,6 +967,20 @@ function safeSpawnS(sim: Sim, s: number) {
   return Math.max(sim.track.first * 2 + 2, s - back);
 }
 
+/**
+ * BN-8 / BN-10 surface under a grounded car (Coast Road §5). Sand: cap 34, decel 14 above it.
+ * Wave wash (sea lanes, timed): decel 10 while on. Both floor at SCROLL_MIN and never push.
+ */
+type SurfaceHit = { id: string; cap: number; decel: number; steerMul: number; gripMul: number };
+function surfaceUnder(sim: Sim, car: Car, raceS: number, lat: number): SurfaceHit | null {
+  if (!car.grounded || !car.alive) return null;
+  const w = washAt(sim.stageId, raceS, lat);
+  if (w && washPhase(w, sim.time) === "on") return { id: w.id, cap: SCROLL_MIN, decel: WASH.decel, steerMul: WASH.steerMul, gripMul: WASH.gripMul };
+  const sd = sandAt(sim.stageId, raceS, lat);
+  if (sd) return { id: sd.id, cap: SAND.cap, decel: SAND.decel, steerMul: SAND.steerMul, gripMul: SAND.gripMul };
+  return null;
+}
+
 function scrollFloor(car: Car) {
   if (car.alive && car.speed < SCROLL_MIN) car.speed = SCROLL_MIN;
 }
@@ -1334,6 +1354,10 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   if (wantThrust && !infiniteFuel) car.fuel = Math.max(0, car.fuel - 36 * dt);
   else if (!infiniteFuel) car.fuel = Math.min(car.maxFuel, car.fuel + 18 * dt);
 
+  const surfQ = car.hero && courseFor(sim.stageId) ? queryTrack(sim.track, car.x, car.z, car.along) : null;
+  const surf = surfQ ? surfaceUnder(sim, car, surfQ.s - sim.race.originAlong, surfQ.lateral) : null;
+  if (car.hero) car.surf = surf ? surf.id : "";
+  const speed0 = car.speed;
   if (input.throttle > 0) {
     if (car.speed < 0) car.speed = Math.min(0, car.speed + 40 * dt);
     else car.speed += (st ? st.accel : 24) * input.throttle * dt;
@@ -1348,6 +1372,8 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   let cap = wantThrust ? BOOST_SPEED_CAP : (st ? st.topSpeed : 48);
   if (car.hero && sim.gateCapT > 0) cap = Math.min(60, cap + 10);
   car.speed = clamp(car.speed, -14, cap);
+  // Sand / wave wash: above the surface cap the car sheds speed at the surface decel (throttle cannot beat it).
+  if (surf && car.speed > surf.cap) car.speed = Math.max(surf.cap, Math.min(car.speed, speed0 - surf.decel * dt));
   // Brake and reverse stay in the input, but along-speed cannot dead-stop.
   scrollFloor(car);
 
@@ -1388,9 +1414,10 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   // A → steer +1 → +yaw → nose left under the chase cam.
   // steerSens scales keyboard, touch, and pad equally (they share input.steer).
   const sens = car.hero ? clampSteerSens(sim.steerSens) : 1;
-  car.yaw += input.steer * 2.4 * (st ? st.handling : 1) * sens * speedFactor * reverse * air * dt;
+  const steerMul = surf ? surf.steerMul : 1;
+  car.yaw += input.steer * 2.4 * (st ? st.handling : 1) * sens * speedFactor * reverse * air * steerMul * dt;
 
-  const grip = car.grounded ? 8 : 1.3;
+  const grip = (car.grounded ? 8 : 1.3) * (surf ? surf.gripMul : 1);
   car.lat *= Math.exp(-grip * dt);
   if (car.grounded) car.lat += -input.steer * sp * 0.5 * dt;
   car.lat = clamp(car.lat, -14, 14);
@@ -2279,13 +2306,7 @@ function burstHeld(sim: Sim, car: Car, hero: Car) {
   if (!course) return false;
   if (!car.grounded || !hero.grounded) return true;
   const origin = sim.race.originAlong;
-  const windows: [number, number][] = [
-    [590, 620],
-    [2460, 2490],
-    [2687, 2717],
-    [2817, 2847],
-  ];
-  for (const o of obstaclesFor(sim.stageId)) windows.push([o.s - 30, o.s]);
+  const windows = burstWindows(sim.stageId);
   const hs = hero.along - origin;
   const cs = car.along - origin;
   return windows.some(([a, b]) => (hs >= a && hs <= b) || (cs >= a && cs <= b));
@@ -2366,6 +2387,22 @@ function flyRival(sim: Sim, car: Car, dt: number, cruise: number) {
   }
 }
 
+/** Sand and wave wash slow rivals the same way (they ignore the foam telegraph). Recovery is 12 m/s². */
+function rivalSurface(sim: Sim, car: Car, base: number, dt: number) {
+  if (!courseFor(sim.stageId)) {
+    car.surfDef = 0;
+    car.surf = "";
+    return;
+  }
+  const lat = car.lane;
+  const surf = surfaceUnder(sim, car, car.along - sim.race.originAlong, lat);
+  car.surf = surf ? surf.id : "";
+  const now = base - car.surfDef;
+  if (surf && now > surf.cap) car.surfDef = Math.min(base - surf.cap, car.surfDef + surf.decel * dt);
+  else if (!surf) car.surfDef = Math.max(0, car.surfDef - 12 * dt);
+  car.surfDef = Math.min(car.surfDef, Math.max(0, base - SCROLL_MIN));
+}
+
 /** Keep racing the finish. Cruise does not pace-match the hero, so a slower hero gets passed. Close behind his rear, burst and ram. */
 function stepRival(sim: Sim, car: Car, dt: number) {
   if (car.hp <= 0) {
@@ -2376,7 +2413,9 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.fireCd = Math.max(0, car.fireCd - dt);
   car.flash = Math.max(0, car.flash - dt);
   car.leaving = false;
-  const cruise = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
+  const base = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
+  rivalSurface(sim, car, base, dt);
+  const cruise = Math.max(SCROLL_MIN, base - car.surfDef);
   const hero = sim.cars[0];
   if (!car.grounded && courseFor(sim.stageId)) {
     flyRival(sim, car, dt, cruise);

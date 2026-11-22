@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { poseAt } from "../../src/game/road.ts";
-import { NIGHT_CITY } from "../../src/game/course.ts";
+import { COAST_ROAD, NIGHT_CITY } from "../../src/game/course.ts";
 import { FIELD_DNF, RACE_DIST, begin, createSim, step, type Sim } from "../../src/game/sim.ts";
 import { bankFinish, bankRun, creditsForScore, highwayPurse, shownPurse } from "../../src/game/shop.ts";
 
@@ -97,4 +97,60 @@ test("wave-mode runs still bank floor(score/10) and show no purse", () => {
   assert.equal(shownPurse({}), null);
   const sim: Sim = quiet("classic");
   assert.equal(sim.race.armed, false);
+});
+
+test("Coast Road P1 banks exactly the purse + lives bonus the results card shows", () => {
+  const sim = finishFirst("coast", COAST_ROAD.length);
+  assert.equal(sim.phase, "finished");
+  const r = sim.result!;
+  assert.equal(r.mode, "race");
+  assert.equal(r.place, 1);
+  assert.ok((r.dist ?? 0) >= 4000, `dist ${r.dist}`);
+  assert.equal(r.purse, 180);
+  assert.equal(r.livesBonus, 60);
+  const bank = bankFinish(10, r, sim.lives);
+  assert.equal(shownPurse(r), 240);
+  assert.equal(bank.gained, 240);
+  assert.equal(bank.credits, 250);
+  assert.equal(bankFinish(bank.credits, r, sim.lives, true).gained, 0, "never banks twice");
+});
+
+test("Coast Road field DNF banks the shown 25, no lives bonus", () => {
+  const sim = fieldDnf("coast");
+  assert.equal(sim.phase, "finished");
+  const r = sim.result!;
+  assert.equal(r.mode, "race");
+  assert.equal(r.reason, FIELD_DNF);
+  assert.equal(r.place, 0);
+  assert.equal(shownPurse(r), 25);
+  assert.equal(bankFinish(0, r, sim.lives).gained, 25);
+});
+
+test("Coast Road out-of-lives DNF banks the shown 25", () => {
+  // Deterministic last life: one hit point left, straight into fallen rock RK-1 (L2 at 2120, -6 hp).
+  const sim = quiet("coast");
+  for (const car of sim.cars) if (car.racer) car.alive = false;
+  sim.nextCrate = 1e9;
+  sim.lives = 1;
+  const hero = sim.cars[0];
+  const p = poseAt(sim.track, sim.race.originAlong + 2116);
+  hero.x = p.x + p.rx * -3;
+  hero.z = p.z + p.rz * -3;
+  hero.y = p.y;
+  hero.along = p.s;
+  hero.lastAlong = p.s;
+  hero.speed = 40;
+  hero.invuln = 0;
+  hero.hp = 1;
+  sim.keysOverride = new Set(["KeyW"]);
+  for (let i = 0; i < 600 && sim.phase === "playing"; i++) {
+    sim.race.dnfT = 0;
+    step(sim, dt);
+  }
+  assert.equal(sim.phase, "finished");
+  const r = sim.result!;
+  assert.equal(r.mode, "race");
+  assert.equal(r.reason, "DNF");
+  assert.equal(shownPurse(r), 25);
+  assert.equal(bankFinish(0, r, sim.lives).gained, 25);
 });
