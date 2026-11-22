@@ -1020,6 +1020,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const CHUNK = SEG * STEP;
   const BEHIND = 2;
   const AHEAD = coarse ? 7 : 9;
+  /** desktop Night City dressing window (chunks ahead of the hero's chunk); the phone window is c-1..c+3 */
+  const CITY_AHEAD_DESKTOP = 5;
   const POOL = BEHIND + AHEAD + 1;
   const BLD_PER = 4;
   const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
@@ -1211,9 +1213,11 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const c = Math.floor(along / CHUNK);
     const lo = Math.max(0, c - BEHIND);
     const hi = c + AHEAD;
-    // Phone keeps the road stream and drops city dressing outside a short window. Desktop still builds every streamed chunk.
+    // Phone keeps the road stream and drops city dressing outside a short window. Desktop dresses up to CITY_AHEAD_DESKTOP
+    // chunks ahead: past ~200 m the Night City fog (exp2 0.0075) hides ~90% of a chunk, so the last streamed chunks only cost
+    // triangles (props v4 trim: offsets the v4 prop tris on desktop). The road itself still streams AHEAD.
     const cityLo = coarse ? Math.max(0, c - 1) : lo;
-    const cityHi = coarse ? c + 3 : hi;
+    const cityHi = coarse ? c + 3 : Math.min(hi, c + CITY_AHEAD_DESKTOP);
     const have = new Set<number>();
     for (const ch of chunks) {
       if (ch.index >= lo && ch.index <= hi) have.add(ch.index);
