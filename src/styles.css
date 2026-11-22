@@ -1343,3 +1343,6 @@
   .nf-pausemenu .nf-dev-btn { grid-column: 1 / -1; }
   .nf-pausemenu .nf-btn { font-size: 0.82rem; letter-spacing: 0.08em; padding: 0 0.6rem; }
 }
+
+/* race / course runs: no waves, so the HUD hides the Wave label + number (kills + place stay) */
+.nf-readout.is-race .nf-wave-only { display: none; }

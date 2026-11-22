@@ -9,6 +9,7 @@ import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
 import { SHOP_CATALOG, bankRun, buyUpgrade, emptyShop, highwayPurse, sanitizeShop, shopComing, shopOwned, shopPrice, type ShopId, type ShopSave } from "./shop";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
+import { courseFor } from "./course";
 
 declare global {
   interface Window {
@@ -97,9 +98,21 @@ function writeSave(patch: Partial<Save>) {
   return next;
 }
 
+/** Title blurb. Race stages (Open Highway + authored courses like Night City) arm a RaceTrial with
+ *  RIVAL_COUNT rivals and a place purse; the other stages still run the hunter-wave loop. */
+const RACE_BLURB = "Race six rivals to the finish. Guns forward, mines behind, three lives. Higher places pay more Credits.";
+const WAVE_BLURB = "Hunters in waves. Guns forward, mines behind. Three lives. Survive.";
+function isRaceStage(id: string) {
+  return id === "highway" || !!courseFor(id);
+}
+
 function bestLine(save: Save) {
   if (save.bestScore <= 0) return "No record yet — the highway is open.";
-  return `Best ${save.bestScore} pts · wave ${save.bestWave} · survived ${formatTime(save.bestTime)}`;
+  // Course / race runs have no waves: only wave runs write bestWave and bestTime, so skip empty parts.
+  const bits = [`Best ${save.bestScore} pts`];
+  if (save.bestWave > 0) bits.push(`wave ${save.bestWave}`);
+  if (save.bestTime > 0) bits.push(`survived ${formatTime(save.bestTime)}`);
+  return bits.join(" · ");
 }
 
 export function RoadsterGame() {
@@ -198,6 +211,7 @@ export function RoadsterGame() {
   const shopOpenRef = useRef(false);
   const confirmRef = useRef(false);
   const raceRef = useRef<HTMLDivElement>(null);
+  const readoutRef = useRef<HTMLDivElement>(null);
   const racePlaceRef = useRef<HTMLParagraphElement>(null);
   const raceGapRef = useRef<HTMLParagraphElement>(null);
   const raceWarnRef = useRef<HTMLParagraphElement>(null);
@@ -472,10 +486,11 @@ export function RoadsterGame() {
             false,
             highway ? { highway: true, purse: highwayPurse(sim.result), lives: sim.lives } : null,
           );
+          const waveRun = sim.result.mode !== "race";
           const next = writeSave({
             bestScore: Math.max(prev.bestScore, sim.result.score),
-            bestWave: Math.max(prev.bestWave, sim.result.wave),
-            bestTime: Math.max(prev.bestTime, sim.result.time),
+            bestWave: waveRun ? Math.max(prev.bestWave, sim.result.wave) : prev.bestWave,
+            bestTime: waveRun ? Math.max(prev.bestTime, sim.result.time) : prev.bestTime,
             credits: bank.credits,
             shop: sim.shop,
           });
@@ -585,6 +600,8 @@ export function RoadsterGame() {
     const raceEl = raceRef.current;
     if (raceEl) {
       const race = sim.race;
+      // race / course runs have no waves: hide the Wave label + number while the race is armed
+      readoutRef.current?.classList.toggle("is-race", race.armed);
       if (!race.armed) raceEl.hidden = true;
       else {
         raceEl.hidden = false;
@@ -865,6 +882,9 @@ export function RoadsterGame() {
   }
 
   const showPlay = phase === "playing" || phase === "paused";
+  const raceResult = result?.mode === "race";
+  const resultStage = simRef.current?.stageId ?? "";
+  const stageName = (id: string) => STAGES.find((x) => x.id === id)?.name ?? "Course";
   const hubPad = phase === "menu" && !shopOpen && !settingsOpen;
   const shopFocus = shopOpen && (phase === "menu" || phase === "finished") ? padFocus : -1;
   function hubRow(index: number, base: string) {
@@ -895,9 +915,9 @@ export function RoadsterGame() {
             {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <div className="nf-top">
-            <div className="nf-readout">
-              <p className="nf-kicker">Wave</p>
-              <p className="nf-stat" ref={lapRef}>1</p>
+            <div className="nf-readout" ref={readoutRef}>
+              <p className="nf-kicker nf-wave-only">Wave</p>
+              <p className="nf-stat nf-wave-only" ref={lapRef}>1</p>
               <p className="nf-sub" ref={posRef}>Kills 0</p>
               <div className="nf-race" ref={raceRef} hidden>
                 <p className="nf-race-place" ref={racePlaceRef}>P1</p>
@@ -1008,8 +1028,8 @@ export function RoadsterGame() {
             <div className="nf-scroll">
               <p className="nf-kicker">Night run · Côte Noire highway</p>
               <h1 className="nf-title">Nightfall <em>Roadster</em></h1>
-              <p className="nf-lede">
-                Hunters in waves. Guns forward, mines behind, cold-gas thrusters over the void. Three lives. Survive.
+              <p className="nf-lede" data-mode={isRaceStage(STAGES[stageIdx].id) ? "race" : "waves"}>
+                {isRaceStage(STAGES[stageIdx].id) ? RACE_BLURB : WAVE_BLURB}
               </p>
               <div className={hubRow(0, "nf-carpick")} role="group" aria-label="Choose car" aria-current={hubPad && padFocus === 0 ? "true" : undefined}>
                 <button type="button" className="nf-carpick-arrow" aria-label="Previous car" onClick={() => pickCar(-1)}>‹</button>
@@ -1153,7 +1173,7 @@ export function RoadsterGame() {
         <div className="nf-overlay">
           <div className="nf-card">
             <div className="nf-scroll">
-              <p className="nf-kicker">Côte Noire · wave {result.wave}</p>
+              <p className="nf-kicker">{raceResult ? `${stageName(resultStage)} · ${((result.dist ?? 0) / 1000).toFixed(1)} km course` : `Côte Noire · wave ${result.wave}`}</p>
               <h2 className={result.reason ? "nf-title-sm nf-race-headline" : "nf-title-sm"}>{result.reason ?? "Wrecked"}</h2>
               {result.purse != null && (
                 <div className="nf-race-pay">
@@ -1163,8 +1183,17 @@ export function RoadsterGame() {
                 </div>
               )}
               <div className="nf-rows">
-                <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
-                <div><span>Wave reached</span><strong>{result.wave}</strong></div>
+                {raceResult ? (
+                  <>
+                    <div className="nf-row-place"><span>Place</span><strong>{result.place ? `P${result.place}` : "DNF"}</strong></div>
+                    <div className="nf-row-time"><span>{result.place ? "Finish time" : "Time"}</span><strong>{formatTime(result.time)}</strong></div>
+                  </>
+                ) : (
+                  <>
+                    <div><span>Survived</span><strong>{formatTime(result.time)}</strong></div>
+                    <div><span>Wave reached</span><strong>{result.wave}</strong></div>
+                  </>
+                )}
                 <div><span>Kills</span><strong>{result.takedowns}</strong></div>
                 <div><span>Falls</span><strong>{result.falls}</strong></div>
                 <div><span>Score</span><strong>{result.score}</strong></div>

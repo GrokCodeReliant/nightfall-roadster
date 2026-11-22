@@ -84,6 +84,15 @@ for (const prof of profiles) {
   for (let i = 0; i < 7; i++) { st.push(await page.textContent(".nf-stagepick .nf-carpick-name")); if (i === 2) { await page.screenshot({ path: `${SHOTS}/${P}-stageselect.png` }); st.push("disabled=" + (await page.isDisabled(".nf-btn"))); } await page.click("[aria-label='Next stage']"); }
   const back = await page.textContent(".nf-stagepick .nf-carpick-name");
   check(P, "stage select (all seven playable, no Coming soon)", back === "Night City" && !st.some((s) => String(s).includes("Coming soon") || s === "disabled=true") && !(await page.isDisabled(".nf-btn")), st.join(" | "));
+  {
+    const lede = () => page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+    const nc = await lede();
+    await page.click("[aria-label='Next stage']");
+    const classic = { stage: await page.textContent(".nf-stagepick .nf-carpick-name"), ...(await lede()) };
+    await page.click("[aria-label='Previous stage']");
+    const back = await page.textContent(".nf-stagepick .nf-carpick-name");
+    check(P, "title blurb: race stage (Night City) shows the race blurb, wave stage (Classic Night) keeps the wave blurb", nc.mode === "race" && /^Race six rivals to the finish\./.test(nc.text) && !/wave|thruster/i.test(nc.text) && classic.stage === "Classic Night" && classic.mode === "waves" && /^Hunters in waves\./.test(classic.text) && back === "Night City", JSON.stringify({ nc, classic, back }));
+  }
   await menuFit(page, P, "title (car + stage pick)", ".nf-menu");
   if (P === "phone") {
     await page.click(".nf-launch >> text=Shop");
@@ -211,6 +220,13 @@ for (const prof of profiles) {
   const over = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
   const ov = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
   check(P, "finish results", over && finished.ok && ov.phase === "finished" && /^(1st|2nd|3rd|4th)$/.test(ov.title), JSON.stringify({ ov, finished }));
+  // Night City is a course race (no waves): results show place + finish time, never "Wave"; best line never says "wave 0"
+  const ncCard = await page.evaluate(() => {
+    const card = document.querySelector(".nf-overlay .nf-card");
+    const row = (q) => (card?.querySelector(q)?.textContent || "").trim();
+    return { text: (card?.textContent || "").replace(/\s+/g, " ").trim(), place: card?.querySelector(".nf-row-place strong")?.textContent?.trim() || "", time: row(".nf-row-time"), best: (card?.querySelector(".nf-best")?.textContent || "").trim() };
+  });
+  check(P, "NC results: no Wave text, shows Place + Finish time (best line has no wave 0)", !!ncCard.text && !/wave/i.test(ncCard.text) && /^P[1-4]$/.test(ncCard.place) && /^Finish time\s*\d+:\d{2}/.test(ncCard.time) && /course/i.test(ncCard.text) && !/wave 0/i.test(ncCard.best), JSON.stringify(ncCard));
   await menuFit(page, P, "race results", ".nf-overlay");
   if (P === "phone") {
     await page.click(".nf-foot >> text=Shop");
@@ -249,6 +265,8 @@ for (const prof of profiles) {
   const wreckOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
   const wv = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
   check(P, "wrecked game over", wreckOver && wv.phase === "finished" && wv.title.includes("Wrecked"), JSON.stringify(wv));
+  const wvCard = await page.evaluate(() => (document.querySelector(".nf-overlay .nf-card")?.textContent || "").replace(/\s+/g, " ").trim());
+  check(P, "wave-mode results still show Wave (kicker + Wave reached row), no Place row", /· wave \d+/i.test(wvCard) && /Wave reached\s*\d+/i.test(wvCard) && !/Finish time/.test(wvCard) && !(await page.$(".nf-overlay .nf-row-place")), wvCard);
   await menuFit(page, P, "wrecked game over", ".nf-overlay");
   await page.click("text=Run it again");
   await page.waitForSelector(".nf-hud");

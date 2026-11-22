@@ -189,6 +189,10 @@ export type Result = {
   falls: number;
   /** RaceTrial headline. Absent on a normal wreck. */
   reason?: string;
+  /** "race" when the run was a RaceTrial (highway or an authored course: no waves), else "waves". */
+  mode?: "race" | "waves";
+  /** RaceTrial distance in metres (race mode only). */
+  dist?: number;
   /** 1–4 on a placed highway finish. 0 on a highway DNF. Absent off the highway. */
   place?: number;
   /** Place-table Credits, not including the lives bonus. */
@@ -1546,6 +1550,8 @@ function gameOver(sim: Sim) {
     wave: sim.wave,
     takedowns: sim.takedowns,
     falls: sim.falls,
+    mode: sim.race.armed ? "race" : "waves",
+    ...(sim.race.armed ? { dist: sim.race.dist } : {}),
   };
   if (sim.race.armed && !sim.race.held) {
     const pay = racePayout("dnf", sim.lives);
@@ -1572,6 +1578,8 @@ function finishRace(sim: Sim, headline: string, place: number) {
     wave: sim.wave,
     takedowns: sim.takedowns,
     falls: sim.falls,
+    mode: "race",
+    dist: sim.race.dist,
     reason: headline,
     place,
     purse: pay.purse,
