@@ -198,3 +198,15 @@ export function woodsFog(s: number) {
   const k = Math.max(0, Math.min(1, (s - (s0 - ease)) / ease, (s1 + ease - s) / ease));
   return base + (hollow - base) * k;
 }
+
+/** pw-look (Pine Woods only): moonlit-forest light rig on the shared lights. d8c1085 values in comments. */
+export const WOODS_LOOK = {
+  sky: 0x1b272b, // sky + fog colour (0x0c1410)
+  hemiSky: 0x56789a, // (0x2e4460)
+  hemiGround: 0x2c3524, // (0x14110e)
+  hemi: 1.9, // (1.25)
+  moonColor: 0xb8ccf0, // (0xc5d4ea)
+  moon: 2.4, // (1.35)
+  fill: 0.5, // (0.5)
+  floor: 0x4a5833, // forest-floor plane (0x333d29)
+} as const;

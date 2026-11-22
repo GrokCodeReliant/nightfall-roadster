@@ -12,6 +12,8 @@ import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type Coas
 import { chunkCourse } from "./coastcourse";
 import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, floorPatchGeometry, loadWoods, makeTruckMesh, woodsPineGeometry, woodsReady } from "./woods";
 import { FLOOR_PATCH, woodsFog } from "./woodscourse";
+import { PAINT_GLSL } from "./roadpaint";
+import { WOODS_LOOK } from "./woodscourse";
 import { TRUCK } from "./trucks";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -491,7 +493,7 @@ export const STAGES = [
   { id: "city", name: "Night City", ready: true, sky: 0x0a0814, fog: 0.0075 },
   { id: "classic", name: "Classic Night", ready: true, sky: 0x07080e, fog: 0.0085 },
   { id: "coast", name: "Coast Road", ready: true, sky: 0x2a1a24, fog: 0.006 },
-  { id: "woods", name: "Pine Woods", ready: true, sky: 0x0c1410, fog: 0.012 },
+  { id: "woods", name: "Pine Woods", ready: true, sky: WOODS_LOOK.sky, fog: 0.012 },
   { id: "highway", name: "Open Highway", ready: true, sky: 0x1a140c, fog: 0.004 },
   { id: "port", name: "Industrial Port", ready: true, sky: 0x0c1014, fog: 0.008 },
   { id: "pass", name: "Mountain Pass", ready: true, sky: 0x10141c, fog: 0.008 },
@@ -1136,11 +1138,23 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     seaY = coastLook ? -12.4 : -1.6; // just under the -12 cliff water tiles (no z-fight)
     // Pine Woods: the plane is the forest floor (matte dark green) just under the road at y 0, so ground-level dress
     // stands on it and the PW-5 river tiles (y -0.03) read under the covered bridge. Colour / height only.
+    // every stage but Pine Woods: the shared night rig as built (hemi / moon colours + moon strength)
+    hemi.color.setHex(0x2e4460);
+    hemi.groundColor.setHex(0x14110e);
+    moon.color.setHex(0xc5d4ea);
+    moon.intensity = 1.35;
     if (stage === "woods") {
-      hemi.intensity = 1.25;
-      fill.intensity = 0.5;
-      // pinewoods-v2 floor lift: olive-brown needle bed instead of near-black green (colour only, same plane)
-      seaMat.color.setHex(0x333d29);
+      // pw-look: moonlit forest. Brighter blue-grey sky / olive bounce hemisphere and a stronger cool moon so the pine
+      // crowns read green with lit edges; the lighter fog / sky colour (STAGES) lets the stands layer instead of
+      // going black. Same lights (no new light, no program change), Pine Woods only.
+      hemi.color.setHex(WOODS_LOOK.hemiSky);
+      hemi.groundColor.setHex(WOODS_LOOK.hemiGround);
+      hemi.intensity = WOODS_LOOK.hemi;
+      moon.color.setHex(WOODS_LOOK.moonColor);
+      moon.intensity = WOODS_LOOK.moon;
+      fill.intensity = WOODS_LOOK.fill;
+      // pinewoods-v2 floor lift (0x333d29), pw-look: stronger needle-bed tint so the floor reads on a phone
+      seaMat.color.setHex(WOODS_LOOK.floor);
       seaMat.metalness = 0;
       seaMat.roughness = 1;
       seaY = -0.08;
@@ -1582,11 +1596,37 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     return m;
   }
+  // Coast Road + Pine Woods: the lane-paint piece's centre double line (atlas magenta paint cell) and centre studs
+  // (magenta glow cell) are recoloured to road yellow / amber in a per-stage clone of the paint materials. The road
+  // surface, the white edge / lane lines and the red edge studs keep their texels. Night City keeps the shared originals.
+  const paintMats = new Map<string, THREE.MeshStandardMaterial>();
+  function yellowPaintMat(base: THREE.MeshStandardMaterial, coast: boolean) {
+    const key = `${base.uuid}:${coast ? "coast" : "plain"}`;
+    let m = paintMats.get(key);
+    if (!m) {
+      m = base.clone();
+      m.name = `${base.name || "paint"}@yellow${coast ? "-coast" : ""}`;
+      if (coast) m.envMapIntensity = 0.55;
+      const rough = coast ? "max( texture2D( map, vMapUv ).a, 0.72 )" : "texture2D( map, vMapUv ).a";
+      m.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader
+          .replace("void main() {", `${PAINT_GLSL}\nvoid main() {`)
+          .replace("#include <map_fragment>", "#include <map_fragment>\n diffuseColor.rgb = nfPaint( diffuseColor.rgb, NF_YELLOW );")
+          .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n totalEmissiveRadiance = nfPaint( totalEmissiveRadiance, NF_AMBER );")
+          .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>\n roughnessFactor = ${rough};`);
+      };
+      m.customProgramCacheKey = () => `nf_yellow_paint_${coast ? "coast" : "plain"}`;
+      paintMats.set(key, m);
+    }
+    return m;
+  }
   function applyRoadLook() {
     const on = stage === "coast";
+    const yellow = stage === "coast" || stage === "woods";
     const swap = (mesh: THREE.Mesh) => {
       const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
-      mesh.material = on && base.isMeshStandardMaterial && base.map ? coastRoadMat(base) : base;
+      const paint = yellow && mesh.name === "kitroad:lanepaint_straight_40" && base.isMeshStandardMaterial && !!base.map;
+      mesh.material = paint ? yellowPaintMat(base, on) : on && base.isMeshStandardMaterial && base.map ? coastRoadMat(base) : base;
     };
     for (const k of kitRoads ?? []) swap(k.mesh);
     for (const ch of chunks) swap(ch.road);
