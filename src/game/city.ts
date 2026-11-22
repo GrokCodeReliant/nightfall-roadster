@@ -1,5 +1,6 @@
 // v0.2 final: Night City stage scenery (Art's assets_v02/env/city + road_kit). Visual only; no sim changes.
 import * as THREE from "three";
+import { BEND_STEP, bendGeometry, bendStep, lerpPose, sliceZ, type BendPose } from "./roadbend";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { COURSE_ORIGIN, courseFor, sectionAt } from "./course";
@@ -50,6 +51,8 @@ export const roadPieceNames = () => ROAD_PIECES.map(([, name]) => name);
  * A rigid 40 m tile gaps on an authored bend and misses a ramp.
  * Heading change above 4° or more than 0.35 m of relief keeps the ribbon.
  * A gap in the chunk never takes a tile. Non-authored stages still take tiles.
+ * Coast seam fix: world.ts now bends the kit road along the track (roadbend.ts), so bends and ramps take the kit road
+ * too; only the gap rule of this function is still used there. Kept for the old tests / reference.
  */
 export const ROAD_TILE_BEND = (4 * Math.PI) / 180;
 export const ROAD_TILE_RELIEF = 0.35;
@@ -161,6 +164,42 @@ export function bakePiece(parts: Parts, name: string, m4: THREE.Matrix4, keep?: 
   });
   return true;
 }
+/**
+ * Coast seam fix: bake a 40 m strip piece bent along the road (see roadbend.ts) instead of rigid at one pose.
+ * lx/ly/ry are road-local like placeMatrix (lx = driver's left); frame(z) is the track pose z m from the piece origin.
+ */
+export function bakePieceBent(parts: Parts, name: string, frame: (z: number) => BendPose, followY: boolean, lx: number, ly: number, ry: number,
+  ox: number, oz: number, keep?: (o: THREE.Object3D) => boolean) {
+  const src = lib[name];
+  if (!src) return false;
+  src.updateMatrixWorld(true);
+  const local = new THREE.Matrix4().makeRotationY(ry).setPosition(lx, ly, 0);
+  src.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || o.name === "status_lamp") return;
+    if (keep && !keep(o)) return;
+    const g0 = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    if (!g0.getAttribute("uv") || !g0.getAttribute("normal")) return;
+    const g1 = new THREE.BufferGeometry();
+    for (const a of ["position", "normal", "uv"]) g1.setAttribute(a, g0.getAttribute(a));
+    g1.applyMatrix4(tmp.multiplyMatrices(local, m.matrixWorld));
+    g1.computeBoundingBox();
+    const bb = g1.boundingBox!;
+    // coarsest slicing that keeps the piece on the curve (BEND_TOL); a straight, flat stretch is not sliced at all
+    const g = sliceZ(g1, bendStep(frame, bb.min.z, bb.max.z));
+    bendGeometry(g, frame, followY, ox, oz);
+    g.userData.piece = name;
+    const l = parts.get(m.material as THREE.Material) ?? [];
+    l.push(g);
+    parts.set(m.material as THREE.Material, l);
+  });
+  return true;
+}
+/** frame(z) for a piece centred on integer sample k0 of a chunk accessor at(k) (k 0..seg is the chunk; the accessor
+ *  reads the track, so a piece that overhangs the chunk end keeps following the road into the next chunk) */
+export function chunkFrame(at: (k: number) => BendPose, k0: number, seg: number) {
+  return (z: number) => lerpPose(at, k0 + z / BEND_STEP, -seg, 2 * seg);
+}
 export function flushParts(parts: Parts, group: THREE.Object3D) {
   const out: THREE.Mesh[] = [];
   for (const [mat, list] of parts) {
@@ -243,8 +282,9 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
     });
   };
   const mid = at(Math.floor(seg / 2));
-  // sidewalks both sides
-  for (const side of [1, -1]) add("sidewalk_12x40", mid, side * (half + 6.35), 0, 0, 0);
+  // sidewalks both sides, bent along the road (coast seam fix: a rigid 40 m slab left the kerb line on NC bends/ramps)
+  const midFrame = chunkFrame(at, Math.floor(seg / 2), seg);
+  for (const side of [1, -1]) bakePieceBent(parts, "sidewalk_12x40", midFrame, true, side * (half + 6.35), 0, 0, ox, oz);
   // building rows on the 12 m grid
   for (const side of [1, -1]) {
     let z = -20;

@@ -4,7 +4,7 @@
 // covered-bridge roof group (tunnel_roof + portal_crown, hidden while the chase cam is under the bridge) and the four
 // world-level pine InstancedMeshes (near A/B + lod_far A/B, switched at 120 m) built in world.ts from woodsPineGeometry().
 import * as THREE from "three";
-import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
+import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
 import { woodsIn, type WoodsPlace } from "./woodscourse";
 
@@ -42,6 +42,8 @@ export type WoodsChunkOut = { roof: THREE.Group | null; pines: { b: boolean; m: 
 export const woodsLog: Record<string, Record<string, number>> = {};
 const logged = new Set<number>();
 
+/** 40 m road-following strips: baked with the bent-road builder (bakePieceBent), not rigid at one pose */
+const BENT = new Set(["woods_covered_bridge_40", "woods_gravel_decal", "woods_river_40"]);
 const isPine = (n: string) => n === "woods_pine_a" || n === "woods_pine_b";
 
 /** Near (root) or far (lod_far child) pine geometry, baked to the piece's local frame, for the instanced stands. */
@@ -75,6 +77,13 @@ export function buildWoodsChunk(group: THREE.Group, index: number, at: (k: numbe
   const kAt = (s: number) => Math.max(0, Math.min(seg, Math.round((s - s0) / 2)));
   const put = (p: WoodsPlace, into: Parts, keep?: (o: THREE.Object3D) => boolean) => {
     const pose = at(kAt(p.s));
+    if (BENT.has(p.name)) {
+      // coast seam fix (week-i-coast-fixes): 40 m strips bend along the road from their sample, so they meet the next
+      // chunk's strip and the bent kit road exactly; road-level strips ride the road profile
+      const ly = p.ly + (p.ground ? -pose.y : 0);
+      if (bakePieceBent(into, p.name, chunkFrame(at, kAt(p.s), seg), !p.ground, p.lx, ly, p.ry, ox, oz, keep)) out.placed.push(p.name);
+      return;
+    }
     const ly = p.ly + (p.ground ? -pose.y : 0);
     if (bakePiece(into, p.name, placeMatrix(pose, p.lx, ly, p.lz + (p.s - (s0 + kAt(p.s) * 2)), p.ry, ox, oz, m4), keep)) out.placed.push(p.name);
   };
@@ -103,8 +112,8 @@ export function buildWoodsChunk(group: THREE.Group, index: number, at: (k: numbe
     }
     put(p, p.detail ? detail : parts);
   }
-  if (c.grid) bakeAt("start_grid_paint_40", at(Math.floor(seg / 2)), 0.05);
-  for (const k of c.kick) bakeAt("ramp_lip_chevron_24", at(k), 0.05);
+  if (c.grid && bakePieceBent(parts, "start_grid_paint_40", chunkFrame(at, Math.floor(seg / 2), seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("start_grid_paint_40");
+  for (const k of c.kick) if (bakePieceBent(parts, "ramp_lip_chevron_24", chunkFrame(at, k, seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("ramp_lip_chevron_24");
   if (c.finishK >= 0) bakeAt("finish_gantry_24", at(c.finishK), 0.05);
   function bakeAt(name: string, p: Pose, ly: number) {
     if (bakePiece(parts, name, placeMatrix(p, 0, ly, 0, 0, ox, oz, m4))) out.placed.push(name);

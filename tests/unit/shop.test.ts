@@ -195,7 +195,7 @@ test("mine arm tiers persist and old saves without mineArm stay stock", () => {
   assert.equal(sanitizeShop(null).mineArm, 0);
   assert.deepEqual(
     SHOP_CATALOG.map((row) => row.id),
-    ["armor", "gun", "minepack", "rockets", "nitro", "shield", "magnet", "oil", "minefuse", "xguns", "ctgun", "thrust"],
+    ["armor", "gun", "minepack", "rockets", "nitro", "shield", "magnet", "oil", "minefuse", "spare", "xguns", "ctgun", "thrust"],
   );
 });
 

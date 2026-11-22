@@ -41,3 +41,16 @@ test("save: missing / corrupt / odd blobs fall back cleanly", () => {
   assert.equal(s.credits, 0);
   assert.deepEqual(s.race, { city: { place: 2, time: 80 } });
 });
+
+test("save: pre-Spare-chassis saves migrate to spareLives 0; a bought tier round-trips; junk clamps to 0..2 (RACE_RESPAWNS §5)", () => {
+  const s = parseSave(OLD);
+  assert.equal(s.shop.spareLives, 0, "old saves start with stock lives");
+  assert.equal(s.shop.mineArm, 1, "the rest of the shop is untouched");
+  const bought = mergeSave(s, { shop: { ...s.shop, spareLives: 2 }, credits: s.credits - 220 });
+  const back = parseSave(JSON.stringify(bought));
+  assert.equal(back.shop.spareLives, 2);
+  assert.equal(back.credits, 1040);
+  for (const [raw, want] of [[9, 2], [-1, 0], [1.4, 1], ["2", 0], [null, 0]] as const) {
+    assert.equal(parseSave(JSON.stringify({ shop: { spareLives: raw } })).shop.spareLives, want, String(raw));
+  }
+});

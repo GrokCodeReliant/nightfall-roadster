@@ -1,4 +1,5 @@
 /** Meta shop. Prices are locked for the week bite. Does not touch CAR_STATS. */
+import { SPARE_MAX, SPARE_PRICE } from "./respawn";
 
 /** Hero mine fuse by `shop.mineArm`. Enemy mines stay 0.6. */
 export const MINE_ARM = { 0: 0.38, 1: 0.20, 2: 0.10 } as const;
@@ -28,6 +29,8 @@ export const SHOP_CATALOG = [
   { id: "magnet", label: "Magnet cell", price: 30 },
   { id: "oil", label: "Oil slick kit", price: 40 },
   { id: "minefuse", label: "Quick-arm mines", price: 45 },
+  // RACE_RESPAWNS §5: +1 starting life per tier (80 then 140), every run. Lives bonus stays +20/life, cap 60.
+  { id: "spare", label: "Spare chassis", price: 80, note: "+1 starting life" },
   { id: "xguns", label: "Model X side guns", price: 0, coming: true },
   { id: "ctgun", label: "Cybertruck roof gun", price: 0, coming: true },
   { id: "thrust", label: "Roadster thrusters+", price: 0, coming: true },
@@ -46,6 +49,8 @@ export type ShopSave = {
   oilCharges: number;
   /** 0 stock 0.38s, 1 is 0.20s, 2 is 0.10s. */
   mineArm: MineArmTier;
+  /** Spare chassis tiers bought (RACE_RESPAWNS §5): extra starting lives, 0..2. */
+  spareLives: number;
 };
 
 export function emptyShop(): ShopSave {
@@ -59,6 +64,7 @@ export function emptyShop(): ShopSave {
     magnetCharges: 0,
     oilCharges: 0,
     mineArm: 0,
+    spareLives: 0,
   };
 }
 
@@ -149,8 +155,14 @@ export function shopComing(id: ShopId) {
   return !!row && "coming" in row && row.coming;
 }
 
+/** Spare chassis tier as a safe 0..2 integer (old saves have none: 0). */
+export function spareLivesTier(v: unknown): number {
+  return clampInt(v, 0, SPARE_MAX, 0);
+}
+
 export function shopPrice(shop: ShopSave, id: ShopId) {
   if (id === "minefuse") return shop.mineArm >= 1 ? MINE_FUSE_PRICE[1] : MINE_FUSE_PRICE[0];
+  if (id === "spare") return SPARE_PRICE[Math.min(SPARE_PRICE.length - 1, spareLivesTier(shop.spareLives))];
   return SHOP_CATALOG.find((item) => item.id === id)?.price ?? 0;
 }
 
@@ -167,6 +179,7 @@ export function sanitizeShop(raw: unknown): ShopSave {
   s.magnetCharges = clampInt(p.magnetCharges, 0, 3, 0);
   s.oilCharges = clampInt(p.oilCharges, 0, 3, 0);
   s.mineArm = mineArmTier(p.mineArm);
+  s.spareLives = spareLivesTier(p.spareLives);
   return s;
 }
 
@@ -190,6 +203,8 @@ export function shopOwned(shop: ShopSave, id: ShopId) {
       return `${shop.oilCharges} / 3`;
     case "minefuse":
       return `${shop.mineArm} / 2`;
+    case "spare":
+      return `${spareLivesTier(shop.spareLives)} / ${SPARE_MAX}`;
     case "xguns":
     case "ctgun":
     case "thrust":
@@ -217,6 +232,8 @@ export function shopMaxed(shop: ShopSave, id: ShopId) {
       return shop.oilCharges >= 3;
     case "minefuse":
       return shop.mineArm >= 2;
+    case "spare":
+      return spareLivesTier(shop.spareLives) >= SPARE_MAX;
     case "xguns":
     case "ctgun":
     case "thrust":
@@ -259,6 +276,9 @@ export function buyUpgrade(shop: ShopSave, credits: number, id: ShopId): BuyResu
       break;
     case "minefuse":
       next.mineArm = mineArmTier(next.mineArm + 1);
+      break;
+    case "spare":
+      next.spareLives = spareLivesTier(spareLivesTier(next.spareLives) + 1);
       break;
     case "xguns":
     case "ctgun":

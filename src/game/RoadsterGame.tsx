@@ -3,7 +3,7 @@ import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
 import { raceBestLine, recordRace, type RaceBests } from "./records";
 import { emptySave, mergeSave, parseSave, type Save } from "./save";
-import { CAR_STATS, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, raceStandings, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
+import { CAR_STATS, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugKill, debugSpawn, debugStartWave, formatTime, GUN_NAMES, raceStandings, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
 import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
 import { botKeys } from "./bot";
@@ -286,6 +286,14 @@ export function RoadsterGame() {
         __nfAudio: () => audio.stats(),
         __nfRolloutSet: (t: number) => world.rolloutSeek(t),
         __nfEnemies: () => world.enemyInfo(),
+        // RACE_RESPAWNS smoke: kill a race rival through the normal damage path; read its respawn state
+        __nfKill: (id: number) => debugKill(sim, sim.cars[id]),
+        __nfRespawns: () => ({
+          budget: sim.rivalBudget,
+          lives: sim.lives,
+          log: sim.respawnLog.slice(),
+          rivals: sim.cars.filter((c) => c.racer).map((c) => ({ id: c.id, alive: c.alive, pending: c.pending, left: c.respawnsLeft, kills: c.kills, eliminated: c.eliminated, invuln: c.invuln, along: c.along })),
+        }),
         __nfBehind: (off: number) => {
           const h = sim.cars[0];
           const lat = queryTrack(sim.track, h.x, h.z, h.along).lateral;
@@ -1246,15 +1254,39 @@ function drawMap(canvas: HTMLCanvasElement, sim: Sim) {
   }
   for (let i = sim.cars.length - 1; i >= 0; i--) {
     const c = sim.cars[i];
+    // RACE_RESPAWNS: a rival waiting to respawn shows as a hollow ring where it went down (it still holds that place)
+    if (!c.alive && c.racer && c.pending && sim.race.armed) {
+      const p = poseAt(sim.track, c.deathAlong);
+      ctx.strokeStyle = "#f0d38a";
+      ctx.lineWidth = tiny ? 3 : 1.2;
+      ctx.beginPath();
+      ctx.arc(X(p.x, p.z), Y(p.x, p.z), tiny ? 8 : 3, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
     if (!c.alive) continue;
+    const px = X(c.x, c.z);
+    const py = Y(c.x, c.z);
     ctx.fillStyle = c.hero ? (tiny ? "#ff2a2a" : "#c4161c") : c.racer ? "#f0d38a" : c.kind === "gunner" ? "#c6a36a" : "#f4efe6";
     ctx.beginPath();
-    ctx.arc(X(c.x, c.z), Y(c.x, c.z), tiny ? (c.hero ? 14 : 9) : c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
+    ctx.arc(px, py, tiny ? (c.hero ? 14 : 9) : c.hero ? 4.5 : 3.2, 0, Math.PI * 2);
     ctx.fill();
     if (tiny) {
       ctx.lineWidth = c.hero ? 5 : 3;
       ctx.strokeStyle = c.hero ? "#fff" : "#000";
       ctx.stroke();
+    }
+    // respawns left: one pip per respawn beside the rival's map dot (2D HUD canvas, 0 GPU draws)
+    if (c.racer && sim.race.armed && c.respawnsLeft > 0) {
+      const r = tiny ? 2.6 : 1;
+      const step = tiny ? 7 : 2.6;
+      const x0 = px + (tiny ? 13 : 5);
+      ctx.fillStyle = "#f0d38a";
+      for (let k = 0; k < c.respawnsLeft; k++) {
+        ctx.beginPath();
+        ctx.arc(x0 + k * step, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
   if (sim.race.armed) {
