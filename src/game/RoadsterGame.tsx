@@ -11,6 +11,7 @@ import { dismissBuild, useUpdateBanner } from "./update";
 import { SHOP_CATALOG, bankFinish, buyUpgrade, emptyShop, sanitizeShop, shopComing, shopOwned, shopPrice, type ShopId, type ShopSave } from "./shop";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 import { courseFor } from "./course";
+import { LIGHTHOUSE, swatchLog } from "./coast";
 
 declare global {
   interface Window {
@@ -299,6 +300,8 @@ export function RoadsterGame() {
         __nfSkipRollout: () => world.skipRollout(),
         __nfDraws: () => world.drawInfo(),
         __nfHeroOnScreen: () => { const h = sim.cars[0]; const lo = world.projectPoint(h.x, h.y, h.z), hi = world.projectPoint(h.x, h.y + 1.2, h.z); return { inside: lo.inside && hi.inside, lo, hi }; },
+        __nfProjectXYZ: (x: number, y: number, z: number) => world.projectPoint(x, y, z),
+        __nfCoastFix: () => ({ ...swatchLog, lighthouse: LIGHTHOUSE }),
         __nfStageInfo: () => world.stageInfo(),
         __nfScene: () => world.sceneInfo(),
         __nfAudio: () => audio.stats(),

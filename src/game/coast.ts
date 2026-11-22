@@ -5,6 +5,8 @@
 // (spins). Foam v2 scrolls in its own shader (cell-local UV wrap, atlas v3) and merges per foam material.
 // Look pass v2 (Art & Assets, art/nightfall-coast-v2-20261121): sea glow / shore foam / horizon, lighthouse blade, arch,
 // pier approach, seawall lamps, beach dress, crate + guardrail end. All on the official kit atlas (kit / kit_emissive).
+// Look pass v3 (Art & Assets, art/nightfall-coast-v3-20261121): arch v3 (vault baked into tunnel_roof), portal v3
+// (lintel on child portal_crown), shorter lighthouse v3 (32 m lamp_beam), broken shore foam v3, cliff v2 (no flat lid).
 import * as THREE from "three";
 import { bakePiece, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
@@ -16,13 +18,16 @@ const COAST_PIECES: [string, string][] = [
   ["coast", "coast_lighthouse"], ["coast", "coast_umbrella"], ["coast", "coast_beach_hut"], ["coast", "coast_pier_deck_20"],
   ["coast", "coast_boardwalk_40"], ["coast", "coast_dune_mound"], ["coast", "coast_foam_strip_24_v2"],
   // look pass v2 (art/nightfall-coast-v2-20261121); the v1 pieces above stay loaded as fallback
-  ["coast", "coast_beach_shoulder_40_v2"], ["coast", "coast_arch_40_v2"], ["coast", "coast_arch_portal_v2"],
-  ["coast", "coast_lighthouse_v2"], ["coast", "coast_water_glow_40"],
-  ["coast", "coast_horizon_bar_40"], ["coast", "coast_shore_foam_40"], ["coast", "coast_pier_approach_16"],
+  // (v2 arch / portal / lighthouse / shore foam are superseded by v3 below and no longer loaded)
+  ["coast", "coast_beach_shoulder_40_v2"], ["coast", "coast_water_glow_40"],
+  ["coast", "coast_horizon_bar_40"], ["coast", "coast_pier_approach_16"],
+  // look pass v3 (art/nightfall-coast-v3-20261121)
+  ["coast", "coast_arch_40_v3"], ["coast", "coast_arch_portal_v3"], ["coast", "coast_lighthouse_v3"], ["coast", "coast_shore_foam_40_v3"],
+  ["coast", "coast_cliff_40_v2"],
   ["coast", "coast_driftwood"], ["coast", "coast_seawall_lamp"], ["coast", "coast_crate"], ["coast", "coast_guardrail_end_4m"],
   // existing coast set, first use
   ["coast", "coast_water_40"], ["coast", "coast_guardrail_4m"], ["coast", "coast_stone_wall_4m"], ["coast", "coast_palm"],
-  ["coast", "coast_rock_a"], ["coast", "coast_rock_b"], ["coast", "coast_shrub"], ["coast", "coast_lifeguard_tower"], ["coast", "coast_cliff_40"],
+  ["coast", "coast_rock_a"], ["coast", "coast_rock_b"], ["coast", "coast_shrub"], ["coast", "coast_lifeguard_tower"],
   // shared drop: finish gantry is a city_atlas piece (city_emissive); start grid / ramp lip come in with the road kit
   ["city", "finish_gantry_24"],
   // race course road band (same kit pieces Night City uses): gates / fork signs, median jersey, lane kicker, grid, lip boards
@@ -100,66 +105,85 @@ function foamHook() {
 
 /** Spec crates (§2): L4 at 1350 (Fork A sea side) and L4 at 2160 (Fork B sea side). */
 const CRATES: [number, number][] = [[1350, 9], [2160, 9]];
-const ARCH = "coast_arch_40_v2";
-/** over-road shell faces (centroid above VAULT_Y m, |x| < VAULT_X m in piece space) hide with tunnel_roof; walls stay */
-export const VAULT_Y = 4.5;
-export const VAULT_X = 11;
+const ARCH = "coast_arch_40_v3";
+const PORTAL = "coast_arch_portal_v3";
+const LH = "coast_lighthouse_v3";
+const SHORE = "coast_shore_foam_40_v3";
+const CLIFF = "coast_cliff_40_v2";
 const beamMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+/** v3 lamp_beam: private additive instance at low intensity (the shared kit_emissive ships at strength 4; the v2 70 m
+ *  blade at full strength read as a milky oval over the seawall). The spin group is its own draw either way. */
+export const BEAM_LOOK = { emissiveIntensity: 1.1, opacity: 0.55 };
 function beamMat(m: THREE.MeshStandardMaterial) {
   let b = beamMats.get(m);
   if (!b) {
     b = m.clone();
+    b.name = `${m.name}@beam`;
     b.blending = THREE.AdditiveBlending;
     b.transparent = true;
     b.depthWrite = false;
     b.side = THREE.DoubleSide;
+    b.emissiveIntensity = BEAM_LOOK.emissiveIntensity;
+    b.opacity = BEAM_LOOK.opacity;
     beamMats.set(m, b);
   }
   return b;
 }
-/** Bake the arch shell split by triangle: the inner vault over the road (centroid above VAULT_Y, |x| < VAULT_X in piece space)
- *  goes with tunnel_roof into the hide-able group, the walls stay in the chunk. Without this the vault ceiling (32 of
- *  the shell's 96 tris) still covers the hero under the high chase cam once tunnel_roof hides. */
-function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4, name = ARCH) {
-  const src = getPiece(name);
-  if (!src) return false;
-  src.updateMatrixWorld(true);
-  const w = new THREE.Matrix4();
-  src.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh || inNode(o, "tunnel_roof")) return;
-    const g0 = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrixWorld);
-    const pos = g0.getAttribute("position");
-    const sides: [number[], number[]] = [[], []];
-    for (let t = 0; t < pos.count; t += 3) {
-      const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3, cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
-      sides[cy > VAULT_Y && Math.abs(cx) < VAULT_X ? 1 : 0].push(t);
-    }
-    sides.forEach((tris, k) => {
-      if (!tris.length) return;
-      const g = new THREE.BufferGeometry();
-      for (const a of ["position", "normal", "uv"]) {
-        const src = g0.getAttribute(a) as THREE.BufferAttribute | undefined;
-        if (!src) return;
-        const arr = new Float32Array(tris.length * 3 * src.itemSize);
-        tris.forEach((t, i) => arr.set((src.array as Float32Array).subarray(t * src.itemSize, (t + 3) * src.itemSize), i * 3 * src.itemSize));
-        g.setAttribute(a, new THREE.BufferAttribute(arr, src.itemSize));
-      }
-      g.applyMatrix4(w.copy(m4));
-      g.userData.piece = name;
-      const into = k ? vault : walls;
-      const l = into.get(m.material as THREE.Material) ?? [];
-      l.push(g);
-      into.set(m.material as THREE.Material, l);
-    });
-    g0.dispose();
-  });
-  return true;
+/** v3 shore foam dashes: one private dim instance of kit_emissive shared by every chunk (one extra draw per chunk that
+ *  shows shore foam; never the full-strength shared kit_emissive, which made v2's band the brightest thing on screen). */
+export const SHORE_LOOK = { emissiveIntensity: 0.6, opacity: 0.5 };
+const shoreMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+function shoreMat(m: THREE.MeshStandardMaterial) {
+  let f = shoreMats.get(m);
+  if (!f) {
+    f = m.clone();
+    f.name = `${m.name}@shore`;
+    f.transparent = true;
+    f.depthWrite = false;
+    f.emissiveIntensity = SHORE_LOOK.emissiveIntensity;
+    f.opacity = SHORE_LOOK.opacity;
+    shoreMats.set(m, f);
+  }
+  return f;
+}
+/** Coast chunks draw kit_emissive through a matte clone: the sea glow cards (and rails) sit on low-roughness atlas cells,
+ *  so the moon / env reflection on the flat glow card read as a hot white glint blob over the sea. Same mesh, so 0 draws;
+ *  Night City keeps the shared original. */
+export const GLINT_ROUGH = 0.8;
+const matteMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+function coastMatte(m: THREE.MeshStandardMaterial) {
+  let c = matteMats.get(m);
+  if (!c) {
+    c = m.clone();
+    c.name = `${m.name}@coast`;
+    c.envMapIntensity = 0.4;
+    c.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>\n roughnessFactor = max( roughnessFactor, ${GLINT_ROUGH.toFixed(2)} );`);
+    };
+    c.customProgramCacheKey = () => "nf_coast_matte";
+    matteMats.set(m, c);
+  }
+  return c;
+}
+/** move the shore foam geometry out of the shared emissive list onto its private dim instance */
+export function privateShore(parts: Parts, mk: (m: THREE.MeshStandardMaterial) => THREE.Material = shoreMat) {
+  let n = 0;
+  for (const [mat, list] of [...parts]) {
+    const mine = list.filter((g) => g.userData.piece === SHORE);
+    if (!mine.length) continue;
+    const dim = mk(mat as THREE.MeshStandardMaterial);
+    if (dim === mat) continue;
+    parts.set(mat, list.filter((g) => !mine.includes(g)));
+    if (!parts.get(mat)!.length) parts.delete(mat);
+    parts.set(dim, [...(parts.get(dim) ?? []), ...mine]);
+    n += mine.length;
+  }
+  return n;
 }
 
 /** Look pass v2 pieces whose kit_emissive faces may fold into the chunk's kit draw. */
 const V2_FOLD = new Set([
-  "coast_water_glow_40", "coast_shore_foam_40", "coast_horizon_bar_40", "coast_beach_shoulder_40_v2", ARCH, "coast_arch_portal_v2",
+  "coast_water_glow_40", "coast_shore_foam_40", "coast_horizon_bar_40", "coast_beach_shoulder_40_v2", ARCH, PORTAL, LH,
   "coast_pier_approach_16", "coast_seawall_lamp", "coast_guardrail_end_4m",
 ]);
 const V2_DROP = new Set(["coast_water_glow_40", "coast_horizon_bar_40"]);
@@ -181,11 +205,66 @@ export function foldV2Emissive(parts: Parts) {
   return keep.length;
 }
 
+/** Flat brown swatch (u,v ~ 0.140/0.172, 0.610) that v2 uses as point-UVs on the arch buttresses, portal jambs and
+ *  lighthouse rock base (v3 keeps them, and cliff v2's terrace tops use it too): from the high cam those read as
+ *  untextured brown boxes (BROWN_BOX.txt). Until Art bakes real
+ *  UVs, re-project those faces into the rock cell the arch shell already samples (no new texture, same material). */
+const ROCK_CELL = { u0: 0.51, u1: 0.74, v0: 0.775, v1: 0.995 };
+const ROCK_TILE = 6; // metres of rock per cell repeat
+const SWATCH_FIX = [ARCH, PORTAL, LH, CLIFF];
+let swatchFixed = false;
+export function isSwatch(u: number, v: number) {
+  return Math.abs(v - 0.61) < 0.006 && ((u > 0.134 && u < 0.146) || (u > 0.165 && u < 0.178));
+}
+export function rockSwatchUvs(g: THREE.BufferGeometry) {
+  const pos = g.getAttribute("position");
+  const uv = g.getAttribute("uv") as THREE.BufferAttribute | undefined;
+  if (!uv || g.index) return 0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  let fixed = 0;
+  for (let t = 0; t < pos.count; t += 3) {
+    if (![0, 1, 2].every((k) => isSwatch(uv.getX(t + k), uv.getY(t + k)))) continue;
+    a.fromBufferAttribute(pos, t); b.fromBufferAttribute(pos, t + 1); c.fromBufferAttribute(pos, t + 2);
+    n.subVectors(c, b).cross(new THREE.Vector3().subVectors(a, b));
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    const pick = (p: THREE.Vector3): [number, number] => (ax >= ay && ax >= az ? [p.z, p.y] : ay >= az ? [p.x, p.z] : [p.x, p.y]);
+    const q = [a, b, c].map(pick);
+    const span = Math.max(ROCK_TILE, ...q.map((x) => x[0]).map((x, _, l) => Math.max(...l) - Math.min(...l)), ...q.map((x) => x[1]).map((y, _, l) => Math.max(...l) - Math.min(...l)));
+    const o0 = Math.floor(Math.min(...q.map((x) => x[0])) / ROCK_TILE) * ROCK_TILE, o1 = Math.floor(Math.min(...q.map((x) => x[1])) / ROCK_TILE) * ROCK_TILE;
+    q.forEach(([s0, s1], k) => {
+      const fu = Math.min(1, (s0 - o0) / (span + ROCK_TILE)), fv = Math.min(1, (s1 - o1) / (span + ROCK_TILE));
+      uv.setXY(t + k, ROCK_CELL.u0 + fu * (ROCK_CELL.u1 - ROCK_CELL.u0), ROCK_CELL.v0 + fv * (ROCK_CELL.v1 - ROCK_CELL.v0));
+    });
+    fixed++;
+  }
+  uv.needsUpdate = true;
+  return fixed;
+}
+/** CR-6 lighthouse v3 (Art INTEGRATION v3): s 1880, just seaward of the rail at x -16, base on the cliff-sea
+ *  (y -12 - mid.y, dy 0). The shorter tower (lantern world y ~8) does the lowering; the whole tower and beam read
+ *  45-85 m before it, so the lighthouse shot is taken ~55 m before (race s 1825). */
+export const LIGHTHOUSE = { s: 1880, lx: -16, dy: 0 };
+/** tris re-projected per piece (report / debug) */
+export const swatchLog: Record<string, number> = {};
+function fixSwatches() {
+  if (swatchFixed) return;
+  swatchFixed = true;
+  for (const name of SWATCH_FIX) {
+    getPiece(name)?.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || (m.material as THREE.Material).name !== "kit") return; // tunnel_roof / portal_crown included
+      if (m.geometry.index) m.geometry = m.geometry.toNonIndexed();
+      swatchLog[name] = (swatchLog[name] ?? 0) + rockSwatchUvs(m.geometry);
+    });
+  }
+}
+
 export function buildCoastChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number,
   rnd: (n: number) => number, c: ChunkCourse): CoastChunkOut {
   const out: CoastChunkOut = { roof: null, spin: null, wash: [], crown: [], placed: [] };
   const crown: Parts = new Map();
   if (!coastReady()) return out;
+  fixSwatches();
   const parts: Parts = new Map();
   const m4 = new THREE.Matrix4();
   const put = (name: string, p: Pose, lx: number, ly: number, lz: number, ry: number, keep?: (o: THREE.Object3D) => boolean, into = parts) => {
@@ -214,7 +293,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     // coast_moon_glint_80 is staged but not placed: one 80 m glint per 40 m chunk reads in-engine as white bars across
     // the sea every chunk (Art's HONEST_LOOK "hot dart" risk), and it shares kit_emissive so it cannot be dimmed alone.
     put("coast_horizon_bar_40", mid, -108, -1.5, 0, 0);
-    put("coast_shore_foam_40", mid, -32, -1.45, 0, 0);
+    put(SHORE, mid, -32, -1.45, 0, 0);
     if (!wash) {
       for (const lz of [-12, 8]) if (R(lz) < 0.7) put("coast_palm", mid, half + 5 + R(lz + 3) * 3, 0, lz, R(lz + 5) * 6.28);
       put("coast_shrub", mid, half + 3, 0, R(7) * 30 - 15, R(8) * 6.28);
@@ -254,16 +333,16 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
         if (k % 4 === 1) put("coast_seawall_lamp", p, -(half + 0.9), 0, 0, 0);
       }
     }
-    put("coast_cliff_40", mid, half + 5, ramp ? -mid.y : 0, 0, Math.PI);
+    put(CLIFF, mid, half + 5, ramp ? -mid.y : 0, 0, Math.PI);
     // sea cliff: its 14 m top sits under the sea lanes (lat +1.6..+16), so drop it 0.15 m below the deck or its
     // flat top z-fights over the road tiles on straight chunks
-    put("coast_cliff_40", mid, -(half + 1), -24.15 - (ramp ? mid.y : 0), 0, Math.PI);
+    put(CLIFF, mid, -(half + 1), -24.15 - (ramp ? mid.y : 0), 0, Math.PI);
     put("coast_water_40", mid, -40, -12 - mid.y, 0, 0);
     put("coast_water_40", mid, -80, -12 - mid.y, 0, 0);
     put("coast_water_glow_40", mid, -40, -11.95 - mid.y, 0, 0);
     put("coast_water_glow_40", mid, -80, -11.95 - mid.y, 0, 0);
     put("coast_horizon_bar_40", mid, -96, -12 - mid.y, 0, 0);
-    put("coast_shore_foam_40", mid, -22, -11.9 - mid.y, 0, 0);
+    put(SHORE, mid, -22, -11.9 - mid.y, 0, 0);
     put(R(70) < 0.5 ? "coast_rock_a" : "coast_rock_b", mid, -(30 + R(71) * 30), -12.4 - mid.y, R(72) * 30 - 15, R(73) * 6.28);
     if (R(74) < 0.5) put("coast_rock_b", mid, -(45 + R(75) * 20), -12.4 - mid.y, R(76) * 30 - 15, R(77) * 6.28);
     if (ramp) {
@@ -273,26 +352,32 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   }
   if (arch) {
     const rp: Parts = new Map();
-    if (bakeArch(parts, rp, placeMatrix(mid, 0, 0, 0, 0, ox, oz, m4))) out.placed.push(ARCH);
+    // v3 bakes the over-road vault into tunnel_roof: walls (and side-wall vault lamps) stay in the chunk, the roof child
+    // goes to the hide-able group (no load-time triangle split any more)
+    put(ARCH, mid, 0, 0, 0, 0, (o) => !inNode(o, "tunnel_roof"));
     put(ARCH, mid, 0, 0, 0, 0, (o) => inNode(o, "tunnel_roof"), rp);
     const roof = new THREE.Group();
     roof.userData.roofY = mid.y + 8; // v2 crown is taller (was +6.08)
     flushParts(rp, roof);
     group.add(roof);
     out.roof = roof;
-    if (s0 === 1580 && bakeArch(parts, crown, placeMatrix(mid, 0, 0, -20, 0, ox, oz, m4), "coast_arch_portal_v2")) out.placed.push("coast_arch_portal_v2");
-    if (s0 === 1660) put("coast_arch_portal_v2", mid, 0, 0, 20, Math.PI);
+    if (s0 === 1580) {
+      put(PORTAL, mid, 0, 0, -20, 0, (o) => !inNode(o, "portal_crown"));
+      put(PORTAL, mid, 0, 0, -20, 0, (o) => inNode(o, "portal_crown"), crown);
+    }
+    if (s0 === 1660) put(PORTAL, mid, 0, 0, 20, Math.PI);
   }
   // CR-6 lighthouse on the sea side headland, beam spins about the tower axis
-  if (s0 <= 1880 && 1880 < s1) {
-    const p = at(kAt(1880));
-    put("coast_lighthouse_v2", p, -30, -12 - p.y, 0, 0, (o) => !inNode(o, "lamp_beam"));
+  if (s0 <= LIGHTHOUSE.s && LIGHTHOUSE.s < s1) {
+    const p = at(kAt(LIGHTHOUSE.s));
+    const ly = -12 + LIGHTHOUSE.dy - p.y;
+    put(LH, p, LIGHTHOUSE.lx, ly, 0, 0, (o) => !inNode(o, "lamp_beam"));
     const bp: Parts = new Map();
-    if (bakePiece(bp, "coast_lighthouse_v2", new THREE.Matrix4(), (o) => inNode(o, "lamp_beam"))) {
+    if (bakePiece(bp, LH, new THREE.Matrix4(), (o) => inNode(o, "lamp_beam"))) {
       const spin = new THREE.Group();
-      placeMatrix(p, -30, -12 - p.y, 0, 0, ox, oz, m4).decompose(spin.position, spin.quaternion, spin.scale);
-      // 70 m lamp_beam blade: additive, no depth write, so it reads over the water without z-fighting. Own material
-      // instance (the spin group is already its own mesh/draw), so the shared kit_emissive is untouched.
+      placeMatrix(p, LIGHTHOUSE.lx, ly, 0, 0, ox, oz, m4).decompose(spin.position, spin.quaternion, spin.scale);
+      // v3 32 m lamp_beam along +Z: additive, low intensity, no depth write. Own material instance (the spin group is
+      // already its own mesh/draw), so the shared kit_emissive is untouched.
       for (const mesh of flushParts(bp, spin)) mesh.material = beamMat(mesh.material as THREE.MeshStandardMaterial);
       group.add(spin);
       out.spin = spin;
@@ -340,6 +425,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);
+  privateShore(parts);
   foldV2Emissive(parts);
   // entry-portal crown last in its material's list (kit_emissive faces go to kit if the chunk's glow was folded)
   const cut = new Map<THREE.Material, number>();
@@ -352,6 +438,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   }
   for (const mesh of flushParts(parts, group)) {
     const n = cut.get(mesh.material as THREE.Material);
+    if ((mesh.material as THREE.Material).name === "kit_emissive") mesh.material = coastMatte(mesh.material as THREE.MeshStandardMaterial);
     if (n) out.crown.push({ mesh, keep: mesh.geometry.getAttribute("position").count - n, s: 1580 });
   }
   if (c.lap === 0 && !logged.has(index)) {

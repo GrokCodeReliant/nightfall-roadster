@@ -149,7 +149,7 @@ export type World = {
   /** test harness: the next frame puts the chase cam straight on its target (after a teleport). Gameplay easing unchanged. */
   debugSnapCamera: () => void;
   /** test harness: what is under a screen point (NDC): material name, texture, and the pieces merged into that mesh. */
-  debugPick: (x: number, y: number) => { mat: string; map: boolean; color: string; emissive: string; pieces: string[]; dist: number }[];
+  debugPick: (x: number, y: number) => { mat: string; map: boolean; color: string; emissive: string; pieces: string[]; dist: number; at: number[]; n: number[] }[];
   carInfo: () => CarInfo;
   setCar: (id: CarId) => void;
   setStage: (id: StageId) => void;
@@ -1107,8 +1107,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     hemi.intensity = coastLook ? 1.6 : 0.9;
     fill.intensity = coastLook ? 0.9 : 0.22;
     seaMat.color.setHex(coastLook ? 0x1d4d6b : 0x0b1420);
-    seaMat.metalness = coastLook ? 0.35 : 0.72;
-    seaMat.roughness = coastLook ? 0.42 : 0.22;
+    // Coast: rougher, less metallic sea so the moon glint is a soft wide sheen, not a hot blob
+    seaMat.metalness = coastLook ? 0.2 : 0.72;
+    seaMat.roughness = coastLook ? 0.72 : 0.22;
     seaY = coastLook ? -12.4 : -1.6; // just under the -12 cliff water tiles (no z-fight)
     sea.position.y = seaY;
     buildings.visible = !scenic();
@@ -2138,7 +2139,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const shown = (o: THREE.Object3D | null) => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
       return ray.intersectObjects(scene.children, true).filter((h) => shown(h.object)).slice(0, 6).map((h) => {
         const m = (h.object as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance) };
+        return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance), at: [h.point.x, h.point.y, h.point.z].map((v) => Math.round(v * 10) / 10), n: h.face ? [h.face.normal.x, h.face.normal.y, h.face.normal.z].map((v) => Math.round(v * 100) / 100) : [] };
       });
     },
     carInfo: () => carInfo,
