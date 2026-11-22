@@ -414,6 +414,84 @@ for (const prof of profiles) {
     }
     await page.click("button:has-text('Title')");
     await page.waitForSelector(".nf-carpick");
+    // ---- Pine Woods (LEVELS/03): authored 4400 m race on Art's woods kit v2. Title blurb, start, PW-0 / PW-3 truck /
+    // PW-5 under the covered bridge (roof + crown hidden, hero framed and not behind the bridge) / PW-6 fog hollow, draws,
+    // finish -> results + course best. Then back past Coast to Classic.
+    {
+      await page.click("[aria-label='Next stage']");
+      const pwStage = await page.textContent(".nf-stagepick .nf-carpick-name");
+      const pwLede = await page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+      check(P, "Pine Woods title shows the race blurb", pwStage === "Pine Woods" && pwLede.mode === "race" && /^Race six rivals to the finish\./.test(pwLede.text) && !/wave/i.test(pwLede.text), JSON.stringify({ pwStage, pwLede }));
+      await page.click(".nf-btn");
+      await page.waitForSelector(".nf-hud");
+      await page.evaluate(() => window.__nfSkipRollout());
+      await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+      const pwStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, lives: s.lives, trucks: s.trucks.length }; });
+      check(P, "Pine Woods start: race armed at 4400 m, 6 rivals, no waves, 6 logging trucks queued, drives", pwStart.stage === "woods" && pwStart.armed && pwStart.dist === 4400 && pwStart.rivals === 6 && pwStart.wave === 0 && pwStart.phase === "playing" && pwStart.m > 10 && pwStart.lives === 3 && pwStart.trucks === 6, JSON.stringify(pwStart));
+      const pwAt = async (raceS) => {
+        await page.evaluate((raceS) => {
+          const s = window.__nf, h = s.cars[0];
+          const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
+          for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
+            const last = s.track.samples[s.track.samples.length - 40];
+            h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.lane = 0; h.speed = 36;
+            s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
+          }
+          const sm = s.track.samples[idx()];
+          h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.lane = 0; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
+          // invuln 0: an invulnerable hero blinks (hidden every other 90 ms), which would skew draws and the bridge pick
+          h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
+          s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+        }, raceS);
+        await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
+        await page.waitForTimeout(P === "phone" ? 5000 : 3000);
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+        return page.evaluate(() => {
+          const h = window.__nf.cars[0];
+          const ndc = window.__nfProjectXYZ(h.x, h.y + 0.8, h.z);
+          const first = window.__nfPick(ndc.x, ndc.y)[0] || null;
+          const blocked = !!first && ((first.pieces || []).some((p) => /^woods_covered_bridge/.test(p)));
+          return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, blocked, woods: window.__nfWoods() };
+        });
+      };
+      const pwDraws = { pw0: await pwAt(60), pw3: await pwAt(870), pw5: await pwAt(1800), pw6: await pwAt(2080) };
+      await page.screenshot({ path: `${SHOTS}/${P}-woods-pw6.png` });
+      for (const [k, d] of Object.entries(pwDraws)) console.log(`DRAW [${P}] woods ${k}: ${d.draws} draws, ${d.tris} tris, pines ${d.woods.near}/${d.woods.far}, trucks ${d.woods.trucks}`);
+      const pwWorst = Math.max(...Object.values(pwDraws).map((d) => d.draws));
+      check(P, `Pine Woods scenery streams, 4 pine stands, draws under the ceiling at PW-0 / PW-3 / PW-5 / PW-6 (${P === "phone" ? "≤160" : "logged"})`, Object.values(pwDraws).every((d) => d.stage === "woods" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.woods.stands === 4 && d.woods.near > 0) && drawGate(P, pwWorst), JSON.stringify(pwDraws));
+      check(P, "Pine Woods BN-17: a logging truck spawns ahead at PW-3 and is drawn (pool of 3)", pwDraws.pw3.woods.truckPool === 3 && pwDraws.pw3.woods.trucks >= 1 && pwDraws.pw3.woods.trucksSim.some((t) => t.id === "LT1" && t.alive), JSON.stringify(pwDraws.pw3.woods));
+      check(P, "Pine Woods PW-5 covered bridge: roof + crown hidden under it, hero framed and not behind the bridge", pwDraws.pw5.woods.roofHidden && pwDraws.pw5.woods.roofs >= 1 && pwDraws.pw5.framed && !pwDraws.pw5.blocked && !pwDraws.pw0.woods.roofHidden, JSON.stringify({ pw5: pwDraws.pw5.woods, blocked: pwDraws.pw5.blocked }));
+      check(P, "Pine Woods PW-6 fog hollow thickens to 0.016 (PW-0 stays 0.012)", Math.abs(pwDraws.pw6.woods.fog - 0.016) < 1e-6 && Math.abs(pwDraws.pw0.woods.fog - 0.012) < 1e-6, JSON.stringify([pwDraws.pw0.woods.fog, pwDraws.pw6.woods.fog]));
+      await page.evaluate(() => { window.__nf.hitstop = 0; });
+      const pwFin = await page.evaluate(() => {
+        const s = window.__nf, h = s.cars[0];
+        h.alive = true; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.max(h.hp, 1);
+        for (let g = 0; g < 20 && !s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first]; g++) {
+          const last = s.track.samples[s.track.samples.length - 40];
+          h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.speed = 36; h.invuln = 1e9;
+          window.__nfAdvance(0.02, ["KeyW"]);
+        }
+        h.invuln = 0;
+        const sm = s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first];
+        if (!sm) return { ok: false };
+        h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.speed = 30;
+        window.__nfAdvance(0.2, "idle");
+        return { ok: true, phase: s.phase, place: s.race.place, mode: s.result && s.result.mode };
+      });
+      const pwOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+      const pwCard = await page.evaluate(() => {
+        const card = document.querySelector(".nf-overlay .nf-card");
+        const best = (card?.querySelector(".nf-best")?.textContent || "").trim();
+        const body = (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim();
+        return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim() };
+      });
+      check(P, "Pine Woods finish -> results: place, Pine Woods 4.4 km, course race best, no Wave text", pwOver && pwFin.ok && pwFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(pwCard.title) && /Pine Woods · 4\.4 km course/.test(pwCard.text) && !/wave/i.test(pwCard.text) && /^Pine Woods best P[1-4] · \d+:\d{2}/.test(pwCard.best), JSON.stringify({ pwFin, pwCard }));
+      creditsBefore = (await cardBank()).credits;
+      await page.screenshot({ path: `${SHOTS}/${P}-woods-results.png` });
+      await page.click("button:has-text('Title')");
+      await page.waitForSelector(".nf-carpick");
+      await page.click("[aria-label='Previous stage']");
+    }
     await page.click("[aria-label='Previous stage']");
     const backTo = await page.textContent(".nf-stagepick .nf-carpick-name");
     // wave stages keep the old best line (score/wave record), not a course race best

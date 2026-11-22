@@ -33,7 +33,7 @@ export const WOODS_COUNTS = {
 /** Set pieces. Shed: 30 x 20 m footprint, rotated so its long side runs along the road and its open (-Z) side faces
  *  the road; near wall at lx 13.5 (just off the 12 m carriageway). Lookout ~55 m ahead of the finish shot pose. */
 export const WOODS_SET = {
-  shed: { s: 150, lx: 23.5, ry: -Math.PI / 2 },
+  shed: { s: 150, lx: 23.5, ry: Math.PI / 2 },
   loader: { s: 2400, lx: 16, ry: -0.35 },
   lookout: { s: 4410, lx: 16 },
   cabin: { s: 4390, lx: -17, ry: 0.26 },
@@ -131,7 +131,7 @@ export function woodsPlacements(): WoodsPlace[] {
   }
   // fork medians: kit jersey every 4 m, a guardrail terminal at each end
   for (const m of PINE_WOODS.medians) {
-    for (let s = m.s0; s <= m.s1; s += 4) add("barrier_jersey_4m", s, 0, 0, { ground: false });
+    for (let s = m.s0; s < m.s1; s += 4) add("barrier_jersey_4m", s, 0, 0, { ground: false });
     add("coast_guardrail_end_4m", m.s0 - 2, 0, 0, { ground: false });
     add("coast_guardrail_end_4m", m.s1 + 2, 0, Math.PI, { ground: false });
   }

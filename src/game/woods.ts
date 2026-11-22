@@ -64,10 +64,62 @@ export function woodsPineGeometry(name: "woods_pine_a" | "woods_pine_b", far: bo
   return found;
 }
 
+/**
+ * Over-road beams outside the hide-able children: the bridge module's 3 tie beams (y 7.8-8.0, z -10/0/10, 24 tris) and
+ * the portal lintel (y 8.4-8.6, 8 tris) sit in the root mesh, so with tunnel_roof / portal_crown hidden they still cut
+ * the 13.5 m chase cam -> hero line under the bridge (pinewoods-v1 bridge-under shot). Once at first build, triangles
+ * over the carriageway (|x| < 11.5, centroid y > 3) move into a mesh parented to the roof / crown node, so the same
+ * hide takes them. Visual only; the rest of the module (walls, lamps) is untouched. Per piece: [triangles moved].
+ */
+export const beamSplit: Record<string, number> = {};
+function splitBeams() {
+  for (const [piece, node] of [["woods_covered_bridge_40", "tunnel_roof"], ["woods_covered_bridge_portal", "portal_crown"]] as const) {
+    if (beamSplit[piece] != null) continue;
+    const src = getPiece(piece);
+    if (!src) continue;
+    beamSplit[piece] = 0;
+    let host: THREE.Object3D | null = null;
+    src.traverse((o) => { if (o.name === node) host = o; });
+    const meshes: THREE.Mesh[] = [];
+    src.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && !inNode(o, node) && (m.material as THREE.Material).name === "kit") meshes.push(m); });
+    for (const m of meshes) {
+      if (!host) break;
+      const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry;
+      const pos = g.getAttribute("position");
+      const keep: number[] = [];
+      const move: number[] = [];
+      for (let t = 0; t < pos.count; t += 3) {
+        let x = 0, y = 0;
+        for (let k = 0; k < 3; k++) { x += pos.getX(t + k) / 3; y += pos.getY(t + k) / 3; }
+        (Math.abs(x) < 11.5 && y > 3 ? move : keep).push(t);
+      }
+      if (!move.length) continue;
+      const pick = (list: number[]) => {
+        const out = new THREE.BufferGeometry();
+        for (const name of ["position", "normal", "uv"]) {
+          const a = g.getAttribute(name);
+          if (!a) continue;
+          const arr = new Float32Array(list.length * 3 * a.itemSize);
+          list.forEach((t, i) => { for (let k = 0; k < 3 * a.itemSize; k++) arr[i * 3 * a.itemSize + k] = (a.array as Float32Array)[t * a.itemSize + k]; });
+          out.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize));
+        }
+        return out;
+      };
+      m.geometry = pick(keep);
+      const beams = new THREE.Mesh(pick(move), m.material);
+      beams.name = `${node}_beams`;
+      // host (roof / crown node) and the root mesh share the module frame (both identity in the GLB)
+      (host as THREE.Object3D).add(beams);
+      beamSplit[piece] += move.length;
+    }
+  }
+}
+
 export function buildWoodsChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, ox: number, oz: number,
   c: ChunkCourse): WoodsChunkOut {
   const out: WoodsChunkOut = { roof: null, pines: [], placed: [] };
   if (!woodsReady()) return out;
+  splitBeams();
   const parts: Parts = new Map();
   const detail: Parts = new Map();
   const roofParts: Parts = new Map();

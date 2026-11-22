@@ -171,6 +171,8 @@ export type Car = {
   bumpCd: number[];
   /** BN-17: contact cooldown against Pine Woods logging trucks */
   truckCd: number;
+  /** BN-17: lane a rival is sliding to round a truck (NaN = none) */
+  avoidLane: number;
   /** Surface under the car this frame: "" | sand id (SD1..) | wash id while on (W1..). Coast Road only. */
   surf: string;
   /** Rival-only speed deficit from sand / wave wash (m/s below cruise). 0 off Coast Road. */
@@ -614,6 +616,7 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     offT: 0,
     bumpCd: [],
     truckCd: 0,
+    avoidLane: NaN,
     surf: "",
     surfDef: 0,
     respawnsLeft: 0,
@@ -805,7 +808,10 @@ export function begin(sim: Sim) {
   sim.events.length = 0;
   armRace(sim);
   sim.trucks = sim.race.armed ? freshTrucks(sim.stageId) : [];
-  for (const c of sim.cars) c.truckCd = 0;
+  for (const c of sim.cars) {
+    c.truckCd = 0;
+    c.avoidLane = NaN;
+  }
   if (sim.race.armed) toast(sim, RACE_FIELD_TOAST, true);
   else toast(sim, "Hunters inbound. Survive.", true);
 }
@@ -1443,19 +1449,18 @@ function avoidTrucks(sim: Sim, car: Car, dt: number) {
   const race = car.along - sim.race.originAlong;
   const course = courseFor(sim.stageId);
   const med = course ? medianAt(course, race) || medianAt(course, race + 40) : null;
+  const free = (l: number) => !truckAhead(sim.trucks, race, l, 60);
+  const side = Math.sign(car.lane) || -1;
   const t = truckAhead(sim.trucks, race, car.lane);
-  const lanes = [-9, -3, 3, 9];
-  const nearest = lanes.reduce((a, b) => (Math.abs(b - car.lane) < Math.abs(a - car.lane) ? b : a));
-  let want = nearest;
-  if (t) {
-    const opts = [nearest - 6, nearest + 6]
-      .filter((l) => l >= -9 && l <= 9)
-      .filter((l) => !med || Math.sign(l) === Math.sign(nearest))
-      .filter((l) => !truckAhead(sim.trucks, race, l, 60))
-      .sort((a, b) => Math.abs(a) - Math.abs(b));
-    if (opts.length) want = opts[0];
+  if (t && (Number.isNaN(car.avoidLane) || !free(car.avoidLane))) {
+    const opts = [t.lane - 6, t.lane + 6]
+      .filter((l) => l >= -9 && l <= 9 && (!med || Math.sign(l) === side) && free(l))
+      .sort((a, b) => Math.abs(a - car.lane) - Math.abs(b - car.lane));
+    car.avoidLane = opts.length ? opts[0] : NaN;
   }
-  car.lane += clamp(want - car.lane, -6 * dt, 6 * dt);
+  if (Number.isNaN(car.avoidLane)) return;
+  car.lane += clamp(car.avoidLane - car.lane, -6 * dt, 6 * dt);
+  if (Math.abs(car.lane - car.avoidLane) < 0.01 && !t) car.avoidLane = NaN;
 }
 
 function passGates(sim: Sim, car: Car, prevAlong: number, nowAlong: number, lat: number) {
