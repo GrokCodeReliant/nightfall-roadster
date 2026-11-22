@@ -19,11 +19,11 @@ const PIECES: [string, string][] = [
   ["city", "facade_ledge_12"], ["city", "facade_signbox_12"], ["city", "facade_inset_12"],
   ["city", "bollard"], ["city", "vending_box"], ["city", "trash_bin"],
   ["city", "utility_cabinet"], ["city", "cable_run_12"], ["city", "hydrant"],
-  // Facade pass v3 trim + v4 street-prop polish (art/nightfall-nightcity-v4-20261121)
+  // Facade pass v3 trim + v4 street-prop polish (art/nightfall-nightcity-v4-20261121) + v4-lite awning/parapet/shelter/scooter (art/nightfall-nightcity-v4lite-20261121)
   ["city", "facade_fins_12_v3"], ["city", "facade_balcony_12_v3"], ["city", "facade_ac_12_v3"],
-  ["city", "facade_ledge_12_v3"], ["city", "facade_awning_12_v4"], ["city", "facade_parapet_12_v4"],
-  ["city", "streetlight_city_12m_v4"], ["city", "bus_shelter_4m_v4"], ["city", "planter_box_v4"],
-  ["city", "kiosk_2m_v4"], ["city", "scooter_parked_v4"], ["city", "bollard_v4"],
+  ["city", "facade_ledge_12_v3"], ["city", "facade_awning_12_v4lite"], ["city", "facade_parapet_12_v4lite"],
+  ["city", "streetlight_city_12m_v4"], ["city", "bus_shelter_4m_v4lite"], ["city", "planter_box_v4"],
+  ["city", "kiosk_2m_v4"], ["city", "scooter_parked_v4lite"], ["city", "bollard_v4"],
   ["city", "billboard_roof_12x6"], ["city", "billboard_wall_8x4"],
   ["city", "neon_arrow"], ["city", "neon_ring"], ["city", "neon_bar"], ["city", "neon_cup"], ["city", "neon_bolt"], ["city", "neon_bowl"],
   // Week I shared drop (art/nightfall-shared-20261120): citycourse already places these ids
@@ -268,7 +268,7 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       const frontLx = side * (half + 12.35);
       const bays = front === 12 ? [0] : [-6, 6];
       add(`bldg_base_${key}`, p, lx, 0.22, 0, ry);
-      for (const bz of bays) add("facade_awning_12_v4", p, frontLx, 0.22, bz, ry);
+      for (const bz of bays) add("facade_awning_12_v4lite", p, frontLx, 0.22, bz, ry);
       for (let f = 1; f < floors; f++) {
         add(`bldg_mid_${key}`, p, lx, 0.22 + 12 * f, 0, ry);
         if (!trim) continue;
@@ -280,7 +280,7 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
         }
       }
       add(`bldg_top_${key}`, p, lx, 0.22 + 12 * floors, 0, ry);
-      for (const bz of bays) add("facade_parapet_12_v4", p, frontLx, 0.22 + 12 * floors, bz, ry);
+      for (const bz of bays) add("facade_parapet_12_v4lite", p, frontLx, 0.22 + 12 * floors, bz, ry);
       if (trim && trim !== "facade_balcony_12_v3") add("facade_signbox_12", p, frontLx, 0.22, bays[0], ry);
       if (rnd(index * 17 + n * 3 + side) < 0.6) {
         const ns = ["neon_arrow", "neon_ring", "neon_bar", "neon_cup", "neon_bolt", "neon_bowl"][Math.floor(rnd(index * 23 + n) * 6)];
@@ -303,14 +303,14 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
       add("bollard_v4", p, -(half + 1.7), 0.22, 0, Math.PI);
     }
     // 1 shelter, alternate sides; 4 planters; 1 kiosk; 3–4 scooters
-    add("bus_shelter_4m_v4", mid, (index % 2 ? 1 : -1) * (half + 4.2), 0.22, 8, index % 2 ? Math.PI : 0);
+    add("bus_shelter_4m_v4lite", mid, (index % 2 ? 1 : -1) * (half + 4.2), 0.22, 8, index % 2 ? Math.PI : 0);
     for (const [sx, sz] of [[1, -12], [1, 12], [-1, -4], [-1, 16]] as [number, number][]) {
       add("planter_box_v4", mid, sx * (half + 3.4), 0.22, sz, 0);
     }
     add("kiosk_2m_v4", mid, (index % 2 ? -1 : 1) * (half + 9.6), 0.22, index % 2 ? -6 : 14, index % 2 ? 0 : Math.PI);
     for (const [sx, sz, yaw] of [[1, -4, Math.PI], [1, 16, Math.PI], [-1, 2, 0], [-1, 18, 0]] as [number, number, number][]) {
       if (sx < 0 && index % 3 === 0) continue;
-      add("scooter_parked_v4", mid, sx * (half + 2.6), 0.22, sz, yaw);
+      add("scooter_parked_v4lite", mid, sx * (half + 2.6), 0.22, sz, yaw);
     }
     if (rnd(index * 11 + 3) < 0.5) {
       add("vending_box", mid, half + 10.4, 0.22, -8, Math.PI);
@@ -412,11 +412,15 @@ export function buildCityChunk(group: THREE.Group, index: number, at: (k: number
   return lamp;
 }
 
-/** Pieces a far desktop chunk may skip (drawRange): street props, v4 awnings/parapets and v3 facade trim. Buildings, lamps, neon stay. */
+/**
+ * Pieces a far desktop chunk may skip (drawRange): small dark street props, parapets and v3 facade trim. Buildings, lamps, neon,
+ * awnings, shelters, kiosks and sign boxes stay: the pale awning canvas and the amber shelter/kiosk read through the fog at 120-160 m,
+ * so trimming them was a visible pop at the boundary (v4-lite pop check).
+ */
 export const CITY_DETAIL = new Set([
-  "facade_awning_12_v4", "facade_parapet_12_v4", "bollard_v4", "planter_box_v4", "scooter_parked_v4", "kiosk_2m_v4", "bus_shelter_4m_v4",
+  "facade_parapet_12_v4lite", "scooter_parked_v4lite", "bollard_v4", "planter_box_v4",
   "vending_box", "trash_bin", "utility_cabinet", "cable_run_12", "hydrant",
-  "facade_fins_12_v3", "facade_balcony_12_v3", "facade_ac_12_v3", "facade_ledge_12_v3", "facade_signbox_12",
+  "facade_fins_12_v3", "facade_balcony_12_v3", "facade_ac_12_v3", "facade_ledge_12_v3",
 ]);
 
 /** Show (full) or hide (core only) a built chunk's CITY_DETAIL range. No draw-count change either way. */
