@@ -108,6 +108,14 @@ for (const prof of profiles) {
   // start: rollout
   await page.waitForFunction(() => { const e = window.__nfEnemies(); return ["rammer", "gunner", "mine", "spiker", "drone", "boss"].every((k) => e[k] !== "loading"); }, null, { timeout: 90000 });
   await page.waitForTimeout(1500); // let the rig GLB finish too
+  // Credits banked per finish must equal what the results card shows (race purse) or floor(score/10) (waves)
+  const cardBank = () => page.evaluate(() => {
+    const card = document.querySelector(".nf-overlay .nf-card");
+    const num = (q) => { const m = (card?.querySelector(q)?.textContent || "").match(/-?\d+/); return m ? Number(m[0]) : null; };
+    const score = [...(card?.querySelectorAll(".nf-rows div") || [])].find((d) => /score/i.test(d.textContent || ""))?.querySelector("strong")?.textContent;
+    return { purse: num(".nf-race-purse"), lives: num(".nf-race-lives"), credits: num(".nf-credits"), score: score == null ? null : Number(score), title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim() };
+  });
+  let creditsBefore = await page.evaluate(() => Number(((document.querySelector(".nf-launch .nf-credits")?.textContent) || "").match(/\d+/)?.[0] ?? NaN));
   await page.click(".nf-btn");
   await page.waitForSelector(".nf-hud");
   const r0 = await page.evaluate(() => window.__nfRollout());
@@ -227,6 +235,12 @@ for (const prof of profiles) {
     return { text: (card?.textContent || "").replace(/\s+/g, " ").trim(), place: card?.querySelector(".nf-row-place strong")?.textContent?.trim() || "", time: row(".nf-row-time"), best: (card?.querySelector(".nf-best")?.textContent || "").trim() };
   });
   check(P, "NC results: no Wave text, shows Place + Finish time (best line has no wave 0)", !!ncCard.text && !/wave/i.test(ncCard.text) && /^P[1-4]$/.test(ncCard.place) && /^Finish time\s*\d+:\d{2}/.test(ncCard.time) && /course/i.test(ncCard.text) && !/wave 0/i.test(ncCard.best), JSON.stringify(ncCard));
+  {
+    const c = await cardBank();
+    const shown = (c.purse ?? 0) + (c.lives ?? 0);
+    check(P, "NC finish banks the shown purse: credits gained == purse + lives bonus", c.purse != null && c.purse > 0 && c.credits - creditsBefore === shown, JSON.stringify({ before: creditsBefore, ...c, shown, gained: c.credits - creditsBefore }));
+    creditsBefore = c.credits;
+  }
   await menuFit(page, P, "race results", ".nf-overlay");
   if (P === "phone") {
     await page.click(".nf-foot >> text=Shop");
@@ -248,6 +262,11 @@ for (const prof of profiles) {
   await page.evaluate(() => { const s = window.__nf; s.lives = 1; });
   await page.evaluate(() => { for (let i = 0; i < 400 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
   await page.waitForSelector("text=Run it again", { timeout: 30000 });
+  {
+    const c = await cardBank();
+    check(P, "NC DNF banks the shown 25 (no lives bonus)", /^(DNF|Fell behind the field)$/.test(c.title) && c.purse === 25 && c.lives == null && c.credits - creditsBefore === 25, JSON.stringify({ before: creditsBefore, ...c, gained: c.credits - creditsBefore }));
+    creditsBefore = c.credits;
+  }
   await page.click("button:has-text('Title')");
   await page.waitForSelector(".nf-carpick");
   await page.click("[aria-label='Next car']");
@@ -260,13 +279,17 @@ for (const prof of profiles) {
   const again = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); return { m: window.__nf.cars[0].along - a, car: window.__nfCar().file, stage: window.__nfStageInfo().stage, kills: window.__nf.takedowns, lives: window.__nf.lives }; });
   check(P, "title -> new car + stage -> plays", again.m > 10 && again.stage === "classic" && again.car === `${EXPECT[pick.car].file}_phone` && again.lives === 3, `${pick.car} / ${pick.stage}: ${JSON.stringify(again)}`);
   // Classic Night is still the wave loop: a lethal hit with no lives left is Wrecked, then retry spawns no field.
-  await page.evaluate(() => { const s = window.__nf; s.lives = 1; const h = s.cars[0]; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = 0.01; });
+  await page.evaluate(() => { const s = window.__nf; s.lives = 1; s.score = Math.max(s.score, 537); const h = s.cars[0]; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = 0.01; }); // non-zero score so the floor(score/10) bank is visible
   await page.evaluate(() => { for (let i = 0; i < 80 && window.__nf.phase === "playing"; i++) { const h = window.__nf.cars[0]; if (h.alive) { h.invuln = 0; h.hp = Math.min(h.hp, 0.01); } window.__nfAdvance(0.5, "idle"); } });
   const wreckOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
   const wv = await page.evaluate(() => ({ phase: window.__nf.phase, title: (document.querySelector(".nf-card .nf-title-sm")?.textContent || "").trim() }));
   check(P, "wrecked game over", wreckOver && wv.phase === "finished" && wv.title.includes("Wrecked"), JSON.stringify(wv));
   const wvCard = await page.evaluate(() => (document.querySelector(".nf-overlay .nf-card")?.textContent || "").replace(/\s+/g, " ").trim());
   check(P, "wave-mode results still show Wave (kicker + Wave reached row), no Place row", /· wave \d+/i.test(wvCard) && /Wave reached\s*\d+/i.test(wvCard) && !/Finish time/.test(wvCard) && !(await page.$(".nf-overlay .nf-row-place")), wvCard);
+  {
+    const c = await cardBank();
+    check(P, "wave-mode wreck still banks floor(score/10), no purse shown", c.purse == null && c.score > 0 && c.credits - creditsBefore === Math.floor(c.score / 10), JSON.stringify({ before: creditsBefore, ...c, gained: c.credits - creditsBefore }));
+  }
   await menuFit(page, P, "wrecked game over", ".nf-overlay");
   await page.click("text=Run it again");
   await page.waitForSelector(".nf-hud");

@@ -7,7 +7,7 @@ import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode }
 import { botKeys } from "./bot";
 import { nextPiece, poseAt, queryTrack } from "./road";
 import { dismissBuild, useUpdateBanner } from "./update";
-import { SHOP_CATALOG, bankRun, buyUpgrade, emptyShop, highwayPurse, sanitizeShop, shopComing, shopOwned, shopPrice, type ShopId, type ShopSave } from "./shop";
+import { SHOP_CATALOG, bankFinish, buyUpgrade, emptyShop, sanitizeShop, shopComing, shopOwned, shopPrice, type ShopId, type ShopSave } from "./shop";
 import { CARS, STAGES, createWorld, type CarId, type StageId } from "./world";
 import { courseFor } from "./course";
 
@@ -479,13 +479,8 @@ export function RoadsterGame() {
           sim.banked = true;
           setResult(sim.result);
           const prev = loadSave();
-          const highway = sim.stageId === "highway" && sim.race.armed;
-          const bank = bankRun(
-            prev.credits,
-            sim.result.score,
-            false,
-            highway ? { highway: true, purse: highwayPurse(sim.result), lives: sim.lives } : null,
-          );
+          // Any race (Open Highway or a course like Night City) banks the purse the results card shows.
+          const bank = bankFinish(prev.credits, sim.result, sim.lives);
           const waveRun = sim.result.mode !== "race";
           const next = writeSave({
             bestScore: Math.max(prev.bestScore, sim.result.score),

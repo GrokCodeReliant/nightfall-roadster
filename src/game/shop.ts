@@ -107,6 +107,27 @@ export function bankRun(
   return { credits: base + gained, gained };
 }
 
+/** What a results card shows as the race purse: place purse plus the lives bonus. null when no purse is shown. */
+export function shownPurse(result: { purse?: number; livesBonus?: number } | null | undefined): number | null {
+  if (!result || result.purse == null) return null;
+  return result.purse + (result.livesBonus ?? 0);
+}
+
+/**
+ * Bank a finished run. Every RaceTrial (Open Highway and authored courses like Night City, result.mode "race")
+ * banks the purse its results card shows, through the same highway path: place table + lives bonus,
+ * DNF 25 with no lives bonus. Wave runs bank floor(score/10) as before.
+ */
+export function bankFinish(
+  credits: number,
+  result: { score: number; mode?: "race" | "waves"; reason?: string; place?: number },
+  lives: number,
+  already = false,
+) {
+  const race = result.mode === "race";
+  return bankRun(credits, result.score, already, race ? { highway: true, purse: highwayPurse(result), lives } : null);
+}
+
 export type BuyResult = { ok: boolean; credits: number; shop: ShopSave; toast: string };
 
 function clampInt(v: unknown, min: number, max: number, fallback: number) {
