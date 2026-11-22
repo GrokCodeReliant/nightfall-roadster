@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { CAR_LOD_FAR, carLodFar } from "./carlod";
-import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityReady, roughHook, roadTilesFit } from "./city";
+import { loadCity, loadRoadKit, roadKitReady, getPiece, buildCityChunk, cityDetailRange, cityReady, roughHook, roadTilesFit } from "./city";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -1031,6 +1031,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const CHUNK = SEG * STEP;
   const BEHIND = 2;
   const AHEAD = coarse ? 7 : 9;
+  /** desktop Night City dressing window (chunks ahead of the hero's chunk); the phone window is c-1..c+3 */
+  const CITY_AHEAD_DESKTOP = 5;
+  /** desktop: chunks further ahead than this draw without CITY_DETAIL (props, awnings, parapets, facade trim); past ~120 m the fog hides >55%, ~80-120 m about 30-55% */
+  const CITY_DETAIL_AHEAD = 2;
   const POOL = BEHIND + AHEAD + 1;
   const BLD_PER = 4;
   const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
@@ -1263,9 +1267,13 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const c = Math.floor(along / CHUNK);
     const lo = Math.max(0, c - BEHIND);
     const hi = c + AHEAD;
-    // Phone keeps the road stream and drops city dressing outside a short window. Desktop still builds every streamed chunk.
+    // Phone keeps the road stream and drops city dressing outside a short window. Desktop dresses up to CITY_AHEAD_DESKTOP
+    // chunks ahead: past ~200 m the Night City fog (exp2 0.0075) hides ~90% of a chunk, so the last streamed chunks only cost
+    // triangles (props v4 trim: offsets the v4 prop tris on desktop). The road itself still streams AHEAD.
     const cityLo = coarse ? Math.max(0, c - 1) : lo;
-    const cityHi = coarse ? c + 3 : hi;
+    // (Night City only: the trim is sized to the NC fog; Coast Road's lighter sea fog keeps its full desktop stream so the
+    // coastline / lighthouse do not pop in, and its tri budget already fits with car LOD)
+    const cityHi = coarse ? c + 3 : stage === "coast" ? hi : Math.min(hi, c + CITY_AHEAD_DESKTOP);
     const have = new Set<number>();
     for (const ch of chunks) {
       if (ch.index >= lo && ch.index <= hi) have.add(ch.index);
@@ -1297,6 +1305,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       for (const ch of chunks) {
         if (ch.index < 0) continue;
         ch.city.visible = ch.index >= cityLo && ch.index <= cityHi;
+        // desktop: chunks past CITY_DETAIL_AHEAD draw only their core range (no CITY_DETAIL props/trim); phone unchanged
+        if (!coarse && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
         if (!ch.lamp) continue;
         const col = gateColor(now + ch.index);
         ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
