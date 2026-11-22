@@ -2,6 +2,8 @@
 // Visual placement only. BN-12 (zone-driven track generation) is not in yet, so zones are read from course s and
 // the track's own ramp/deck pieces stay where road.ts puts them.
 
+import { PW_LEN, PW_ZONES } from "./woodscourse";
+
 /** Hero start (sim START_S). Course s = along - START. */
 export const COURSE_START = 140;
 /** Run-out after the finish gantry before the course wraps (endless loop). Multiple of 40 keeps chunk alignment. */
@@ -53,10 +55,10 @@ export function zoneOf(zones: Zone[], len: number, s: number) {
 }
 
 /** course context for a 40 m chunk starting at track distance along0 */
-export function chunkCourse(stage: "city" | "coast", along0: number, chunk: number, step: number,
+export function chunkCourse(stage: "city" | "coast" | "woods", along0: number, chunk: number, step: number,
   flatAt: (k: number) => boolean, rampStarts: number[]): ChunkCourse {
-  const zones = stage === "city" ? NC_ZONES : CR_ZONES;
-  const len = stage === "city" ? NC_LEN : CR_LEN;
+  const zones = stage === "city" ? NC_ZONES : stage === "woods" ? PW_ZONES : CR_ZONES;
+  const len = stage === "city" ? NC_LEN : stage === "woods" ? PW_LEN : CR_LEN;
   const cyc = len + RUNOUT;
   const raw = along0 - COURSE_START;
   const lap = raw < 0 ? 0 : Math.floor(raw / cyc);

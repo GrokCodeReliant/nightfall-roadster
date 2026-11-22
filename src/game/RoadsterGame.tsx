@@ -281,6 +281,7 @@ export function RoadsterGame() {
         __nfProjectXYZ: (x: number, y: number, z: number) => world.projectPoint(x, y, z),
         __nfCoastFix: () => ({ ...swatchLog, lighthouse: LIGHTHOUSE }),
         __nfStageInfo: () => world.stageInfo(),
+        __nfWoods: () => ({ ...world.woodsInfo(), trucksSim: sim.trucks.map((t) => ({ id: t.id, s: Math.round(t.s), lat: +t.lat.toFixed(2), alive: t.alive, done: t.done })) }),
         __nfScene: () => world.sceneInfo(),
         __nfAudio: () => audio.stats(),
         __nfRolloutSet: (t: number) => world.rolloutSeek(t),

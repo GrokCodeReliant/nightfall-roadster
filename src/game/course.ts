@@ -3,6 +3,7 @@
  * Engine absolute s = COURSE_ORIGIN + race s (hero begin() along).
  * Night City layout: docs/levels/01_night_city.md v1.1.
  * Coast Road layout: LEVELS/02_coast_road.md v1.1 (locked).
+ * Pine Woods layout: LEVELS/03_pine_woods.md v1.0 (locked).
  */
 export const COURSE_ORIGIN = 140;
 export const COURSE_RUNOUT = 300;
@@ -127,7 +128,55 @@ export const COAST_ROAD: Course = {
   ],
 };
 
-const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD };
+/** Locked Pine Woods section table (LEVELS/03_pine_woods.md §1). Lat < 0 is the driver's left (L1/L2). */
+export const PINE_WOODS: Course = {
+  id: "woods",
+  length: 4400,
+  runout: COURSE_RUNOUT,
+  width: 24,
+  medians: [
+    { s0: 1360, s1: 1740, half: 0.3 },
+    { s0: 2520, s1: 2850, half: 0.3 },
+  ],
+  sections: [
+    { id: "PW-0", type: "road", s0: 0, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "mill", curves: [] },
+    { id: "PW-1", type: "road", s0: 300, len: 340, width: 24, edgeL: "soft", edgeR: "soft", zone: "fern", curves: [curve(300, 340, -400)] },
+    { id: "PW-1a", type: "road", s0: 640, len: 60, width: 24, edgeL: "soft", edgeR: "soft", zone: "fern", curves: [] },
+    { id: "PW-2", type: "ramp", s0: 700, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "ridge", curves: [] },
+    { id: "PW-3", type: "road", s0: 850, len: 500, width: 24, edgeL: "soft", edgeR: "soft", zone: "haul", curves: [curve(850, 500, 900)] },
+    { id: "PW-4", type: "split", s0: 1350, len: 400, width: 24, edgeL: "soft", edgeR: "soft", zone: "fork-a", curves: [curve(1350, 400, 300)] },
+    { id: "PW-5", type: "tunnel", s0: 1750, len: 160, width: 24, edgeL: "rail", edgeR: "rail", zone: "bridge", curves: [] },
+    {
+      id: "PW-6",
+      type: "road",
+      s0: 1910,
+      len: 340,
+      width: 24,
+      edgeL: "soft",
+      edgeR: "soft",
+      zone: "hollow",
+      curves: [curve(1910, 170, 250), curve(2080, 170, -250)],
+    },
+    { id: "PW-6a", type: "road", s0: 2250, len: 60, width: 24, edgeL: "soft", edgeR: "soft", zone: "hollow", curves: [] },
+    { id: "PW-7", type: "ramp", s0: 2310, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "clearcut", curves: [] },
+    { id: "PW-8", type: "split", s0: 2460, len: 400, width: 24, edgeL: "soft", edgeR: "soft", zone: "fork-b", curves: [] },
+    {
+      id: "PW-9",
+      type: "road",
+      s0: 2860,
+      len: 600,
+      width: 24,
+      edgeL: "rail",
+      edgeR: "rail",
+      zone: "switch",
+      curves: [curve(2860, 200, 200), curve(3060, 200, -200), curve(3260, 200, 300)],
+    },
+    { id: "PW-10", type: "road", s0: 3460, len: 640, width: 24, edgeL: "soft", edgeR: "soft", zone: "sawdust", curves: [curve(3700, 400, -600)] },
+    { id: "PW-11", type: "road", s0: 4100, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "ranger", curves: [] },
+  ],
+};
+
+const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS };
 
 export function courseFor(stageId: string): Course | null {
   return COURSES[stageId] ?? null;
@@ -168,7 +217,7 @@ export type Obstacle = {
   h: number;
 };
 
-const LANE_LAT = { L1: -9, L2: -3, L3: 3, L4: 9 } as const;
+export const LANE_LAT = { L1: -9, L2: -3, L3: 3, L4: 9 } as const;
 const BARRICADE = { latHalf: 2.9, alongHalf: 0.365, h: 1.26 };
 const CAR_ALONG = 1.2;
 const CAR_LAT = 1.15;
@@ -202,7 +251,23 @@ export const COAST_OBSTACLES: Obstacle[] = [
   { id: "RK-2", s: 2290, lat: LANE_LAT.L1, ...ROCK },
 ];
 
-const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES };
+/** Pine Woods fallen-log rows (§5 LOG): log_row_6 collider 6 m lat × 1.2 m along × 1.0 m tall (UCX_log_row_6). */
+const LOG_ROW = { latHalf: 3, alongHalf: 0.6, h: 1.0 };
+const logRow = (id: string, s: number, lane: keyof typeof LANE_LAT): Obstacle => ({ id, s, lat: LANE_LAT[lane], ...LOG_ROW });
+export const WOODS_OBSTACLES: Obstacle[] = [
+  logRow("LOG-A1", 1428, "L2"),
+  logRow("LOG-A2", 1528, "L1"),
+  logRow("LOG-A3", 1628, "L2"),
+  logRow("LOG-H1a", 2000, "L1"),
+  logRow("LOG-H1b", 2000, "L2"),
+  logRow("LOG-H2", 2120, "L3"),
+  logRow("LOG-H3", 2200, "L4"),
+  logRow("LOG-S1", 3000, "L2"),
+  logRow("LOG-S2", 3300, "L3"),
+  logRow("LOG-K4", 3568, "L4"),
+];
+
+const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES, woods: WOODS_OBSTACLES };
 
 export function obstaclesFor(stageId: string): readonly Obstacle[] {
   return OBSTACLES[stageId] ?? [];
@@ -217,6 +282,14 @@ export const NIGHT_CITY_KICKERS: LaneKicker[] = [
 ];
 
 export const COAST_KICKERS: LaneKicker[] = [{ id: "K1", s: 3455, lat: 3, len: 5.3, half: 3 }];
+
+/** Pine Woods log kickers (log_kicker_6 on the ramp_kicker_1m footprint), lip 8 m before the row in the closed lane. */
+export const WOODS_KICKERS: LaneKicker[] = [
+  { id: "LK1", s: 1420, lat: LANE_LAT.L2, len: 5.3, half: 3 },
+  { id: "LK2", s: 1520, lat: LANE_LAT.L1, len: 5.3, half: 3 },
+  { id: "LK3", s: 1620, lat: LANE_LAT.L2, len: 5.3, half: 3 },
+  { id: "LK4", s: 3560, lat: LANE_LAT.L4, len: 5.3, half: 3 },
+];
 
 export function laneKickerAt(stageId: string, raceS: number, lat: number): boolean {
   for (const k of stageIdKickers(stageId)) {
@@ -244,7 +317,14 @@ export const COAST_GATES: Gate[] = [
   { id: "G3", s: 3760, side: "both" },
 ];
 
-const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES };
+/** Pine Woods: G1 on the Haul Road, G-B on the gravel (right) side of Firebreak, G3 at the Ranger Finish. */
+export const WOODS_GATES: Gate[] = [
+  { id: "G1", s: 1100, side: "both" },
+  { id: "G-B", s: 2690, side: "right" },
+  { id: "G3", s: 4180, side: "both" },
+];
+
+const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES };
 
 export function gatesFor(stageId: string): readonly Gate[] {
   return GATES[stageId] ?? [];
@@ -277,7 +357,7 @@ export function tunnelClearance(course: Course): { ok: boolean; nearest: string;
   return { ok: true, nearest, gap };
 }
 
-const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS };
+const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS, woods: WOODS_KICKERS };
 
 export function stageIdKickers(id: string): readonly LaneKicker[] {
   return KICKERS[id] ?? [];
@@ -383,9 +463,16 @@ export function burstWindows(stageId: string): [number, number][] {
 
 // ---------------------------------------------------------------- BN-8 surfaces, BN-10 timed zones (Coast Road §5)
 
-/** Lane-wide surface patch. lat is the lane centre; the patch covers lat ± half. */
-export type Surface = { id: string; s0: number; s1: number; lat: number; half: number };
+/** Lane-wide surface patch. lat is the lane centre; the patch covers lat ± half. kind defaults to sand. */
+export type Surface = { id: string; s0: number; s1: number; lat: number; half: number; kind?: "sand" | "gravel" };
 export const SAND = { cap: 34, decel: 14, steerMul: 0.8, gripMul: 1 } as const;
+/** Pine Woods gravel firebreak (§5 GV): cap 36, decel 12 above the cap, steerMul 0.85, no damage. */
+export const GRAVEL = { cap: 36, decel: 12, steerMul: 0.85, gripMul: 1 } as const;
+export const surfaceParams = (p: Surface) => (p.kind === "gravel" ? GRAVEL : SAND);
+export const WOODS_GRAVEL: Surface[] = [
+  { id: "GV1", s0: 2580, s1: 2660, lat: LANE_LAT.L3, half: 3, kind: "gravel" },
+  { id: "GV2", s0: 2720, s1: 2800, lat: LANE_LAT.L4, half: 3, kind: "gravel" },
+];
 export const COAST_SAND: Surface[] = [
   { id: "SD1", s0: 950, s1: 1010, lat: LANE_LAT.L4, half: 3 },
   { id: "SD2", s0: 1280, s1: 1340, lat: LANE_LAT.L1, half: 3 },
@@ -394,7 +481,7 @@ export const COAST_SAND: Surface[] = [
   { id: "SD6", s0: 3150, s1: 3190, lat: LANE_LAT.L3, half: 3 },
   { id: "SD7", s0: 3460, s1: 3490, lat: LANE_LAT.L3, half: 3 },
 ];
-const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND };
+const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL };
 export function sandFor(stageId: string): readonly Surface[] {
   return SANDS[stageId] ?? [];
 }

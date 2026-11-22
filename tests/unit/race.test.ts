@@ -95,8 +95,8 @@ test("highway begin arms the race field and a 30 m/s pace; other stages do not",
   assert.equal(highway.phase, "playing");
   assert.equal(highway.wave, 0);
 
-  // Night City and Coast Road are authored races (nightcity.test.ts, coastroad.test.ts). Classic and the other placeholders stay endless.
-  for (const id of ["", "classic", "woods", "port", "pass"]) {
+  // Night City, Coast Road and Pine Woods are authored races (nightcity / coastroad / woodsroad tests). Classic and the other placeholders stay endless.
+  for (const id of ["", "classic", "port", "pass"]) {
     const sim = createSim();
     sim.stageId = id;
     begin(sim);

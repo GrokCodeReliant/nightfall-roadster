@@ -9,6 +9,9 @@ import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./r
 import { courseFor, washFor, washPhase } from "./course";
 import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type CoastCrown } from "./coast";
 import { chunkCourse } from "./coastcourse";
+import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, loadWoods, makeTruckMesh, woodsPineGeometry, woodsReady } from "./woods";
+import { woodsFog } from "./woodscourse";
+import { TRUCK } from "./trucks";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
 type CarView = {
@@ -155,6 +158,8 @@ export type World = {
   setStage: (id: StageId) => void;
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
+  /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
+  woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
   stopRollout: () => void;
@@ -1052,8 +1057,13 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   type Chunk = {
     index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null;
     roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; crown: CoastCrown[];
+    /** Pine Woods: this chunk's pine placements (world matrices) for the shared stand InstancedMeshes */
+    pines: { b: boolean; m: THREE.Matrix4 }[];
   };
   const chunks: Chunk[] = [];
+  /** Pine Woods: near A, near B, lod_far A, lod_far B stands (world-level InstancedMeshes) and the logging truck pool */
+  const pineStands: THREE.InstancedMesh[] = [];
+  const trucks: THREE.Group[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshStandardMaterial({ color: 0x141820, roughness: 0.9, metalness: 0.08 }),
@@ -1072,7 +1082,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     };
     const city = new THREE.Group();
     scene.add(city);
-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [] });
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [], pines: [] });
   }
   loadRoadKit();
   let kitRoads: THREE.InstancedMesh[] | null = null;
@@ -1080,15 +1090,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   // ---------------------------------------------------------------- stages: city keeps the GLB kit; every other id uses Classic procedural buildings plus its own sky/fog
   let stage: StageId = "city";
   let gateBoost = 0;
-  /** Stages dressed by a GLB kit (Night City, Coast Road). Every other id keeps the procedural skyline. */
-  const scenic = () => stage === "city" || stage === "coast";
-  const sceneryReady = () => (stage === "coast" ? coastReady() : cityReady());
+  /** Stages dressed by a GLB kit (Night City, Coast Road, Pine Woods). Every other id keeps the procedural skyline. */
+  const scenic = () => stage === "city" || stage === "coast" || stage === "woods";
+  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : cityReady());
   function releaseScenery(ch: Chunk) {
     ch.lamp = null;
     ch.roof = null;
     ch.spin = null;
     ch.wash = [];
     ch.crown = [];
+    ch.pines = [];
     for (const c of [...ch.city.children]) {
       ch.city.remove(c);
       c.traverse((o) => {
@@ -1115,6 +1126,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     seaMat.metalness = coastLook ? 0.2 : 0.72;
     seaMat.roughness = coastLook ? 0.72 : 0.22;
     seaY = coastLook ? -12.4 : -1.6; // just under the -12 cliff water tiles (no z-fight)
+    // Pine Woods: the plane is the forest floor (matte dark green) just under the road at y 0, so ground-level dress
+    // stands on it and the PW-5 river tiles (y -0.03) read under the covered bridge. Colour / height only.
+    if (stage === "woods") {
+      hemi.intensity = 1.25;
+      fill.intensity = 0.5;
+      seaMat.color.setHex(0x16241a);
+      seaMat.metalness = 0;
+      seaMat.roughness = 1;
+      seaY = -0.08;
+    }
     sea.position.y = seaY;
     buildings.visible = !scenic();
     applyRoadLook();
@@ -1126,6 +1147,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     if (stage === "city") loadCity();
     if (stage === "coast") loadCoast();
+    if (stage === "woods") loadWoods();
+    for (const t of trucks) t.visible = false;
+    for (const m of pineStands) m.count = 0;
   }
   function cityChunk(ch: Chunk, sim: Sim) {
     if (!scenic() || ch.index < 0 || ch.built || !sceneryReady()) return;
@@ -1141,6 +1165,18 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       ch.spin = out.spin;
       ch.wash = out.wash;
       ch.crown = out.crown;
+      ch.city.position.set(o.x, 0, o.z);
+      ch.built = true;
+      return;
+    }
+    if (stage === "woods") {
+      releaseScenery(ch);
+      const at = (k: number) => sampleAt(sim.track, i0 + k);
+      const ramps = sim.track.pieces.filter((p) => p.kind === "ramp").map((p) => p.s);
+      const cc = chunkCourse("woods", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
+      const out = buildWoodsChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
+      ch.roof = out.roof;
+      ch.pines = out.pines;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
       return;
@@ -1273,7 +1309,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const cityLo = coarse ? Math.max(0, c - 1) : lo;
     // (Night City only: the trim is sized to the NC fog; Coast Road's lighter sea fog keeps its full desktop stream so the
     // coastline / lighthouse do not pop in, and its tri budget already fits with car LOD)
-    const cityHi = coarse ? c + 3 : stage === "coast" ? hi : Math.min(hi, c + CITY_AHEAD_DESKTOP);
+    // (Pine Woods: exp2 0.012 fog leaves ~2.5% at 160 m, so desktop dresses to c+4 and the pine stands end at 160 m)
+    const cityHi = coarse ? c + 3 : stage === "coast" ? hi : stage === "woods" ? Math.min(hi, c + WOODS_AHEAD_DESKTOP) : Math.min(hi, c + CITY_AHEAD_DESKTOP);
     const have = new Set<number>();
     for (const ch of chunks) {
       if (ch.index >= lo && ch.index <= hi) have.add(ch.index);
@@ -1300,6 +1337,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     placeKitRoads(sim);
     if (stage === "coast") coastFrame(sim);
+    if (stage === "woods") woodsFrame(sim, cityLo, cityHi);
     if (scenic()) {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
@@ -1307,6 +1345,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         ch.city.visible = ch.index >= cityLo && ch.index <= cityHi;
         // desktop: chunks past CITY_DETAIL_AHEAD draw only their core range (no CITY_DETAIL props/trim); phone unchanged
         if (!coarse && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
+        // Pine Woods far trim (both platforms): ferns / stumps / slash / sawdust only within ~120 m (chunk c+2)
+        else if (stage === "woods" && ch.built) cityDetailRange(ch.city, ch.index <= c + CITY_DETAIL_AHEAD);
         if (!ch.lamp) continue;
         const col = gateColor(now + ch.index);
         ch.lamp.parent?.children.forEach((l) => ((l as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(col));
@@ -1343,6 +1383,84 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
+  // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
+  const WOODS_AHEAD_DESKTOP = 4;
+  /** near A, near B, lod_far A, lod_far B: one draw each, rebuilt every frame from the live chunks' pine lists */
+  const PINE_CAP = 512;
+  function ensurePineStands() {
+    if (pineStands.length || !woodsReady()) return;
+    for (const [name, far] of [["woods_pine_a", false], ["woods_pine_b", false], ["woods_pine_a", true], ["woods_pine_b", true]] as const) {
+      const src = woodsPineGeometry(name, far);
+      if (!src) continue;
+      const inst = new THREE.InstancedMesh(src.geo, src.mat, PINE_CAP);
+      inst.name = `${name}${far ? "_lod_far" : ""}`;
+      inst.count = 0;
+      inst.frustumCulled = false;
+      scene.add(inst);
+      pineStands.push(inst);
+    }
+  }
+  function ensureTrucks() {
+    if (trucks.length || !woodsReady()) return;
+    for (let i = 0; i < TRUCK.maxAlive; i++) {
+      const g = makeTruckMesh();
+      if (!g) return;
+      g.visible = false;
+      scene.add(g);
+      trucks.push(g);
+    }
+  }
+  /** debug / smoke: what the woods frame drew last */
+  const woodsStat = { near: 0, far: 0, roofHidden: false, trucks: 0, fog: 0 };
+  function woodsFrame(sim: Sim, cityLo: number, cityHi: number) {
+    ensurePineStands();
+    ensureTrucks();
+    const hero = sim.cars[0];
+    const heroS = hero.along - sim.race.originAlong;
+    // pine LOD: near mesh inside 120 m, lod_far 120-160 m, nothing past 160 m (fog ~97%)
+    const counts = [0, 0, 0, 0];
+    if (pineStands.length === 4) {
+      for (const ch of chunks) {
+        if (ch.index < cityLo || ch.index > cityHi || !ch.built) continue;
+        for (const p of ch.pines) {
+          const e = p.m.elements;
+          const d = Math.hypot(e[12] - hero.x, e[14] - hero.z);
+          if (d > PINE_LOD.far) continue;
+          const k = (d > PINE_LOD.near ? 2 : 0) + (p.b ? 1 : 0);
+          if (counts[k] >= PINE_CAP) continue;
+          pineStands[k].setMatrixAt(counts[k]++, p.m);
+        }
+      }
+      pineStands.forEach((m, k) => {
+        m.count = counts[k];
+        m.instanceMatrix.needsUpdate = true;
+      });
+    }
+    woodsStat.near = counts[0] + counts[1];
+    woodsStat.far = counts[2] + counts[3];
+    // covered bridge: tunnel_roof + portal_crown hidden while the chase cam or the hero is under the bridge
+    const camS = heroS - Math.hypot(camera.position.x - hero.x, camera.position.z - hero.z);
+    const under = sim.race.armed && heroS >= BRIDGE_HIDE[0] && camS <= BRIDGE_HIDE[1];
+    woodsStat.roofHidden = under;
+    for (const ch of chunks) if (ch.roof) ch.roof.visible = !under;
+    // BN-20 fog hollow (PW-6): 0.012 -> 0.016
+    const fog = sim.race.armed ? woodsFog(heroS) : 0.012;
+    (scene.fog as THREE.FogExp2).density = fog;
+    woodsStat.fog = fog;
+    // BN-17 logging trucks (sim.trucks): pose on the course, cab +Z forward
+    let n = 0;
+    for (const t of sim.trucks) {
+      if (!t.alive || n >= trucks.length) continue;
+      const g = trucks[n++];
+      const p = poseAt(sim.track, sim.race.originAlong + t.s);
+      g.position.set(p.x + p.rx * t.lat, p.y, p.z + p.rz * t.lat);
+      g.rotation.set(0, Math.atan2(p.tx, p.tz), 0);
+      g.visible = true;
+    }
+    for (let i = n; i < trucks.length; i++) trucks[i].visible = false;
+    woodsStat.trucks = n;
+  }
+
   let beamYaw = 0;
   function coastFrame(sim: Sim) {
     const now = performance.now() / 1000;
@@ -2163,6 +2281,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       applyStage();
     },
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
+    woodsInfo: () => ({ ...woodsStat, stands: pineStands.length, truckPool: trucks.length, roofs: chunks.filter((c) => c.roof).length }),
     startRollout,
     skipRollout,
     stopRollout,

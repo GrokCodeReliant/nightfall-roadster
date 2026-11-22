@@ -12,7 +12,8 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, SAND, sandAt, sectionAt, WASH, washAt, washPhase } from "./course";
+import { freshTrucks, stepTrucks, truckAhead, truckObstacle, TRUCK, type Truck } from "./trucks";
+import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sandAt, sectionAt, surfaceParams, WASH, washAt, washPhase } from "./course";
 import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
@@ -167,6 +168,8 @@ export type Car = {
   offT: number;
   /** Per-obstacle contact cooldown (seconds). Indexed like the stage obstacle list. */
   bumpCd: number[];
+  /** BN-17: contact cooldown against Pine Woods logging trucks */
+  truckCd: number;
   /** Surface under the car this frame: "" | sand id (SD1..) | wash id while on (W1..). Coast Road only. */
   surf: string;
   /** Rival-only speed deficit from sand / wave wash (m/s below cruise). 0 off Coast Road. */
@@ -317,6 +320,8 @@ export type Sim = {
   pickups: Pickup[];
   up: Upgrades;
   nextCrate: number;
+  /** BN-17 Pine Woods logging trucks (empty on every other stage); reset by begin() */
+  trucks: Truck[];
   recycled: number;
   spawnCd: number;
   spawnFlip: number;
@@ -587,6 +592,7 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     slideT: 0,
     offT: 0,
     bumpCd: [],
+    truckCd: 0,
     surf: "",
     surfDef: 0,
   };
@@ -620,6 +626,7 @@ export function createSim(): Sim {
     pickups: Array.from({ length: 16 }, emptyPickup),
     up: freshUpgrades(),
     nextCrate: 420,
+    trucks: [],
     recycled: 0,
     phase: "menu",
     time: 0,
@@ -754,6 +761,8 @@ export function begin(sim: Sim) {
   sim.prevMine = false;
   sim.events.length = 0;
   armRace(sim);
+  sim.trucks = sim.race.armed ? freshTrucks(sim.stageId) : [];
+  for (const c of sim.cars) c.truckCd = 0;
   if (sim.race.armed) toast(sim, RACE_FIELD_TOAST, true);
   else toast(sim, "Hunters inbound. Survive.", true);
 }
@@ -982,7 +991,10 @@ function surfaceUnder(sim: Sim, car: Car, raceS: number, lat: number): SurfaceHi
   const w = washAt(sim.stageId, raceS, lat);
   if (w && washPhase(w, sim.time) === "on") return { id: w.id, cap: SCROLL_MIN, decel: WASH.decel, steerMul: WASH.steerMul, gripMul: WASH.gripMul };
   const sd = sandAt(sim.stageId, raceS, lat);
-  if (sd) return { id: sd.id, cap: SAND.cap, decel: SAND.decel, steerMul: SAND.steerMul, gripMul: SAND.gripMul };
+  if (sd) {
+    const k = surfaceParams(sd);
+    return { id: sd.id, cap: k.cap, decel: k.decel, steerMul: k.steerMul, gripMul: k.gripMul };
+  }
   return null;
 }
 
@@ -1010,7 +1022,10 @@ function clearOfCourse(sim: Sim, car: Car, s: number): number {
   const minS = sim.track.first * 2 + 2;
   const bad = (abs: number) => {
     if (poseAt(sim.track, abs).gap) return true;
-    return respawnBlocked(sim.stageId, abs - sim.race.originAlong, forkLane(sim, car, abs));
+    const lane = forkLane(sim, car, abs);
+    // §8.2 (Pine Woods): never reset within 15 m of a logging truck
+    if (sim.trucks.some((t) => t.alive && Math.abs(abs - sim.race.originAlong - t.s) < 15 + TRUCK.alongHalf && Math.abs(lane - t.lat) < 3 + TRUCK.latHalf)) return true;
+    return respawnBlocked(sim.stageId, abs - sim.race.originAlong, lane);
   };
   if (!bad(s)) return s;
   for (let d = 2; d <= 60; d += 2) {
@@ -1316,6 +1331,60 @@ function glanceObstacles(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, d
   return q;
 }
 
+/** BN-17: a logging truck is a moving OB (§5 LT): hero -8 hp and x0.85 speed (floor 22), glance toward the free lane. */
+function glanceTrucks(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, dt: number) {
+  car.truckCd = Math.max(0, car.truckCd - dt);
+  if (!sim.trucks.length || !car.alive || sim.phase !== "playing" || car.truckCd > 0) return q;
+  if (car.y > q.y + TRUCK.h) return q;
+  const race = q.s - sim.race.originAlong;
+  for (const t of sim.trucks) {
+    if (!t.alive) continue;
+    const o = truckObstacle(t);
+    if (!obstacleOverlap(o, race, q.lateral)) continue;
+    const target = ejectLat(sim.stageId, race, o, q.lateral);
+    const delta = target - q.lateral;
+    car.x += q.rx * delta;
+    car.z += q.rz * delta;
+    car.lat = Math.sign(delta || 1) * Math.max(4, Math.abs(car.lat));
+    car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
+    car.slideT = Math.max(car.slideT, WALL_SLIDE);
+    car.truckCd = 0.5;
+    if (car.hero) damageHero(sim, TRUCK.dmg);
+    else {
+      car.hp -= 4;
+      if (car.hp <= 0) {
+        killAI(sim, car);
+        return q;
+      }
+    }
+    if (!car.alive) return q;
+    return queryTrack(sim.track, car.x, car.z, car.along);
+  }
+  return q;
+}
+
+/** BN-17 rival avoidance: a truck within 40 m ahead in the rival's lane -> slide to the free adjacent lane (same fork
+ *  side, never through the median); boxed in on both sides -> keep the lane and glance like the hero. */
+function avoidTrucks(sim: Sim, car: Car, dt: number) {
+  if (!sim.trucks.length) return;
+  const race = car.along - sim.race.originAlong;
+  const course = courseFor(sim.stageId);
+  const med = course ? medianAt(course, race) || medianAt(course, race + 40) : null;
+  const t = truckAhead(sim.trucks, race, car.lane);
+  const lanes = [-9, -3, 3, 9];
+  const nearest = lanes.reduce((a, b) => (Math.abs(b - car.lane) < Math.abs(a - car.lane) ? b : a));
+  let want = nearest;
+  if (t) {
+    const opts = [nearest - 6, nearest + 6]
+      .filter((l) => l >= -9 && l <= 9)
+      .filter((l) => !med || Math.sign(l) === Math.sign(nearest))
+      .filter((l) => !truckAhead(sim.trucks, race, l, 60))
+      .sort((a, b) => Math.abs(a) - Math.abs(b));
+    if (opts.length) want = opts[0];
+  }
+  car.lane += clamp(want - car.lane, -6 * dt, 6 * dt);
+}
+
 function passGates(sim: Sim, car: Car, prevAlong: number, nowAlong: number, lat: number) {
   if (!car.hero || !car.alive) return;
   const gates = gatesFor(sim.stageId);
@@ -1488,6 +1557,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   }
   q = glanceMedian(sim, car, q);
   q = glanceObstacles(sim, car, q, dt);
+  q = glanceTrucks(sim, car, q, dt);
   if (car.slideT > 0) {
     car.slideT = Math.max(0, car.slideT - dt);
     const err = wrapAngle(yawFromDir(q.tx, q.tz) - car.yaw);
@@ -2352,7 +2422,31 @@ function tryRacePass(sim: Sim, car: Car, dt: number) {
   return true;
 }
 
+function rivalTrucks(sim: Sim, car: Car, dt: number) {
+  car.truckCd = Math.max(0, car.truckCd - dt);
+  if (!sim.trucks.length || !car.alive || car.truckCd > 0) return;
+  const race = car.along - sim.race.originAlong;
+  const deck = poseAt(sim.track, car.along).y;
+  if (car.y > deck + TRUCK.h) return;
+  for (const t of sim.trucks) {
+    if (!t.alive) continue;
+    const o = truckObstacle(t);
+    if (!obstacleOverlap(o, race, car.lane)) continue;
+    car.lane = ejectLat(sim.stageId, race, o, car.lane);
+    car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
+    car.hp -= 4;
+    car.truckCd = 0.5;
+    const p = poseAt(sim.track, car.along);
+    car.x = p.x + p.rx * car.lane;
+    car.z = p.z + p.rz * car.lane;
+    if (car.hp <= 0) killAI(sim, car);
+    return;
+  }
+}
+
 function rivalObstacles(sim: Sim, car: Car, dt: number) {
+  rivalTrucks(sim, car, dt);
+  if (!car.alive) return;
   const rows = obstaclesFor(sim.stageId);
   if (!rows.length || !car.alive) return;
   if (car.bumpCd.length !== rows.length) car.bumpCd = rows.map(() => 0);
@@ -2430,6 +2524,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   } else if (!tryRacePass(sim, car, dt)) {
     car.speed = cruise;
     car.along += cruise * dt;
+    avoidTrucks(sim, car, dt);
     holdMedianSide(sim, car);
     const p = poseAt(sim.track, car.along);
     car.x = p.x + p.rx * car.lane;
@@ -2850,6 +2945,7 @@ export function step(sim: Sim, dt: number) {
   u.magnetT = Math.max(0, u.magnetT - dt);
   u.rocketCd = Math.max(0, u.rocketCd - dt);
   sim.idleT = Math.abs(hero.speed) < 6 ? sim.idleT + dt : 0;
+  if (sim.race.armed && sim.trucks.length) stepTrucks(sim.stageId, sim.trucks, hero.along - sim.race.originAlong, dt);
   if (hero.alive) drive(sim, hero, input, dt, false);
   sim.prevMine = input.mine;
   if (sim.phase !== "playing") return;
