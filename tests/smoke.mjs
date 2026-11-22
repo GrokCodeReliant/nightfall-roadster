@@ -492,6 +492,77 @@ for (const prof of profiles) {
       await page.screenshot({ path: `${SHOTS}/${P}-woods-results.png` });
       await page.click("button:has-text('Title')");
       await page.waitForSelector(".nf-carpick");
+      // ---- Open Highway (LEVELS/04, openhighway-v1): authored 5200 m race on Art's highway kit. Title blurb, start,
+      // OH-0 / OH-3 Pump Stop / OH-4 Fork A (main side) / OH-5 Mesa Cut / OH-9 Dry Lake draws, desert floor + far
+      // backdrop, finish -> results. Then back to Pine Woods.
+      {
+        await page.click("[aria-label='Next stage']");
+        const ohStage = await page.textContent(".nf-stagepick .nf-carpick-name");
+        const ohLede = await page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+        check(P, "Open Highway title shows the race blurb", ohStage === "Open Highway" && ohLede.mode === "race" && /^Race six rivals to the finish\./.test(ohLede.text), JSON.stringify({ ohStage, ohLede }));
+        await page.click(".nf-btn");
+        await page.waitForSelector(".nf-hud");
+        await page.evaluate(() => window.__nfSkipRollout());
+        await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+        const ohStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, lives: s.lives, authored: s.track.authored }; });
+        check(P, "Open Highway start: race armed at 5200 m on the authored course, 6 rivals, no waves, drives", ohStart.stage === "highway" && ohStart.armed && ohStart.dist === 5200 && ohStart.authored && ohStart.rivals === 6 && ohStart.wave === 0 && ohStart.phase === "playing" && ohStart.m > 10 && ohStart.lives === 3, JSON.stringify(ohStart));
+        const ohAt = async (raceS, lat) => {
+          await page.evaluate(({ raceS, lat }) => {
+            const s = window.__nf, h = s.cars[0];
+            const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
+            for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
+              const last = s.track.samples[s.track.samples.length - 40];
+              h.x = last.x + last.rx * -6; h.y = last.y; h.z = last.z + last.rz * -6; h.along = last.s; h.lastAlong = last.s; h.lane = -6; h.speed = 36; h.invuln = 1e9; h.hp = h.maxHp;
+              s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
+            }
+            const sm = s.track.samples[idx()];
+            h.x = sm.x + sm.rx * lat; h.y = sm.y; h.z = sm.z + sm.rz * lat; h.along = sm.s; h.lastAlong = sm.s; h.lane = lat; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
+            h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
+            s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+          }, { raceS, lat });
+          await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
+          await page.waitForTimeout(P === "phone" ? 5000 : 3000);
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          return page.evaluate(() => {
+            const h = window.__nf.cars[0];
+            return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, hw: window.__nfHighway(),
+              hero: { alive: h.alive, hp: h.hp, s: +(h.along - window.__nf.race.originAlong).toFixed(1), phase: window.__nf.phase } };
+          });
+        };
+        const ohDraws = { oh0: await ohAt(60, 3), oh3: await ohAt(1740, 3), oh4: await ohAt(2140, -6), oh5: await ohAt(2600, 3), oh9: await ohAt(4300, 3) };
+        await page.screenshot({ path: `${SHOTS}/${P}-highway-oh9.png` });
+        for (const [k, d] of Object.entries(ohDraws)) console.log(`DRAW [${P}] highway ${k}: ${d.draws} draws, ${d.tris} tris, patches ${d.hw.patches}, far ${d.hw.far}`);
+        const ohWorst = Math.max(...Object.values(ohDraws).map((d) => d.draws));
+        check(P, `Open Highway scenery streams, desert floor + far backdrop, draws under the ceiling at OH-0 / OH-3 / OH-4 / OH-5 / OH-9 (${P === "phone" ? "≤160" : "logged"})`, Object.values(ohDraws).every((d) => d.stage === "highway" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.hw.patches > 20 && d.hw.far && d.hw.rotors === 6 && d.hero.alive) && drawGate(P, ohWorst), JSON.stringify(ohDraws));
+        await page.evaluate(() => { window.__nf.hitstop = 0; });
+        const ohFin = await page.evaluate(() => {
+          const s = window.__nf, h = s.cars[0];
+          h.alive = true; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.max(h.hp, 1);
+          for (let g = 0; g < 20 && !s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first]; g++) {
+            const last = s.track.samples[s.track.samples.length - 40];
+            h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.speed = 36; h.invuln = 1e9;
+            window.__nfAdvance(0.02, ["KeyW"]);
+          }
+          h.invuln = 0;
+          const sm = s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first];
+          if (!sm) return { ok: false };
+          h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.speed = 30;
+          window.__nfAdvance(0.2, "idle");
+          return { ok: true, phase: s.phase, place: s.race.place, mode: s.result && s.result.mode };
+        });
+        const ohOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+        const ohCard = await page.evaluate(() => {
+          const card = document.querySelector(".nf-overlay .nf-card");
+          const best = (card?.querySelector(".nf-best")?.textContent || "").trim();
+          const body = (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim();
+          return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim() };
+        });
+        check(P, "Open Highway finish -> results: place, Open Highway 5.2 km, no Wave text", ohOver && ohFin.ok && ohFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(ohCard.title) && /Open Highway · 5\.2 km course/.test(ohCard.text) && !/wave/i.test(ohCard.text), JSON.stringify({ ohFin, ohCard }));
+        creditsBefore = (await cardBank()).credits;
+        await page.click("button:has-text('Title')");
+        await page.waitForSelector(".nf-carpick");
+        await page.click("[aria-label='Previous stage']");
+      }
       await page.click("[aria-label='Previous stage']");
     }
     await page.click("[aria-label='Previous stage']");

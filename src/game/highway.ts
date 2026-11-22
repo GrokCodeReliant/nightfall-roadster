@@ -29,7 +29,7 @@ export function loadHighway() {
 const BENT = new Set(["woods_gravel_decal"]);
 /** OH-9 salt flats: the tile samples the atlas' near-white paint cells, which glare at night; a dimmed clone of its
  *  material (one extra draw in OH-9 chunks only) keeps the pale shoulder read without the white blowout. */
-export const SALT_TINT = 0x5c5a58;
+export const SALT_TINT = 0x857f74;
 const saltMats = new WeakMap<THREE.Material, THREE.Material>();
 function saltMat(m: THREE.Material) {
   let c = saltMats.get(m);

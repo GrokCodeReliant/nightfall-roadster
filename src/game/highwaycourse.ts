@@ -86,7 +86,11 @@ export function highwayPlacements(): HighwayPlace[] {
   }
   for (const p of out) if (p.name === "desert_cactus") p.name = h(p.s * 0.31 + p.lx) < 0.35 ? "desert_cactus_b" : "desert_cactus_a";
   scatter("desert_scrub", HIGHWAY_COUNTS.scrub, ...span("OH-0"), 13.5, 30, 401, { detail: true });
-  scatter("desert_rock_spire", HIGHWAY_COUNTS.spires, ...span("OH-1"), 30, 70, 503, {}, (_s, lx) => lx < 0);
+  {
+    const [a, b] = span("OH-1");
+    const step = (b - a) / HIGHWAY_COUNTS.spires;
+    for (let i = 0; i < HIGHWAY_COUNTS.spires; i++) add("desert_rock_spire", a + step * (i + 0.2 + 0.6 * h(503 + i)), -(30 + 40 * h(511 + i * 3.3)), h(519 + i) * Math.PI * 2);
+  }
   // rails (400 coast_guardrail_4m): Fork A both kerbs (125 each), R1 + R2 ramp spans (75 each, alternating sides)
   for (let i = 0; i < 125; i++) for (const side of [-1, 1]) add("coast_guardrail_4m", 2000 + 2 + i * 4, side * 12.6, side > 0 ? Math.PI : 0, { ground: false });
   for (const a of [2760, 4500]) {

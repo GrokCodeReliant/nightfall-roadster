@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import * as THREE from "three";
 import { buildCourseTrack, sampleAt, STEP, type Track } from "../../src/game/road.ts";
-import { COAST_ROAD, NIGHT_CITY, PINE_WOODS, COURSE_ORIGIN, type Course } from "../../src/game/course.ts";
+import { COAST_ROAD, NIGHT_CITY, OPEN_HIGHWAY, PINE_WOODS, COURSE_ORIGIN, type Course } from "../../src/game/course.ts";
 import { BEND_STEP, BEND_TOL, bendGeometry, bendStep, lerpPose, sliceZ } from "../../src/game/roadbend.ts";
 import { SEA_CLIFF_Y } from "../../src/game/coast.ts";
 
@@ -36,7 +36,7 @@ function chunks(course: Course) {
   return Math.ceil((COURSE_ORIGIN + course.length + course.runout) / (SEG * STEP));
 }
 
-for (const course of [COAST_ROAD, NIGHT_CITY, PINE_WOODS]) {
+for (const course of [COAST_ROAD, NIGHT_CITY, PINE_WOODS, OPEN_HIGHWAY]) {
   test(`${course.id}: kit road is continuous at every chunk seam and on the true road edge (whole course)`, () => {
     const track = buildCourseTrack(course);
     const base = tile();
@@ -78,7 +78,8 @@ for (const course of [COAST_ROAD, NIGHT_CITY, PINE_WOODS]) {
     assert.ok(worstEdge < 1e-3, `${course.id} road off the true edge by ${worstEdge.toFixed(4)} m at chunk ${worstAt}`);
   });
 
-  test(`${course.id}: the old rigid mid-chunk tile would leave the road (guards the test itself)`, () => {
+  // (Open Highway's R800+ sweeps stay within ~0.3 m of a rigid tile, so the guard is for the tighter courses only)
+  if (course.id !== "highway") test(`${course.id}: the old rigid mid-chunk tile would leave the road (guards the test itself)`, () => {
     const track = buildCourseTrack(course);
     let worst = 0;
     for (let i = 0; i < chunks(course); i++) {
