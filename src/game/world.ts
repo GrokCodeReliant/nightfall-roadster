@@ -7,7 +7,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
 import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
 import { courseFor, washFor, washPhase } from "./course";
-import { buildCoastChunk, coastReady, foamClock, loadCoast } from "./coast";
+import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type CoastCrown } from "./coast";
 import { chunkCourse } from "./coastcourse";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -1047,7 +1047,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   /** city: the stage scenery group (Night City GLB kit or Coast Road kit). roof/spin/wash are Coast Road extras. */
   type Chunk = {
     index: number; road: THREE.Mesh; walls: THREE.Mesh; marks: THREE.Mesh; city: THREE.Group; built: boolean; lamp: THREE.Mesh | null;
-    roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[];
+    roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; crown: CoastCrown[];
   };
   const chunks: Chunk[] = [];
   const buildings = new THREE.InstancedMesh(
@@ -1068,7 +1068,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     };
     const city = new THREE.Group();
     scene.add(city);
-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [] });
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [] });
   }
   loadRoadKit();
   let kitRoads: THREE.InstancedMesh[] | null = null;
@@ -1084,6 +1084,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     ch.roof = null;
     ch.spin = null;
     ch.wash = [];
+    ch.crown = [];
     for (const c of [...ch.city.children]) {
       ch.city.remove(c);
       c.traverse((o) => {
@@ -1111,6 +1112,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     seaY = coastLook ? -12.4 : -1.6; // just under the -12 cliff water tiles (no z-fight)
     sea.position.y = seaY;
     buildings.visible = !scenic();
+    applyRoadLook();
     for (const ch of chunks) {
       ch.built = false;
       ch.city.visible = scenic();
@@ -1133,6 +1135,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       ch.roof = out.roof;
       ch.spin = out.spin;
       ch.wash = out.wash;
+      ch.crown = out.crown;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
       return;
@@ -1335,10 +1338,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     foamClock.value = now;
     beamYaw = (now * 0.6) % (Math.PI * 2);
     const washes = washFor("coast");
+    const heroS = sim.cars[0].along - sim.race.originAlong;
     for (const ch of chunks) {
       if (ch.index < 0 || !ch.built) continue;
       if (ch.roof) ch.roof.visible = camera.position.y <= (ch.roof.userData.roofY as number);
       if (ch.spin) ch.spin.children.forEach((m) => (m.rotation.y = beamYaw));
+      for (const c of ch.crown) {
+        const d = heroS - c.s;
+        c.mesh.geometry.setDrawRange(0, d > CROWN_CUT[0] && d < CROWN_CUT[1] ? c.keep : Infinity);
+      }
       for (const g of ch.wash) {
         const w = washes.find((x) => x.id === g.userData.wash);
         g.visible = !!w && washPhase(w, sim.time) !== "off";
@@ -1387,6 +1395,34 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       });
     }
     kitRoads = list;
+    applyRoadLook();
+  }
+
+  // Coast Road only: a damped clone of each road material (wet-asphalt puddles stay matte enough that the sky/env
+  // reflection does not read as a white blob). Night City and every other stage keep the shared originals untouched.
+  const coastRoadMats = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  function coastRoadMat(base: THREE.MeshStandardMaterial) {
+    let m = coastRoadMats.get(base);
+    if (!m) {
+      m = base.clone();
+      m.name = `${base.name || "road"}@coast`;
+      m.envMapIntensity = 0.55;
+      m.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader.replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n roughnessFactor = max( texture2D( map, vMapUv ).a, 0.72 );");
+      };
+      m.customProgramCacheKey = () => "nf_coast_road";
+      coastRoadMats.set(base, m);
+    }
+    return m;
+  }
+  function applyRoadLook() {
+    const on = stage === "coast";
+    const swap = (mesh: THREE.Mesh) => {
+      const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
+      mesh.material = on && base.isMeshStandardMaterial && base.map ? coastRoadMat(base) : base;
+    };
+    for (const inst of kitRoads ?? []) swap(inst);
+    for (const ch of chunks) swap(ch.road);
   }
 
   function placeKitRoads(sim: Sim) {
@@ -2099,7 +2135,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     debugPick: (x: number, y: number) => {
       const ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2(x, y), camera);
-      return ray.intersectObjects(scene.children, true).filter((h) => h.object.visible).slice(0, 6).map((h) => {
+      const shown = (o: THREE.Object3D | null) => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
+      return ray.intersectObjects(scene.children, true).filter((h) => shown(h.object)).slice(0, 6).map((h) => {
         const m = (h.object as THREE.Mesh).material as THREE.MeshStandardMaterial;
         return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance) };
       });

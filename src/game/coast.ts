@@ -50,7 +50,13 @@ const SIGN_RIGHT = COAST_GATES.filter((g) => g.side === "right").map((g) => g.s)
 const SOFT = new Set(["CR-0", "CR-3", "CR-8", "CR-11", "CR-12", "RUN"]);
 
 /** wash: on-road foam per wave-wash zone (userData.wash = zone id), shown only during the telegraph and the wash. */
-export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; placed: string[] };
+/** crown: a merged chunk mesh whose last vertices are the CR-5 entry portal's over-road crown; world.ts cuts them with
+ *  drawRange(0, keep) while the hero is just through the portal (the crown sits above the 13.5 m chase cam there and
+ *  hides the hero for ~10 m). 0 extra draws. */
+export type CoastCrown = { mesh: THREE.Mesh; keep: number; s: number };
+export type CoastChunkOut = { roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; crown: CoastCrown[]; placed: string[] };
+/** hero race-s window after the entry portal (s 1580) in which the crown is cut; measured hidden 1590..1598 */
+export const CROWN_CUT: [number, number] = [6, 22];
 
 /** placement log for the first lap: zone -> piece -> count (debug / report) */
 export const coastLog: Record<string, Record<string, number>> = {};
@@ -95,6 +101,9 @@ function foamHook() {
 /** Spec crates (§2): L4 at 1350 (Fork A sea side) and L4 at 2160 (Fork B sea side). */
 const CRATES: [number, number][] = [[1350, 9], [2160, 9]];
 const ARCH = "coast_arch_40_v2";
+/** over-road shell faces (centroid above VAULT_Y m, |x| < VAULT_X m in piece space) hide with tunnel_roof; walls stay */
+export const VAULT_Y = 4.5;
+export const VAULT_X = 11;
 const beamMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
 function beamMat(m: THREE.MeshStandardMaterial) {
   let b = beamMats.get(m);
@@ -108,11 +117,11 @@ function beamMat(m: THREE.MeshStandardMaterial) {
   }
   return b;
 }
-/** Bake the arch shell split by triangle: the inner vault over the road (centroid y > 5.5, |x| < 11 in piece space)
+/** Bake the arch shell split by triangle: the inner vault over the road (centroid above VAULT_Y, |x| < VAULT_X in piece space)
  *  goes with tunnel_roof into the hide-able group, the walls stay in the chunk. Without this the vault ceiling (32 of
  *  the shell's 96 tris) still covers the hero under the high chase cam once tunnel_roof hides. */
-function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
-  const src = getPiece(ARCH);
+function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4, name = ARCH) {
+  const src = getPiece(name);
   if (!src) return false;
   src.updateMatrixWorld(true);
   const w = new THREE.Matrix4();
@@ -124,7 +133,7 @@ function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
     const sides: [number[], number[]] = [[], []];
     for (let t = 0; t < pos.count; t += 3) {
       const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3, cy = (pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3;
-      sides[cy > 5.5 && Math.abs(cx) < 11 ? 1 : 0].push(t);
+      sides[cy > VAULT_Y && Math.abs(cx) < VAULT_X ? 1 : 0].push(t);
     }
     sides.forEach((tris, k) => {
       if (!tris.length) return;
@@ -137,7 +146,7 @@ function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
         g.setAttribute(a, new THREE.BufferAttribute(arr, src.itemSize));
       }
       g.applyMatrix4(w.copy(m4));
-      g.userData.piece = ARCH;
+      g.userData.piece = name;
       const into = k ? vault : walls;
       const l = into.get(m.material as THREE.Material) ?? [];
       l.push(g);
@@ -148,9 +157,34 @@ function bakeArch(walls: Parts, vault: Parts, m4: THREE.Matrix4) {
   return true;
 }
 
+/** Look pass v2 pieces whose kit_emissive faces may fold into the chunk's kit draw. */
+const V2_FOLD = new Set([
+  "coast_water_glow_40", "coast_shore_foam_40", "coast_horizon_bar_40", "coast_beach_shoulder_40_v2", ARCH, "coast_arch_portal_v2",
+  "coast_pier_approach_16", "coast_seawall_lamp", "coast_guardrail_end_4m",
+]);
+const V2_DROP = new Set(["coast_water_glow_40", "coast_horizon_bar_40"]);
+/** 0 new draws for the v2 pass: on chunks where kit_emissive comes only from v2 pieces (beach and arch chunks had no
+ *  emissive draw before), bake those faces into the kit draw instead (same atlas, lit instead of glowing). Chunks that
+ *  already draw kit_emissive (rails, lifeguard tower, boardwalk, gantry) keep the glow at no extra cost. */
+export function foldV2Emissive(parts: Parts) {
+  const mats = [...parts.keys()];
+  const kit = mats.find((m) => m.name === "kit");
+  const em = mats.find((m) => m.name === "kit_emissive");
+  const list = em && parts.get(em);
+  if (!kit || !em || !list || !list.every((g) => V2_FOLD.has(g.userData.piece as string))) return 0;
+  // the water glow / horizon cards are dark teal cells: lit (not glowing) they would black out the water tiles' sparkle,
+  // so on these chunks they are dropped instead of folded; foam line, shoulder lip, arch and portal lamps fold
+  const keep = list.filter((g) => !V2_DROP.has(g.userData.piece as string));
+  for (const g of list) if (!keep.includes(g)) g.dispose();
+  parts.get(kit)!.push(...keep);
+  parts.delete(em);
+  return keep.length;
+}
+
 export function buildCoastChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, half: number, ox: number, oz: number,
   rnd: (n: number) => number, c: ChunkCourse): CoastChunkOut {
-  const out: CoastChunkOut = { roof: null, spin: null, wash: [], placed: [] };
+  const out: CoastChunkOut = { roof: null, spin: null, wash: [], crown: [], placed: [] };
+  const crown: Parts = new Map();
   if (!coastReady()) return out;
   const parts: Parts = new Map();
   const m4 = new THREE.Matrix4();
@@ -246,7 +280,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     flushParts(rp, roof);
     group.add(roof);
     out.roof = roof;
-    if (s0 === 1580) put("coast_arch_portal_v2", mid, 0, 0, -20, 0);
+    if (s0 === 1580 && bakeArch(parts, crown, placeMatrix(mid, 0, 0, -20, 0, ox, oz, m4), "coast_arch_portal_v2")) out.placed.push("coast_arch_portal_v2");
     if (s0 === 1660) put("coast_arch_portal_v2", mid, 0, 0, 20, Math.PI);
   }
   // CR-6 lighthouse on the sea side headland, beam spins about the tower axis
@@ -306,7 +340,20 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   if (c.grid) put("start_grid_paint_40", mid, 0, 0.05, 0, 0);
   for (const k of c.kick) put("ramp_lip_chevron_24", at(k), 0, 0.05, 0, 0);
   if (c.finishK >= 0) put("finish_gantry_24", at(c.finishK), 0, 0.05, 0, 0);
-  flushParts(parts, group);
+  foldV2Emissive(parts);
+  // entry-portal crown last in its material's list (kit_emissive faces go to kit if the chunk's glow was folded)
+  const cut = new Map<THREE.Material, number>();
+  for (const [mat, list] of crown) {
+    const target = parts.has(mat) ? mat : [...parts.keys()].find((m) => m.name === "kit") ?? mat;
+    const l = parts.get(target) ?? [];
+    l.push(...list);
+    parts.set(target, l);
+    cut.set(target, (cut.get(target) ?? 0) + list.reduce((n, g) => n + g.getAttribute("position").count, 0));
+  }
+  for (const mesh of flushParts(parts, group)) {
+    const n = cut.get(mesh.material as THREE.Material);
+    if (n) out.crown.push({ mesh, keep: mesh.geometry.getAttribute("position").count - n, s: 1580 });
+  }
   if (c.lap === 0 && !logged.has(index)) {
     logged.add(index);
     const row = (coastLog[z] ??= {});
