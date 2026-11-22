@@ -521,6 +521,21 @@ if (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ON
     await page.click("[aria-label='Next car']");
   }
   check("desktop-folder", "desktop loads each car's own hero LOD (served folder)", !got.includes("WRONG") && errs.length === 0, got.join(", "));
+  // Week I distant-car LOD (desktop hero-LOD build): rivals/enemies past the far line draw the phone GLB, near ones and the hero never do
+  await page.click(".nf-launch .nf-btn");
+  await page.waitForSelector(".nf-hud");
+  await page.evaluate(() => window.__nfSkipRollout());
+  await page.waitForFunction(() => !window.__nfRollout().active, null, { timeout: 120000 });
+  await page.waitForFunction(() => window.__nfEnemies().carLod?.loLoaded >= 6, null, { timeout: 120000 });
+  await page.evaluate(() => { const s = window.__nf, S = window.__nfStage; s.lull = 1e9; window.__nfAdvance(1, ["KeyW"]); for (const [k, o, l] of [["gunner", 12, 3], ["rammer", 70, -3], ["boss", 90, 0], ["mine", 60, 6]]) S.debugSpawn(s, k, o, l); window.__nfAdvance(0.3, "cruise"); s.hitstop = 1e9; });
+  // let a few frames render (the LOD state is picked in world.sync) and settle: no near/far state left stale
+  await page.waitForFunction(() => { const l = window.__nfEnemies().carLod; return l.views.length > 3 && l.views.every((r) => { const [, st, d] = r.split(":"); return st === "hero" || (+d < l.far - 5 ? st === "near" : +d > l.far ? st === "far" : true); }); }, null, { timeout: 15000 }).catch(() => {});
+  const lod = await page.evaluate(() => window.__nfEnemies().carLod);
+  const rows = lod.views.map((r) => { const [id, st, d] = r.split(":"); return { id: +id, st, d: +d }; });
+  const heroOk = rows.some((r) => r.id === 0 && r.st === "hero") && !rows.some((r) => r.st === "hero-LOW");
+  const farOk = rows.some((r) => r.st === "far") && rows.filter((r) => r.st === "far").every((r) => r.d > lod.far - 5);
+  const nearOk = rows.filter((r) => r.id !== 0 && r.d < lod.far - 5).length > 0 && rows.filter((r) => r.id !== 0 && r.d < lod.far - 5).every((r) => r.st === "near");
+  check("desktop-folder", "distant-car LOD: far rivals/enemies use the low model, near ones and the hero never do", lod.on && heroOk && farOk && nearOk && errs.length === 0, JSON.stringify(lod));
   await ctx.close();
   srv.close();
 }
