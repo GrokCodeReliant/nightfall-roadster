@@ -8,10 +8,10 @@ import {
   GRAVEL, LANE_LAT, PINE_WOODS, WOODS_GATES, WOODS_GRAVEL, WOODS_KICKERS, WOODS_OBSTACLES, COURSE_ORIGIN,
   courseFor, edgeKind, medianAt, obstacleOverlap, respawnBlocked, sandAt, sectionAt, sectionById, surfaceParams, tunnelClearance,
 } from "../../src/game/course.ts";
-import { PW_LEN, PW_ZONES, WOODS_BRIDGE, WOODS_COUNTS, WOODS_SET, woodsFog, woodsIn, woodsPlacements } from "../../src/game/woodscourse.ts";
+import { FLOOR_PATCH, PW_LEN, PW_ZONES, WOODS_BRIDGE, WOODS_COUNTS, WOODS_SET, floorPatches, woodsFog, woodsIn, woodsPlacements } from "../../src/game/woodscourse.ts";
 import { chunkCourse } from "../../src/game/coastcourse.ts";
 import { TRUCK, WOODS_TRUCKS, freshTrucks, pullOffAt, stepTrucks, truckAhead } from "../../src/game/trucks.ts";
-import { WOODS_PIECES, BRIDGE_HIDE, PINE_LOD } from "../../src/game/woods.ts";
+import { WOODS_PIECES, BRIDGE_HIDE, FLOOR_PATCH_UV, PINE_LOD } from "../../src/game/woods.ts";
 import { buildCourseTrack, poseAt, queryTrack, yawFromDir } from "../../src/game/road.ts";
 import { RACE_HP, RIVAL_COUNT, SCROLL_MIN, begin, createSim, debugKill, step, type Sim } from "../../src/game/sim.ts";
 
@@ -324,4 +324,23 @@ test("Art kit v2 loader inputs: 22 woods GLBs on disk, child nodes for the hooks
   assert.match(fs.readFileSync("scripts/package.mjs", "utf8"), /\["city", "kit", "coast", "woods"\]/);
   // the official atlas is not overwritten or duplicated into woods/
   assert.ok(!fs.existsSync("spa/public/assets/v02/woods/road_kit_atlas.png"));
+});
+
+test("PW floor patches (v2 floor lift): every footprint clear of road + shoulder, deterministic, within the instance cap, atlas swatch", () => {
+  const all = floorPatches(-200, PW_LEN + 400);
+  assert.ok(all.length > 2000);
+  for (const f of all) {
+    assert.ok(Math.abs(f.lx) - f.r >= FLOOR_PATCH.clear - 1e-9, `patch at s ${f.s.toFixed(1)} lx ${f.lx.toFixed(2)} r ${f.r.toFixed(2)} reaches the shoulder`);
+    assert.ok(Math.abs(f.lx) + f.r <= FLOOR_PATCH.lxMax + 1e-9);
+    assert.ok(f.tone >= 0.35 && f.tone <= 0.65 && f.r >= FLOOR_PATCH.rMin && f.r <= FLOOR_PATCH.rMax);
+  }
+  // 13 m clear: outside the 12.6 m guardrail line / 13 m timber wall and the 12.5 m dress line the scatter test holds
+  assert.ok(FLOOR_PATCH.clear >= 13);
+  assert.deepEqual(floorPatches(400, 520), floorPatches(400, 520));
+  // per 40 m chunk; 8 live chunks within 120 m fit the cap
+  assert.equal(floorPatches(400, 440).length, FLOOR_PATCH.perChunk);
+  assert.ok(FLOOR_PATCH.perChunk * 8 <= FLOOR_PATCH.cap);
+  // wood cell on road_kit_atlas (also used by woods_log_stack / slash): no new texture
+  const [u, v] = FLOOR_PATCH_UV;
+  assert.ok(u > 0 && u < 1 && v > 0 && v < 1);
 });

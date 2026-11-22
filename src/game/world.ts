@@ -10,8 +10,8 @@ import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./r
 import { courseFor, washFor, washPhase } from "./course";
 import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type CoastCrown } from "./coast";
 import { chunkCourse } from "./coastcourse";
-import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, loadWoods, makeTruckMesh, woodsPineGeometry, woodsReady } from "./woods";
-import { woodsFog } from "./woodscourse";
+import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, floorPatchGeometry, loadWoods, makeTruckMesh, woodsPineGeometry, woodsReady } from "./woods";
+import { FLOOR_PATCH, woodsFog } from "./woodscourse";
 import { TRUCK } from "./trucks";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -160,7 +160,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
-  woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; stands: number; truckPool: number; roofs: number };
+  woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
   stopRollout: () => void;
@@ -1060,10 +1060,13 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     roof: THREE.Group | null; spin: THREE.Group | null; wash: THREE.Group[]; crown: CoastCrown[];
     /** Pine Woods: this chunk's pine placements (world matrices) for the shared stand InstancedMeshes */
     pines: { b: boolean; m: THREE.Matrix4 }[];
+    patches: { m: THREE.Matrix4; tone: number }[];
   };
   const chunks: Chunk[] = [];
   /** Pine Woods: near A, near B, lod_far A, lod_far B stands (world-level InstancedMeshes) and the logging truck pool */
   const pineStands: THREE.InstancedMesh[] = [];
+  /** Pine Woods forest-floor patches: one InstancedMesh (one draw) on the kit atlas, rebuilt per frame like the stands */
+  let floorPatchMesh: THREE.InstancedMesh | null = null;
   const trucks: THREE.Group[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -1083,7 +1086,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     };
     const city = new THREE.Group();
     scene.add(city);
-    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [], pines: [] });
+    chunks.push({ index: -1, road: mk(roadMat), walls: mk(wallMat), marks: mk(markMat), city, built: false, lamp: null, roof: null, spin: null, wash: [], crown: [], pines: [], patches: [] });
   }
   loadRoadKit();
   // kit road + lane paint, bent along the track per chunk and merged into ONE mesh per material (coast seam fix: was a
@@ -1104,6 +1107,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     ch.wash = [];
     ch.crown = [];
     ch.pines = [];
+    ch.patches = [];
     for (const c of [...ch.city.children]) {
       ch.city.remove(c);
       c.traverse((o) => {
@@ -1135,7 +1139,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "woods") {
       hemi.intensity = 1.25;
       fill.intensity = 0.5;
-      seaMat.color.setHex(0x16241a);
+      // pinewoods-v2 floor lift: olive-brown needle bed instead of near-black green (colour only, same plane)
+      seaMat.color.setHex(0x333d29);
       seaMat.metalness = 0;
       seaMat.roughness = 1;
       seaY = -0.08;
@@ -1154,6 +1159,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "woods") loadWoods();
     for (const t of trucks) t.visible = false;
     for (const m of pineStands) m.count = 0;
+    if (floorPatchMesh) floorPatchMesh.count = 0;
   }
   function cityChunk(ch: Chunk, sim: Sim) {
     if (!scenic() || ch.index < 0 || ch.built || !sceneryReady()) return;
@@ -1181,6 +1187,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const out = buildWoodsChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
       ch.roof = out.roof;
       ch.pines = out.pines;
+      ch.patches = out.patches;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
       return;
@@ -1404,6 +1411,18 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       pineStands.push(inst);
     }
   }
+  function ensureFloorPatches() {
+    if (floorPatchMesh || !woodsReady()) return;
+    const src = floorPatchGeometry();
+    if (!src) return;
+    floorPatchMesh = new THREE.InstancedMesh(src.geo, src.mat, FLOOR_PATCH.cap);
+    floorPatchMesh.name = "woods_floor_patches";
+    floorPatchMesh.count = 0;
+    floorPatchMesh.frustumCulled = false;
+    floorPatchMesh.setColorAt(0, new THREE.Color(1, 1, 1));
+    scene.add(floorPatchMesh);
+  }
+  const patchTone = new THREE.Color();
   function ensureTrucks() {
     if (trucks.length || !woodsReady()) return;
     for (let i = 0; i < TRUCK.maxAlive; i++) {
@@ -1415,9 +1434,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
   }
   /** debug / smoke: what the woods frame drew last */
-  const woodsStat = { near: 0, far: 0, roofHidden: false, trucks: 0, fog: 0 };
+  const woodsStat = { near: 0, far: 0, roofHidden: false, trucks: 0, fog: 0, patches: 0 };
   function woodsFrame(sim: Sim, cityLo: number, cityHi: number) {
     ensurePineStands();
+    ensureFloorPatches();
     ensureTrucks();
     const hero = sim.cars[0];
     const heroS = hero.along - sim.race.originAlong;
@@ -1440,6 +1460,22 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         m.instanceMatrix.needsUpdate = true;
       });
     }
+    if (floorPatchMesh) {
+      let n = 0;
+      for (const ch of chunks) {
+        if (ch.index < cityLo || ch.index > cityHi || !ch.built) continue;
+        for (const p of ch.patches) {
+          const e = p.m.elements;
+          if (n >= FLOOR_PATCH.cap || Math.hypot(e[12] - hero.x, e[14] - hero.z) > FLOOR_PATCH.far) continue;
+          floorPatchMesh.setMatrixAt(n, p.m);
+          floorPatchMesh.setColorAt(n++, patchTone.setScalar(p.tone));
+        }
+      }
+      floorPatchMesh.count = n;
+      floorPatchMesh.instanceMatrix.needsUpdate = true;
+      if (floorPatchMesh.instanceColor) floorPatchMesh.instanceColor.needsUpdate = true;
+    }
+    woodsStat.patches = floorPatchMesh?.count ?? 0;
     woodsStat.near = counts[0] + counts[1];
     woodsStat.far = counts[2] + counts[3];
     // covered bridge: tunnel_roof + portal_crown hidden while the chase cam or the hero is under the bridge

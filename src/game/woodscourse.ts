@@ -172,6 +172,26 @@ export function woodsIn(s0: number, s1: number): WoodsPlace[] {
 }
 
 /** BN-20 fog zone: PW-6 Fog Hollow thickens to 0.016, eased over 60 m at each end. */
+/**
+ * Forest-floor lift (pinewoods-v2): flat needle / dirt patches on the floor plane between the trees, one InstancedMesh
+ * on the kit atlas (a wood swatch, tinted per instance). Visual only, no collider. Every footprint stays off the road and
+ * shoulder: |lx| - r >= FLOOR_PATCH.clear. Deterministic per 40 m of course s (laps repeat the pattern).
+ */
+export const FLOOR_PATCH = { perChunk: 24, clear: 13, lxMax: 44, rMin: 1.8, rMax: 4, y: -0.04, cap: 256, far: 120 };
+export type FloorPatch = { s: number; lx: number; r: number; ry: number; tone: number };
+export function floorPatches(s0: number, s1: number): FloorPatch[] {
+  const out: FloorPatch[] = [];
+  const step = 40 / FLOOR_PATCH.perChunk;
+  for (let i = Math.ceil(s0 / step); i * step < s1; i++) {
+    const s = i * step + (h(i * 3.1 + 5) - 0.5) * step;
+    const side = i % 2 ? 1 : -1;
+    const r = FLOOR_PATCH.rMin + h(i * 1.7 + 11) * (FLOOR_PATCH.rMax - FLOOR_PATCH.rMin);
+    const lx = side * (FLOOR_PATCH.clear + r + h(i * 2.3 + 17) * (FLOOR_PATCH.lxMax - FLOOR_PATCH.clear - 2 * r));
+    out.push({ s, lx, r, ry: h(i * 4.9 + 23) * Math.PI * 2, tone: 0.35 + h(i * 6.1 + 29) * 0.3 });
+  }
+  return out;
+}
+
 export const WOODS_FOG = { base: 0.012, hollow: 0.016, s0: 1910, s1: 2250, ease: 60 };
 export function woodsFog(s: number) {
   const { base, hollow, s0, s1, ease } = WOODS_FOG;

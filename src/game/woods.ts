@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
-import { woodsIn, type WoodsPlace } from "./woodscourse";
+import { FLOOR_PATCH, floorPatches, woodsIn, type WoodsPlace } from "./woodscourse";
 
 export const WOODS_PIECES: [string, string][] = [
   ["woods", "woods_pine_a"], ["woods", "woods_pine_b"], ["woods", "woods_broadleaf"], ["woods", "woods_fern_clump"],
@@ -36,7 +36,7 @@ export const BRIDGE_HIDE: [number, number] = [1750 - 6, 1910 + 6];
 /** distance (m) from the hero where a pine swaps to its lod_far child, and where the far band ends (far trim) */
 export const PINE_LOD = { near: 120, far: 160 };
 
-export type WoodsChunkOut = { roof: THREE.Group | null; pines: { b: boolean; m: THREE.Matrix4 }[]; placed: string[] };
+export type WoodsChunkOut = { roof: THREE.Group | null; pines: { b: boolean; m: THREE.Matrix4 }[]; patches: { m: THREE.Matrix4; tone: number }[]; placed: string[] };
 
 /** placement log for the first lap: zone -> piece -> count (debug / report) */
 export const woodsLog: Record<string, Record<string, number>> = {};
@@ -47,6 +47,29 @@ const BENT = new Set(["woods_covered_bridge_40", "woods_gravel_decal", "woods_ri
 const isPine = (n: string) => n === "woods_pine_a" || n === "woods_pine_b";
 
 /** Near (root) or far (lod_far child) pine geometry, baked to the piece's local frame, for the instanced stands. */
+/** Wood swatch on road_kit_atlas (the log_stack / slash cut-end cell, ~rgb 107,77,48), sampled by every floor-patch vertex. */
+export const FLOOR_PATCH_UV: [number, number] = [0.203, 0.547];
+/**
+ * Unit floor patch: a flat, slightly irregular 9-gon (radius ~1, normal up, 9 tris) whose UVs all sit on the wood swatch,
+ * drawn with the kit material so it shares the atlas and program family. Instance colour gives the needle / dirt tones.
+ */
+export function floorPatchGeometry(): { geo: THREE.BufferGeometry; mat: THREE.Material } | null {
+  const pine = woodsPineGeometry("woods_pine_a", false);
+  if (!pine) return null;
+  const n = 9, pos: number[] = [], nor: number[] = [], uv: number[] = [];
+  const rim = (k: number) => { const a = (k / n) * Math.PI * 2, r = 0.82 + 0.18 * Math.sin(k * 2.7 + 1); return [Math.cos(a) * r, Math.sin(a) * r]; };
+  for (let k = 0; k < n; k++) {
+    const [ax, az] = rim(k), [bx, bz] = rim(k + 1);
+    pos.push(0, 0, 0, bx, 0, bz, ax, 0, az);
+    for (let v = 0; v < 3; v++) { nor.push(0, 1, 0); uv.push(...FLOOR_PATCH_UV); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  return { geo, mat: pine.mat };
+}
+
 export function woodsPineGeometry(name: "woods_pine_a" | "woods_pine_b", far: boolean): { geo: THREE.BufferGeometry; mat: THREE.Material } | null {
   const src = getPiece(name);
   if (!src) return null;
@@ -117,7 +140,7 @@ function splitBeams() {
 
 export function buildWoodsChunk(group: THREE.Group, index: number, at: (k: number) => Pose, seg: number, ox: number, oz: number,
   c: ChunkCourse): WoodsChunkOut {
-  const out: WoodsChunkOut = { roof: null, pines: [], placed: [] };
+  const out: WoodsChunkOut = { roof: null, pines: [], patches: [], placed: [] };
   if (!woodsReady()) return out;
   splitBeams();
   const parts: Parts = new Map();
@@ -139,6 +162,13 @@ export function buildWoodsChunk(group: THREE.Group, index: number, at: (k: numbe
     const ly = p.ly + (p.ground ? -pose.y : 0);
     if (bakePiece(into, p.name, placeMatrix(pose, p.lx, ly, p.lz + (p.s - (s0 + kAt(p.s) * 2)), p.ry, ox, oz, m4), keep)) out.placed.push(p.name);
   };
+  // forest-floor patches (every lap): world-space matrices for the one floor-patch InstancedMesh, flat on the floor plane
+  for (const f of floorPatches(s0, s1)) {
+    const pose = at(kAt(f.s));
+    const m = placeMatrix(pose, f.lx, FLOOR_PATCH.y - pose.y, f.s - (s0 + kAt(f.s) * 2), f.ry, 0, 0, new THREE.Matrix4());
+    m.multiply(new THREE.Matrix4().makeScale(f.r, 1, f.r));
+    out.patches.push({ m, tone: f.tone });
+  }
   // lap 0 only: the course is dressed once; the run-out / next lap stays plain forest (no second finish set)
   const list = c.lap === 0 ? woodsIn(s0, s1) : [];
   for (const p of list) {
