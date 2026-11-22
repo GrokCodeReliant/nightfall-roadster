@@ -321,7 +321,7 @@ test("Art kit v2 loader inputs: 22 woods GLBs on disk, child nodes for the hooks
   child("logging_truck", "body", "load");
   child("log_row_6", "log_row_6", "UCX_log_row_6");
   child("woods_sawmill_shed", "woods_sawmill_shed", "shed_roof");
-  assert.match(fs.readFileSync("scripts/package.mjs", "utf8"), /\["city", "kit", "coast", "woods"\]/);
+  assert.match(fs.readFileSync("scripts/package.mjs", "utf8"), /\["city", "kit", "coast", "woods"(, "highway")?\]/);
   // the official atlas is not overwritten or duplicated into woods/
   assert.ok(!fs.existsSync("spa/public/assets/v02/woods/road_kit_atlas.png"));
 });

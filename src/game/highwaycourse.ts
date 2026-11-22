@@ -7,7 +7,8 @@
 // gap-fall reset), the bridge decks / riverbed / gap edges, dust devils (moving surface), the speed sign and the gate
 // chain phasing are not built yet; the right deck is intact road and the kickers launch onto it.
 import type { Zone } from "./coastcourse";
-import { HIGHWAY_GATES, HIGHWAY_GRAVEL, HIGHWAY_KICKERS, HIGHWAY_OBSTACLES, LANE_LAT, OPEN_HIGHWAY } from "./course";
+import { HIGHWAY_GAP, HIGHWAY_GATES, HIGHWAY_GRAVEL, HIGHWAY_KICKERS, HIGHWAY_OBSTACLES, LANE_LAT, OPEN_HIGHWAY } from "./course";
+export { HIGHWAY_GAP };
 
 export const OH_LEN = 5200;
 export const OH_ZONES: Zone[] = [
@@ -18,7 +19,7 @@ export const OH_ZONES: Zone[] = [
 ];
 
 /** Same shape as woodscourse WoodsPlace: lx = road-local lateral (driver's LEFT is +; course lat L -> lx = -L). */
-export type HighwayPlace = { name: string; s: number; lx: number; ly: number; lz: number; ry: number; ground: boolean; detail: boolean };
+export type HighwayPlace = { name: string; s: number; lx: number; ly: number; lz: number; ry: number; ground: boolean; detail: boolean; sz?: number };
 
 /** Locked ART LIST §A counts (sum checks in tests/unit/highwayroad.test.ts) */
 export const HIGHWAY_COUNTS = {
@@ -57,6 +58,26 @@ function h(n: number) {
   return x - Math.floor(x);
 }
 
+/** OH-4 Broken Bridge (§4, BN-18): twin decks over a dry riverbed 12 m down, 2000-2500. The desert floor is cut away over
+ *  |lat| < half (river banks slope down to the bed); deck centres at |lx| 6.2. */
+export const BRIDGE = { s0: 2000, s1: 2500, half: 22, bedHalf: 19, bedY: -12, deckLx: 6.2 };
+/** right-deck spans (course s) either side of the gap, 40 m deck pieces cut at the gap: 6 + split + split + 5 = 13 */
+export function rightDeckSpans(): [number, number][] {
+  const out: [number, number][] = [];
+  for (let k = 0; k < 13; k++) {
+    const a = BRIDGE.s0 + k * 40, b = a + 40;
+    if (b <= HIGHWAY_GAP.s0 || a >= HIGHWAY_GAP.s1) out.push([a, b]);
+    else {
+      if (a < HIGHWAY_GAP.s0) out.push([a, HIGHWAY_GAP.s0]);
+      if (b > HIGHWAY_GAP.s1) out.push([HIGHWAY_GAP.s1, b]);
+    }
+  }
+  return out;
+}
+/** OH-5 Mesa Cut: the tunnel is raised (y x2.1: roof 15.75-17.85 m) so the 13.5 m chase cam rides UNDER a real roof, inside a
+ *  mesa block (flat top, sloped flanks, cliff faces with the portals). Camera unchanged. */
+export const MESA_CUT = { s0: 2500, s1: 2700, sy: 2.1, h: 27, topHalf: 36, baseHalf: 78, openHalf: 14.2, openTop: 17.85 };
+
 let cache: HighwayPlace[] | null = null;
 export function highwayPlacements(): HighwayPlace[] {
   if (cache) return cache;
@@ -93,6 +114,13 @@ export function highwayPlacements(): HighwayPlace[] {
   }
   // rails (400 coast_guardrail_4m): Fork A both kerbs (125 each), R1 + R2 ramp spans (75 each, alternating sides)
   for (let i = 0; i < 125; i++) for (const side of [-1, 1]) add("coast_guardrail_4m", 2000 + 2 + i * 4, side * 12.6, side > 0 ? Math.PI : 0, { ground: false });
+  // BN-18 Broken Bridge (§4 OH-4): 26 half-width decks (13 per side; the right deck is split at the gap), a gap edge on each
+  // lip of the right deck, 13 dry-riverbed tiles 12 m down. Right deck = course lat > 0 = lx < 0.
+  for (let k = 0; k < 13; k++) add("bridge_deck_12_40", BRIDGE.s0 + 20 + k * 40, BRIDGE.deckLx, 0, { ground: false, ly: -0.05 });
+  for (const [a, b] of rightDeckSpans()) add("bridge_deck_12_40", (a + b) / 2, -BRIDGE.deckLx, 0, { ground: false, ly: -0.05, sz: (b - a) / 40 });
+  add("gap_edge_12", HIGHWAY_GAP.s0 - 0.92, -BRIDGE.deckLx, 0, { ground: false, ly: -0.05 });
+  add("gap_edge_12", HIGHWAY_GAP.s1 + 0.92, -BRIDGE.deckLx, Math.PI, { ground: false, ly: -0.05 });
+  for (let k = 0; k < 13; k++) add("riverbed_strip_40", BRIDGE.s0 + 20 + k * 40, 0, 0, { ly: BRIDGE.bedY });
   for (const a of [2760, 4500]) {
     for (let i = 0; i < 75; i++) {
       const side = i % 2 ? 1 : -1;
@@ -122,10 +150,13 @@ export function highwayPlacements(): HighwayPlace[] {
   for (const s of HIGHWAY_SET.gantries) add("overhead_gantry_24", s, 0, 0, { ground: false });
   add("fuel_stop_set", fuel.s, fuel.lx, fuel.ry);
   for (const s of HIGHWAY_SET.tunnel.sections) add("tunnel_40", s, 0, 0, { ground: false });
+  // Mesa Cut interior: amber wall strips (shared NC tunnel_light_strip_4m) every 8 m on both walls, under the raised roof
+  for (let s = 2504; s < 2700; s += 8) for (const lx of [13.15, -13.15]) add("tunnel_light_strip_4m", s, lx, lx > 0 ? Math.PI : 0, { ground: false, ly: 10.5 });
   for (const [s, ry] of HIGHWAY_SET.tunnel.portals) add("tunnel_portal", s, 0, ry, { ground: false });
   out.sort((a, b) => a.s - b.s);
-  cache = out;
-  return out;
+  // the right kerb rail stops at the snapped deck: none over the gap (2 m margin each side)
+  cache = out.filter((p) => !(p.name === "coast_guardrail_4m" && p.lx < 0 && p.s > HIGHWAY_GAP.s0 - 2 && p.s < HIGHWAY_GAP.s1 + 2));
+  return cache;
 }
 
 export function highwayIn(s0: number, s1: number): HighwayPlace[] {
@@ -154,6 +185,7 @@ export function desertPatches(s0: number, s1: number): DesertPatch[] {
     const side = i % 2 ? 1 : -1;
     const r = DESERT_PATCH.rMin + h(i * 1.9 + 11) * (DESERT_PATCH.rMax - DESERT_PATCH.rMin);
     const lx = side * (DESERT_PATCH.clear + r + h(i * 2.9 + 17) * (DESERT_PATCH.lxMax - DESERT_PATCH.clear - 2 * r));
+    if (!openGround(s, lx, r + 1)) continue;
     out.push({ s, lx, r, ry: h(i * 4.3 + 23) * Math.PI * 2, tone: 0.5 + h(i * 6.7 + 29) * 0.3, sx: 1 + h(i * 8.1 + 31) * 0.8 });
   }
   return out;
@@ -169,3 +201,54 @@ export const HIGHWAY_LOOK = {
   fill: 0.45,
   floor: 0x6a5840, // desert floor plane
 } as const;
+
+/** open desert at (s, lx) with clearance r: not the riverbed cut (OH-4), the mesa block (OH-5), the fuel-stop lot or the salt pans */
+export function openGround(s: number, lx: number, r: number, salt = true) {
+  const a = Math.abs(lx);
+  if (s > BRIDGE.s0 - r - 6 && s < BRIDGE.s1 + r && a < BRIDGE.half + r + 2) return false;
+  if (s > MESA_CUT.s0 - r - 4 && s < MESA_CUT.s1 + r + 4 && a < MESA_CUT.baseHalf + r) return false;
+  const f = HIGHWAY_SET.fuel;
+  if (lx < -8 && lx > -60 - r && Math.abs(s - f.s) < 32 + r) return false;
+  if (salt && s > 4100 - r && s < 4900 + r && a > 11 - r && a < 55 + r) return false;
+  return a > 13 + r;
+}
+
+/** openhighway-v2 desert variety: instanced scrub tufts + rocks (one draw each), and gentle rises (low mounds baked into the
+ *  chunk on the terrain material). Deterministic per 40 m chunk; everything stays off the road, riverbed, mesa and lot. */
+export const DESERT_SCATTER = { scrubPerChunk: 14, rockPerChunk: 7, lxMax: 95, cap: 320, far: 230, fade: 50 };
+export type DesertBit = { kind: "scrub" | "rock"; s: number; lx: number; r: number; ry: number; tone: number };
+export function desertScatter(s0: number, s1: number): DesertBit[] {
+  const out: DesertBit[] = [];
+  for (const [kind, per, seed] of [["scrub", DESERT_SCATTER.scrubPerChunk, 61], ["rock", DESERT_SCATTER.rockPerChunk, 83]] as const) {
+    const step = 40 / per;
+    for (let i = Math.ceil(s0 / step); i * step < s1; i++) {
+      const s = i * step + (h(i * 2.3 + seed) - 0.5) * step;
+      const side = h(i * 5.1 + seed) < 0.5 ? 1 : -1;
+      // denser near the shoulders, thinning out
+      const u = h(i * 3.3 + seed + 7);
+      const lx = side * (14 + u * u * (DESERT_SCATTER.lxMax - 14));
+      const r = kind === "scrub" ? 0.7 + h(i * 7.9 + seed) * 1.1 : 0.35 + Math.pow(h(i * 7.9 + seed), 2) * 1.6;
+      if (!openGround(s, lx, r, kind === "scrub")) continue;
+      out.push({ kind, s, lx, r, ry: h(i * 4.7 + seed) * Math.PI * 2, tone: 0.6 + h(i * 9.1 + seed) * 0.4 });
+    }
+  }
+  return out;
+}
+export const DESERT_MOUND = { every: 28, rMin: 12, rMax: 34, hMin: 1.2, hMax: 5.5, lxMin: 26, lxMax: 150 };
+export type DesertMound = { s: number; lx: number; rx: number; rz: number; h: number; ry: number; tone: number; seed: number };
+/** gentle rises: one candidate every 28 m, alternate-ish sides, kept clear of the road (edge >= 15 m out) */
+export function desertMounds(s0: number, s1: number): DesertMound[] {
+  const out: DesertMound[] = [];
+  const m = DESERT_MOUND;
+  for (let i = Math.ceil(s0 / m.every); i * m.every < s1; i++) {
+    const s = i * m.every + (h(i * 1.7 + 401) - 0.5) * m.every * 0.8;
+    const side = h(i * 2.9 + 409) < 0.5 ? 1 : -1;
+    const rx = m.rMin + h(i * 3.1 + 419) * (m.rMax - m.rMin);
+    const rz = rx * (0.7 + h(i * 4.3 + 421) * 0.9);
+    const lx = side * Math.max(m.lxMin + rx * 0.6, m.lxMin + h(i * 5.9 + 431) * (m.lxMax - m.lxMin));
+    if (Math.abs(lx) - Math.max(rx, rz) < 15) continue;
+    if (!openGround(s, lx, Math.max(rx, rz) * 0.8)) continue;
+    out.push({ s, lx, rx, rz, h: m.hMin + h(i * 6.1 + 433) * (m.hMax - m.hMin), ry: h(i * 7.3 + 439) * Math.PI, tone: 0.8 + h(i * 8.7 + 443) * 0.25, seed: i });
+  }
+  return out;
+}

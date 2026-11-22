@@ -5,12 +5,14 @@
 import * as THREE from "three";
 import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
-import { DESERT_PATCH, HIGHWAY_FAR, desertPatches, highwayIn, type HighwayPlace } from "./highwaycourse";
+import { BRIDGE, DESERT_PATCH, HIGHWAY_FAR, MESA_CUT, desertMounds, desertPatches, desertScatter, highwayIn, type HighwayPlace } from "./highwaycourse";
+import { mesaBlockGeometry, mesaSilhouetteMaterial, moundGeometry, riverbankGeometry, saltGeometry, saltMaterial, terrainMaterial, tunnelGlowMat } from "./highwayterrain";
 
 export const HIGHWAY_PIECES: [string, string][] = [
   ["highway", "desert_cactus_a"], ["highway", "desert_cactus_b"], ["highway", "desert_scrub"], ["highway", "desert_rock_spire"],
   ["highway", "desert_mesa_backdrop"], ["highway", "fuel_stop_set"], ["highway", "overhead_gantry_24"], ["highway", "wind_turbine_far"],
   ["highway", "salt_flat_tile_40"], ["highway", "billboard_frame_blank"], ["highway", "desert_fence_4m"],
+  ["highway", "bridge_deck_12_40"], ["highway", "gap_edge_12"], ["highway", "riverbed_strip_40"], ["city", "tunnel_light_strip_4m"],
   // shared: Coast kit rails / crate (same kit atlas), Night City tunnel / barricade / kicker, Pine Woods gravel decal, road band
   ["coast", "coast_guardrail_4m"], ["coast", "coast_guardrail_end_4m"], ["coast", "coast_crate"],
   ["city", "tunnel_40"], ["city", "tunnel_portal"], ["city", "barricade_3m"], ["city", "ramp_kicker_1m"], ["woods", "woods_gravel_decal"],
@@ -27,22 +29,6 @@ export function loadHighway() {
 
 /** near-only dress the far trim drops past ~120 m (cityDetailRange) */
 const BENT = new Set(["woods_gravel_decal"]);
-/** OH-9 salt flats: the tile samples the atlas' near-white paint cells, which glare at night; a dimmed clone of its
- *  material (one extra draw in OH-9 chunks only) keeps the pale shoulder read without the white blowout. */
-export const SALT_TINT = 0x857f74;
-const saltMats = new WeakMap<THREE.Material, THREE.Material>();
-function saltMat(m: THREE.Material) {
-  let c = saltMats.get(m);
-  if (!c) {
-    c = (m as THREE.MeshStandardMaterial).clone();
-    (c as THREE.MeshStandardMaterial).color.setHex(SALT_TINT);
-    c.name = `${m.name}@salt`;
-    c.onBeforeCompile = m.onBeforeCompile;
-    c.customProgramCacheKey = m.customProgramCacheKey;
-    saltMats.set(m, c);
-  }
-  return c;
-}
 
 /** Tan sand cell on road_kit_atlas (px 224-255 x 512-543, ~rgb 158,140,107), sampled by every desert-patch vertex. */
 export const DESERT_PATCH_UV: [number, number] = [0.234, 0.515];
@@ -67,7 +53,8 @@ export function desertPatchGeometry(): { geo: THREE.BufferGeometry; mat: THREE.M
   return { geo, mat };
 }
 
-export type HighwayChunkOut = { patches: { m: THREE.Matrix4; tone: number }[]; placed: string[] };
+/** patches: kind 0 floor patch, 1 scrub tuft, 2 rock (world-level InstancedMeshes in world.ts) */
+export type HighwayChunkOut = { patches: { m: THREE.Matrix4; tone: number; kind?: number }[]; placed: string[] };
 export const highwayLog: Record<string, Record<string, number>> = {};
 const logged = new Set<number>();
 
@@ -77,7 +64,9 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
   if (!highwayReady()) return out;
   const parts: Parts = new Map();
   const detail: Parts = new Map();
-  const salt: Parts = new Map();
+  const tun: Parts = new Map();
+  const terra: THREE.BufferGeometry[] = [];
+  const saltGeos: THREE.BufferGeometry[] = [];
   const m4 = new THREE.Matrix4();
   const s0 = c.cs0;
   const s1 = c.cs0 + seg * 2;
@@ -89,25 +78,60 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
       if (bakePieceBent(into, p.name, chunkFrame(at, kAt(p.s), seg), !p.ground, p.lx, ly, p.ry, ox, oz, keep)) out.placed.push(p.name);
       return;
     }
-    if (bakePiece(into, p.name, placeMatrix(pose, p.lx, ly, p.lz + (p.s - (s0 + kAt(p.s) * 2)), p.ry, ox, oz, m4), keep)) out.placed.push(p.name);
+    const m = placeMatrix(pose, p.lx, ly, p.lz + (p.s - (s0 + kAt(p.s) * 2)), p.ry, ox, oz, m4);
+    // Mesa Cut: tunnel shell + portals raised (roof above the 13.5 m chase cam); split right-deck pieces shortened
+    if (p.name === "tunnel_40" || p.name === "tunnel_portal") m.multiply(new THREE.Matrix4().makeScale(1, MESA_CUT.sy, 1));
+    if (p.sz) m.multiply(new THREE.Matrix4().makeScale(1, 1, p.sz));
+    if (bakePiece(into, p.name, m, keep)) out.placed.push(p.name);
   };
+  const sAt = (k: number) => s0 + k * 2;
   // desert floor patches (every lap)
   for (const f of desertPatches(s0, s1)) {
     const pose = at(kAt(f.s));
     const m = placeMatrix(pose, f.lx, DESERT_PATCH.y - pose.y, f.s - (s0 + kAt(f.s) * 2), f.ry, 0, 0, new THREE.Matrix4());
     m.multiply(new THREE.Matrix4().makeScale(f.r * f.sx, 1, f.r));
-    out.patches.push({ m, tone: f.tone });
+    out.patches.push({ m, tone: f.tone, kind: 0 });
+  }
+  // openhighway-v2 desert variety: scrub tufts + rocks (instanced in world.ts), gentle rises (baked on the terrain material)
+  for (const b of desertScatter(s0, s1)) {
+    const pose = at(kAt(b.s));
+    const m = placeMatrix(pose, b.lx, -0.06 - pose.y, b.s - (s0 + kAt(b.s) * 2), b.ry, 0, 0, new THREE.Matrix4());
+    m.multiply(new THREE.Matrix4().makeScale(b.r, b.r * (b.kind === "scrub" ? 0.8 + b.tone * 0.5 : 1), b.r));
+    out.patches.push({ m, tone: b.tone, kind: b.kind === "scrub" ? 1 : 2 });
+  }
+  for (const d of desertMounds(s0, s1)) {
+    const pose = at(kAt(d.s));
+    const g = moundGeometry(d);
+    g.applyMatrix4(placeMatrix(pose, d.lx, -0.08 - pose.y, d.s - (s0 + kAt(d.s) * 2), d.ry, ox, oz, new THREE.Matrix4()));
+    terra.push(g);
+  }
+  if (c.lap === 0) {
+    const ks = (a: number, b: number) => { const r: number[] = []; for (let k = 0; k <= seg; k++) if (sAt(k) >= a - 0.01 && sAt(k) <= b + 0.01) r.push(k); return r; };
+    const mg = mesaBlockGeometry(at, ks(MESA_CUT.s0, MESA_CUT.s1), sAt, ox, oz);
+    if (mg) terra.push(mg);
+    const rg = riverbankGeometry(at, ks(BRIDGE.s0, BRIDGE.s1), sAt, ox, oz);
+    if (rg) terra.push(rg);
   }
   const list = c.lap === 0 ? highwayIn(s0, s1) : [];
   for (const p of list) {
     const pose = at(kAt(p.s));
     if (!p.ground && (pose as Pose & { gap?: boolean }).gap) continue;
-    // Mesa Cut: the chase cam rides above the 9.7 m roof (as Night City's tunnel on phone), so the roof node is not baked
-    if (p.name === "tunnel_40") { put(p, parts, (o) => !inNode(o, "tunnel_roof")); continue; }
-    if (p.name === "salt_flat_tile_40") { put(p, salt); continue; }
+    // Mesa Cut (openhighway-v2): the raised shell keeps its roof; walls / strips glow dim amber (tunnelGlowMat)
+    if (p.name === "tunnel_40" || p.name === "tunnel_portal" || p.name === "tunnel_light_strip_4m") { put(p, tun); continue; }
+    // OH-9 salt pans: the tile's footprint as a cracked, edge-blended pan (saltMaterial), not the flat atlas-white tile
+    if (p.name === "salt_flat_tile_40") {
+      saltGeos.push(saltGeometry((s) => at(kAt(s)), p.s, -p.lx, ox, oz));
+      out.placed.push(p.name);
+      continue;
+    }
     put(p, p.detail ? detail : parts);
   }
-  for (const [m, l] of salt) parts.set(saltMat(m), [...(parts.get(saltMat(m)) ?? []), ...l]);
+  for (const [m, l] of tun) {
+    const mm = /emissive/i.test(m.name) ? tunnelGlowMat(m) : m;
+    parts.set(mm, [...(parts.get(mm) ?? []), ...l]);
+  }
+  if (terra.length) parts.set(terrainMaterial(), terra);
+  if (saltGeos.length) parts.set(saltMaterial(), saltGeos);
   if (c.grid && bakePieceBent(parts, "start_grid_paint_40", chunkFrame(at, Math.floor(seg / 2), seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("start_grid_paint_40");
   for (const k of c.kick) if (bakePieceBent(parts, "ramp_lip_chevron_24", chunkFrame(at, k, seg), true, 0, 0.05, 0, ox, oz)) out.placed.push("ramp_lip_chevron_24");
   if (c.finishK >= 0 && bakePiece(parts, "finish_gantry_24", placeMatrix(at(c.finishK), 0, 0.05, 0, 0, ox, oz, m4))) out.placed.push("finish_gantry_24");
@@ -138,10 +162,13 @@ export function highwayFarGroup(at: (s: number) => Pose | null): { group: THREE.
   group.name = "highway_far";
   const parts: Parts = new Map();
   const m4 = new THREE.Matrix4();
+  const mesas: Parts = new Map();
   for (const [s, lat, ry] of HIGHWAY_FAR.mesas) {
     const p = at(s);
-    if (p) bakePiece(parts, "desert_mesa_backdrop", placeMatrix(p, lat, -p.y - 0.5, 0, ry, 0, 0, m4));
+    if (p) bakePiece(mesas, "desert_mesa_backdrop", placeMatrix(p, lat, -p.y - 0.5, 0, ry, 0, 0, m4));
   }
+  // openhighway-v2: the mesas sit outside the fog as silhouettes against the horizon haze (one draw)
+  for (const mesh of flushParts(mesas, group)) mesh.material = mesaSilhouetteMaterial();
   const hubs: THREE.Matrix4[] = [];
   for (const [s, lat] of HIGHWAY_FAR.turbines) {
     const p = at(s);

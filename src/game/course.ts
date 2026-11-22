@@ -377,6 +377,16 @@ export const HIGHWAY_GATES: Gate[] = [
   { id: "G-B", s: 3900, side: "left" },
 ];
 
+/** BN-18 per-side gap (LEVELS/04 §3, locked): the right deck of Fork A is snapped over 2260-2296 (course lat > median).
+ *  A car over it has no ground; one that drops 6.2 m below the deck gets the off-road-style reset (sim.ts). */
+export type SideGap = { id: string; s0: number; s1: number; latMin: number; latMax: number };
+export const HIGHWAY_GAP: SideGap = { id: "GAP-A", s0: 2260, s1: 2296, latMin: 0.3, latMax: 13 };
+const SIDE_GAPS: Record<string, readonly SideGap[]> = { highway: [HIGHWAY_GAP] };
+/** the per-side gap under course s / lat on this stage, or null */
+export function sideGapAt(stage: string, s: number, lat: number): SideGap | null {
+  for (const g of SIDE_GAPS[stage] ?? []) if (s >= g.s0 && s < g.s1 && lat > g.latMin && lat < g.latMax) return g;
+  return null;
+}
 const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES };
 
 export function gatesFor(stageId: string): readonly Gate[] {

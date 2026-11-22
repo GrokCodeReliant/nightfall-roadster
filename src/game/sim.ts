@@ -13,7 +13,7 @@ import {
   type Track,
 } from "./road";
 import { freshTrucks, stepTrucks, truckAhead, truckObstacle, TRUCK, type Truck } from "./trucks";
-import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sandAt, sectionAt, surfaceParams, WASH, washAt, washPhase } from "./course";
+import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sandAt, sectionAt, sideGapAt, surfaceParams, WASH, washAt, washPhase, type SideGap } from "./course";
 import { emptyShop, heroMineArm, racePayout, spareLivesTier, type RacePurse, type ShopSave } from "./shop";
 import { RESPAWN_DELAY, RESPAWN_INVULN, RESPAWN_RETRY, RESPAWN_SPEED, RESPAWN_STAGGER, raceKillScore, respawnBudget, respawnCandidates } from "./respawn";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
@@ -1073,11 +1073,11 @@ function truckNear(sim: Sim, raceS: number, lat: number) {
 
 /** Tire-blow, then back to lane center a short way behind. One fail does not end the race. */
 /** Skip a 12 m backstep that would plant the car on a barricade or a kicker lip. */
-function clearOfCourse(sim: Sim, car: Car, s: number): number {
+function clearOfCourse(sim: Sim, car: Car, s: number, laneAt?: number): number {
   const minS = sim.track.first * 2 + 2;
   const bad = (abs: number) => {
     if (poseAt(sim.track, abs).gap) return true;
-    const lane = forkLane(sim, car, abs);
+    const lane = laneAt ?? forkLane(sim, car, abs);
     // §8.2 (Pine Woods): never reset within 15 m of a logging truck
     if (truckNear(sim, abs - sim.race.originAlong, lane)) return true;
     return respawnBlocked(sim.stageId, abs - sim.race.originAlong, lane);
@@ -1090,14 +1090,16 @@ function clearOfCourse(sim: Sim, car: Car, s: number): number {
   return s;
 }
 
-function offroadReset(sim: Sim, car: Car) {
+function offroadReset(sim: Sim, car: Car, laneAt?: number) {
   const hp = car.hp;
   const speed = Math.max(SCROLL_MIN, car.speed);
   const back = Math.min(15, OFFROAD_BACK);
   let s = Math.max(sim.track.first * 2 + 2, car.along - back);
   if (poseAt(sim.track, s).gap || gapAhead(sim.track, s, 20)) s = safeSpawnS(sim, car.along - back);
-  s = clearOfCourse(sim, car, s);
-  car.lane = forkLane(sim, car, s);
+  s = clearOfCourse(sim, car, s, laneAt);
+  gapFalling.delete(car);
+  car.vy = 0;
+  car.lane = laneAt ?? forkLane(sim, car, s);
   place(sim, car, s, speed);
   car.hp = hp;
   car.invuln = OFFROAD_INVULN;
@@ -1110,6 +1112,50 @@ function offroadReset(sim: Sim, car: Car) {
     sim.events.push({ t: "scrape" });
     toast(sim, "Back on track", true);
   }
+}
+
+/** BN-18 (LEVELS/04 §3, locked): cars that dropped below a per-side gap's deck. A car stays "in" the gap past its far end
+ *  while it is more than 0.5 m under the deck (it met the far lip face, §8.1: a landing is y >= deck - 0.5 at s >= s1). */
+const gapFalling = new WeakSet<Car>();
+const GAP_DROP = 6.2;
+/** for a car up to 40 m past a side gap's far end on its side, a course s just inside that gap (else raceS) */
+function HIGHWAY_GAP_FAR(stage: string, raceS: number, lat: number) {
+  for (let back = 0; back <= 40; back += 2) if (sideGapAt(stage, raceS - back, lat)) return raceS - back;
+  return raceS;
+}
+/** The side gap under this car, or null. `y` / `deck` decide the far-lip rule. */
+function sideGapUnder(sim: Sim, car: Car, raceS: number, lat: number, deck: number): SideGap | null {
+  if (!courseFor(sim.stageId)) return null;
+  const g = sideGapAt(sim.stageId, raceS, lat);
+  if (g) {
+    if (car.y < deck - 0.5) gapFalling.add(car);
+    return g;
+  }
+  if (gapFalling.has(car)) {
+    // under the far lip: the deck face is in the way, so it keeps falling (until the 6.2 m reset)
+    const past = sideGapAt(sim.stageId, Math.min(raceS, HIGHWAY_GAP_FAR(sim.stageId, raceS, lat)), lat);
+    if (past && car.y < deck - 0.5) return past;
+    gapFalling.delete(car);
+  }
+  return null;
+}
+/** Gap fall rule: exactly the off-road reset (12 m back, hull / lives / tier kept, 1.0 s invuln, speed >= 22), placed at the
+ *  centre of the main (left) side, lat -6. Race rivals get the same reset and stay in the race. Hunters are lost to it. */
+function gapReset(sim: Sim, car: Car) {
+  gapFalling.delete(car);
+  if (!car.hero && !(car.racer && sim.race.armed)) {
+    killAI(sim, car, true);
+    return;
+  }
+  offroadReset(sim, car, -6);
+}
+/** Rivals take the bridge side of a per-side gap only at >= 42 m/s (§5): slower ones drift to the main side before the median. */
+export const GAP_RIVAL_MIN = 42;
+function rivalKeepOffGap(sim: Sim, car: Car, dt: number) {
+  if (sim.stageId !== "highway" || car.lane <= 0 || car.speed >= GAP_RIVAL_MIN) return;
+  const race = car.along - sim.race.originAlong;
+  if (race < 1700 || race > 2300) return;
+  car.lane = Math.max(-6, car.lane - 7 * dt);
 }
 
 function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
@@ -1656,10 +1702,17 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
     }
   } else if (car.hero) car.offT = 0;
 
+  const sideGap = sideGapUnder(sim, car, q.s - sim.race.originAlong, q.lateral, q.y);
   if (q.gap) {
     car.grounded = false;
     if (car.y < q.y - 6.2) {
       respawn(sim, car, "fall");
+      return;
+    }
+  } else if (sideGap) {
+    car.grounded = false;
+    if (car.y < q.y - GAP_DROP) {
+      gapReset(sim, car);
       return;
     }
   } else if (car.y <= q.y + 0.12 || car.grounded) {
@@ -2643,6 +2696,10 @@ function flyRival(sim: Sim, car: Car, dt: number, cruise: number) {
   car.yaw = yawFromDir(p.tx, p.tz);
   car.lastAlong = car.along;
   car.lat = 0;
+  if (sideGapUnder(sim, car, p.s - sim.race.originAlong, car.lane, p.y)) {
+    if (car.y < p.y - GAP_DROP) gapReset(sim, car);
+    return;
+  }
   if (car.y <= p.y) {
     car.y = p.y;
     car.vy = 0;
@@ -2687,6 +2744,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
     car.speed = cruise;
     car.along += cruise * dt;
     avoidTrucks(sim, car, dt);
+    rivalKeepOffGap(sim, car, dt);
     holdMedianSide(sim, car);
     const p = poseAt(sim.track, car.along);
     car.x = p.x + p.rx * car.lane;
@@ -2700,6 +2758,10 @@ function stepRival(sim: Sim, car: Car, dt: number) {
       car.grounded = false;
       car.vy = Math.max(8, car.speed * 0.45);
       car.y = p.y + 0.15;
+    } else if (courseFor(sim.stageId) && sideGapAt(sim.stageId, race, car.lane)) {
+      // drove off the snapped deck: no ground, falls (flyRival resets it 6.2 m down)
+      car.grounded = false;
+      car.vy = Math.min(car.vy, 0);
     } else {
       car.y = p.y;
       car.grounded = true;

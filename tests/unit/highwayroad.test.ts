@@ -127,7 +127,12 @@ test("OH scatter table: locked ART LIST §A counts, every item on course, nothin
   assert.equal(n("overhead_gantry_24"), 3);
   assert.equal(n("barrier_jersey_4m"), 260);
   assert.equal(n("coast_guardrail_end_4m"), 4);
-  assert.equal(n("coast_guardrail_4m"), 400);
+  // 400 locked, minus the 9 right-kerb rails over the BN-18 gap (2260-2296): the deck is snapped there (openhighway-v2)
+  assert.equal(n("coast_guardrail_4m"), 391);
+  assert.equal(n("bridge_deck_12_40"), 26);
+  assert.equal(n("gap_edge_12"), 2);
+  assert.equal(n("riverbed_strip_40"), 13);
+  assert.equal(n("tunnel_light_strip_4m"), 50);
   assert.equal(n("desert_fence_4m"), 150);
   assert.equal(n("salt_flat_tile_40"), 40);
   assert.equal(n("billboard_frame_blank"), 2);
@@ -144,7 +149,7 @@ test("OH scatter table: locked ART LIST §A counts, every item on course, nothin
   // gantries: never within 80 m of a ramp span (R1 2760-2910, R2 4500-4650), nothing overhead in 2760-2990
   for (const s of HIGHWAY_SET.gantries) for (const [a, b] of [[2760, 2990], [4500, 4650]]) assert.ok(s < a - 80 || s > b + 80 || (s > b && a === 2760 && s >= 2990), `gantry ${s}`);
   // scatter / set dress stays off the 12 m carriageway (+ shoulder); course pieces and spanning sets are exempt
-  const onRoad = new Set(["barrier_jersey_4m", "coast_guardrail_end_4m", "coast_guardrail_4m", "sign_fork", "barricade_3m", "ramp_kicker_1m", "woods_gravel_decal", "coast_crate", "overhead_gantry_24", "tunnel_40", "tunnel_portal"]);
+  const onRoad = new Set(["barrier_jersey_4m", "coast_guardrail_end_4m", "coast_guardrail_4m", "sign_fork", "barricade_3m", "ramp_kicker_1m", "woods_gravel_decal", "coast_crate", "overhead_gantry_24", "tunnel_40", "tunnel_portal", "bridge_deck_12_40", "gap_edge_12", "riverbed_strip_40", "tunnel_light_strip_4m"]);
   for (const p of all) {
     assert.ok(p.s >= 0 && p.s <= 5200, `${p.name} ${p.s}`);
     if (!onRoad.has(p.name)) assert.ok(Math.abs(p.lx) >= 13, `${p.name} at lx ${p.lx}`);
@@ -158,7 +163,9 @@ test("OH scatter table: locked ART LIST §A counts, every item on course, nothin
 test("OH desert floor: patches clear of road + shoulder, deterministic, chunkCourse maps the zones", () => {
   for (let s = 0; s < 5600; s += 40) {
     const ps = desertPatches(s, s + 40);
-    assert.ok(ps.length >= DESERT_PATCH.perChunk - 1 && ps.length <= DESERT_PATCH.perChunk + 1);
+    // open desert keeps the full density; the riverbed cut, the mesa block, the fuel lot and the salt pans thin it
+    assert.ok(ps.length <= DESERT_PATCH.perChunk + 1);
+    if ((s > 200 && s < 1400) || (s > 2800 && s < 3400)) assert.ok(ps.length >= DESERT_PATCH.perChunk - 3, `patches ${s} ${ps.length}`);
     for (const p of ps) assert.ok(Math.abs(p.lx) - p.r * p.sx >= DESERT_PATCH.clear - 1e-6 - p.r * (p.sx - 1), `patch ${s}`);
   }
   assert.deepEqual(desertPatches(400, 440), desertPatches(400, 440));
