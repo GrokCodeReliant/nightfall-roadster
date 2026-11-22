@@ -434,7 +434,8 @@ for (const prof of profiles) {
           const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
           for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
             const last = s.track.samples[s.track.samples.length - 40];
-            h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.lane = 0; h.speed = 36;
+            // invulnerable while hopping ahead (lane 0 crosses the fork medians); dropped again at the probe pose below
+            h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.lane = 0; h.speed = 36; h.invuln = 1e9; h.hp = h.maxHp;
             s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
           }
           const sm = s.track.samples[idx()];
@@ -451,7 +452,8 @@ for (const prof of profiles) {
           const ndc = window.__nfProjectXYZ(h.x, h.y + 0.8, h.z);
           const first = window.__nfPick(ndc.x, ndc.y)[0] || null;
           const blocked = !!first && ((first.pieces || []).some((p) => /^woods_covered_bridge/.test(p)));
-          return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, blocked, woods: window.__nfWoods() };
+          return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, blocked, woods: window.__nfWoods(),
+            hero: { alive: h.alive, hp: h.hp, lat: +h.lat.toFixed(2), s: +(h.along - window.__nf.race.originAlong).toFixed(1), phase: window.__nf.phase } };
         });
       };
       const pwDraws = { pw0: await pwAt(60), pw3: await pwAt(870), pw5: await pwAt(1800), pw6: await pwAt(2080) };
