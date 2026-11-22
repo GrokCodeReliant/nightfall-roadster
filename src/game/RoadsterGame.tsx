@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { createAudio, type AudioBus } from "./audio";
-import { raceBestLine, recordRace, sanitizeRaceBests, type RaceBests } from "./records";
+import { raceBestLine, recordRace, type RaceBests } from "./records";
+import { emptySave, mergeSave, parseSave, type Save } from "./save";
 import { CAR_STATS, GAP_WARN, applyFullyUpgraded, applyGamepad, hasBoost, migrateCarId, supportsTrackMode, threatHot, begin, createSim, debugSpawn, debugStartWave, formatTime, GUN_NAMES, raceStandings, spawnPickup, step, type GamepadSample, type Phase, type Result, type Sim } from "./sim";
 import { STEER_SENS_MAX, STEER_SENS_MIN, STEER_SENS_STEP, clampSteerSens, loadSettings, writeSettings } from "./settings";
 import { emptyPadUi, maskPadCombat, stepPadUi, type PadUiEvent, type PadUiMode } from "./padui";
@@ -62,39 +63,16 @@ function CarBlurb({ id }: { id: (typeof CARS)[number]["id"] }) {
   return <p className="nf-carpick-sub">{bits.join(" · ")}</p>;
 }
 
-/** race: optional per-course race records (records.ts). Missing in older saves; defaults to {}. */
-type Save = { bestScore: number; bestWave: number; bestTime: number; credits: number; shop: ShopSave; race: RaceBests };
-
 function loadSave(): Save {
-  const empty = { bestScore: 0, bestWave: 0, bestTime: 0, credits: 0, shop: emptyShop(), race: {} };
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return empty;
-    const p = JSON.parse(raw) as Partial<Save>;
-    const credits = typeof p.credits === "number" && Number.isFinite(p.credits) ? Math.max(0, Math.floor(p.credits)) : 0;
-    return {
-      bestScore: typeof p.bestScore === "number" ? p.bestScore : 0,
-      bestWave: typeof p.bestWave === "number" ? p.bestWave : 0,
-      bestTime: typeof p.bestTime === "number" ? p.bestTime : 0,
-      credits,
-      shop: sanitizeShop(p.shop),
-      race: sanitizeRaceBests(p.race),
-    };
+    return parseSave(localStorage.getItem(SAVE_KEY));
   } catch {
-    return empty;
+    return emptySave();
   }
 }
 
 function writeSave(patch: Partial<Save>) {
-  const prev = loadSave();
-  const next: Save = {
-    bestScore: patch.bestScore ?? prev.bestScore,
-    bestWave: patch.bestWave ?? prev.bestWave,
-    bestTime: patch.bestTime ?? prev.bestTime,
-    credits: patch.credits ?? prev.credits,
-    shop: patch.shop ?? prev.shop,
-    race: patch.race ?? prev.race,
-  };
+  const next = mergeSave(loadSave(), patch);
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(next));
   } catch {
