@@ -1939,7 +1939,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
           m.opacity = m.userData.baseOpacity * op;
         }
       }
-      const blink = car.hero && car.invuln > 0 && Math.floor(performance.now() / 90) % 2 === 0;
+      // RACE_RESPAWNS §3: a respawned race rival blinks with the hero's blink while invulnerable
+      const blink = (car.hero || car.racer) && car.invuln > 0 && Math.floor(performance.now() / 90) % 2 === 0;
       view.root.visible = car.alive && car.y > -5 && !blink;
       view.shadow.visible = view.root.visible;
       if (!view.root.visible) continue;

@@ -164,7 +164,8 @@ test("a rival in the cone fires once and keeps its cruise speed", () => {
   assert.equal(rival.alive, true);
 });
 
-test("killing a rival drops them out of the field with no respawn", () => {
+test("killing a rival takes it off the road; it keeps its place while it waits and respawns (RACE_RESPAWNS v1.0)", () => {
+  // was: "drops them out of the field with no respawn" — replaced by LEVELS/RACE_RESPAWNS.md v1.0 §2/§4
   const sim = quiet("highway");
   const field = rivals(sim);
   const victim = field.reduce((a, b) => (a.along > b.along ? a : b));
@@ -173,12 +174,13 @@ test("killing a rival drops them out of the field with no respawn", () => {
   victim.hp = 0;
   step(sim, dt);
   assert.equal(victim.alive, false);
+  assert.equal(victim.pending, true);
   assert.ok(sim.score > score, "glory score still counts");
   assert.equal(sim.takedowns, 1);
-  assert.equal(raceStandings(sim).place, before - 1);
-  for (let i = 0; i < 120; i++) step(sim, dt);
-  assert.equal(victim.alive, false);
-  assert.equal(rivals(sim).length, RIVAL_COUNT - 1);
+  assert.equal(raceStandings(sim).place, before, "a kill never bumps the hero up by itself");
+  for (let i = 0; i < 150; i++) step(sim, dt);
+  assert.equal(victim.alive, true, "back after 2 s");
+  assert.equal(rivals(sim).length, RIVAL_COUNT);
   assert.equal(sim.wave, 0);
   assert.equal(sim.cars.filter((c) => c.alive && !c.hero && !c.racer).length, 0);
 });

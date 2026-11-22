@@ -2,6 +2,8 @@
  * Save blob (localStorage "nightfall-roadster-v2") parse / merge, kept pure so old-save migration is unit-tested.
  * Pre-per-course saves are { bestScore, bestWave, bestTime, credits, shop } with no `race`: those wave-run bests are
  * kept as they are (they never held a race place, so nothing maps into `race`), and `race` defaults to {}.
+ * Saves from before Spare chassis (RACE_RESPAWNS v1.0 §5) have no `shop.spareLives`: it migrates to 0 (stock 3 lives);
+ * a stored tier is clamped to 0..2 (sanitizeShop / spareLivesTier).
  */
 import { sanitizeRaceBests, type RaceBests } from "./records";
 import { emptyShop, sanitizeShop, type ShopSave } from "./shop";

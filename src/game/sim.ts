@@ -13,7 +13,8 @@ import {
   type Track,
 } from "./road";
 import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, SAND, sandAt, sectionAt, WASH, washAt, washPhase } from "./course";
-import { emptyShop, heroMineArm, racePayout, type RacePurse, type ShopSave } from "./shop";
+import { emptyShop, heroMineArm, racePayout, spareLivesTier, type RacePurse, type ShopSave } from "./shop";
+import { RESPAWN_DELAY, RESPAWN_INVULN, RESPAWN_RETRY, RESPAWN_SPEED, RESPAWN_STAGGER, raceKillScore, respawnBudget, respawnCandidates } from "./respawn";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
 
 export type Fx =
@@ -171,6 +172,18 @@ export type Car = {
   surf: string;
   /** Rival-only speed deficit from sand / wave wash (m/s below cruise). 0 off Coast Road. */
   surfDef: number;
+  /** RACE_RESPAWNS §1: respawns this racer still has this race. */
+  respawnsLeft: number;
+  /** Times this racer has been killed this race (§4 kill decay). */
+  kills: number;
+  /** Dead and waiting to respawn (§2). Still counts for placing at deathAlong (§4). */
+  pending: boolean;
+  /** Seconds left before the respawn may happen (then it also waits for the field stagger / a clear point). */
+  respawnT: number;
+  deathAlong: number;
+  deathLane: number;
+  /** Killed with no respawns left: out of the race and the place count. */
+  eliminated: boolean;
 };
 
 export type Phase = "menu" | "playing" | "paused" | "finished";
@@ -304,6 +317,14 @@ export type Sim = {
   gateCapT: number;
   track: Track;
   cars: Car[];
+  /** Hero lives at the start of this run: LIVES + Spare chassis (RACE_RESPAWNS §5). */
+  startLives: number;
+  /** Per-rival respawn budget this race (§1). 0 on wave runs. */
+  rivalBudget: number;
+  /** Field stagger: sim.time before which no rival may respawn (§2). */
+  nextRespawnAt: number;
+  /** Rival respawns this run: time, along, hero along at that moment (tests / debug). */
+  respawnLog: { t: number; id: number; s: number; heroS: number }[];
   shots: Shot[];
   mines: Mine[];
   phase: Phase;
@@ -589,6 +610,13 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     bumpCd: [],
     surf: "",
     surfDef: 0,
+    respawnsLeft: 0,
+    kills: 0,
+    pending: false,
+    respawnT: 0,
+    deathAlong: 0,
+    deathLane: 0,
+    eliminated: false,
   };
 }
 
@@ -627,6 +655,10 @@ export function createSim(): Sim {
     takedowns: 0,
     falls: 0,
     lives: LIVES,
+    startLives: LIVES,
+    rivalBudget: 0,
+    nextRespawnAt: 0,
+    respawnLog: [],
     wave: 0,
     queue: [],
     spawnCd: 0,
@@ -716,6 +748,12 @@ function park(sim: Sim) {
     c.y = -40;
     c.racer = false;
     c.raceSpeed = 0;
+    c.pending = false;
+    c.eliminated = false;
+    c.respawnT = 0;
+    c.kills = 0;
+    c.respawnsLeft = 0;
+    c.invuln = 0;
   }
 }
 
@@ -741,7 +779,12 @@ export function begin(sim: Sim) {
   sim.score = 0;
   sim.takedowns = 0;
   sim.falls = 0;
-  sim.lives = LIVES;
+  // RACE_RESPAWNS §5: Spare chassis adds starting lives on every run (race and waves)
+  sim.startLives = LIVES + spareLivesTier(sim.shop?.spareLives);
+  sim.lives = sim.startLives;
+  sim.rivalBudget = 0;
+  sim.nextRespawnAt = 0;
+  sim.respawnLog = [];
   sim.wave = 0;
   sim.queue = [];
   sim.spawnCd = 0;
@@ -771,6 +814,7 @@ function armRace(sim: Sim) {
     sim.race.dist = raceDistance(sim.stageId, RACE_DIST);
     sim.race.paceAlong = along;
     sim.race.originAlong = along;
+    sim.rivalBudget = respawnBudget(sim.startLives);
     spawnRivals(sim);
     return;
   }
@@ -1036,13 +1080,17 @@ function offroadReset(sim: Sim, car: Car) {
   car.offT = 0;
   car.slideT = 0;
   sim.events.push({ t: "hit", x: car.x, y: car.y + 0.5, z: car.z, big: true });
-  sim.events.push({ t: "scrape" });
-  toast(sim, "Back on track", true);
+  if (car.hero) {
+    sim.events.push({ t: "scrape" });
+    toast(sim, "Back on track", true);
+  }
 }
 
 function respawn(sim: Sim, car: Car, reason: "fall" | "wreck") {
   if (!car.hero) {
-    killAI(sim, car, true);
+    // RACE_RESPAWNS §1 / LEVELS C5: a bridge-gap reset of a race rival is not a death (no budget, no score)
+    if (car.racer && sim.race.armed) offroadReset(sim, car);
+    else killAI(sim, car, true);
     return;
   }
   if (reason === "fall") {
@@ -1137,17 +1185,37 @@ function killAI(sim: Sim, car: Car, fell = false) {
   const bx = car.x;
   const by = car.y;
   const bz = car.z;
+  const deathAlong = car.along;
   car.alive = false;
   car.speed = 0;
   car.y = -40;
   const tier = car.kind === "hero" ? 1 : ENEMY[car.kind].tier;
-  const pts = fell ? 50 * tier : 100 * tier;
+  const name = car.kind === "hero" ? "" : ENEMY[car.kind].name;
+  let pts = fell ? 50 * tier : 100 * tier;
+  let msg = fell ? `Lost to the void  +${pts}` : `${name} down  +${pts}`;
+  if (car.racer && sim.race.armed) {
+    // RACE_RESPAWNS §1/§4: spend a respawn, or eliminate on the last one; repeat kills of the same car score less
+    const elim = car.respawnsLeft <= 0;
+    pts = raceKillScore(tier, car.kills, fell, elim);
+    car.kills += 1;
+    if (elim) {
+      car.eliminated = true;
+      car.pending = false;
+      msg = `${name} eliminated  +${pts}`;
+    } else {
+      car.respawnsLeft -= 1;
+      car.pending = true;
+      car.respawnT = RESPAWN_DELAY;
+      car.deathAlong = deathAlong;
+      car.deathLane = car.lane;
+      msg = `${name} down  +${pts} · back in ${RESPAWN_DELAY}s`;
+    }
+  }
   sim.takedowns += 1;
   sim.score += pts;
   sim.events.push({ t: "boom", x: bx, y: Math.max(0.6, by), z: bz });
   sim.events.push({ t: "down" });
-  const name = car.kind === "hero" ? "" : ENEMY[car.kind].name;
-  toast(sim, fell ? `Lost to the void  +${pts}` : `${name} down  +${pts}`, true);
+  toast(sim, msg, true);
   sim.hitstop = car.kind === "boss" ? 0.25 : 0.07;
   sim.trauma = Math.min(1, sim.trauma + (car.kind === "boss" ? 1 : 0.45));
   if (!fell && car.kind === "boss") {
@@ -1645,13 +1713,16 @@ export type RaceStanding = {
   behindField: number;
 };
 
-/** Live place from the hero plus living rivals. Dead rivals do not occupy a place. */
+/** Live place from the hero plus living rivals and rivals waiting to respawn (at their death point). Eliminated rivals do not occupy a place. */
 export function raceStandings(sim: Sim): RaceStanding {
   const hero = sim.cars[0];
   const alongs: number[] = [];
   for (let i = 1; i < sim.cars.length; i++) {
     const car = sim.cars[i];
-    if (car.alive && car.racer) alongs.push(car.along);
+    if (!car.racer) continue;
+    // RACE_RESPAWNS §4: a dead car waiting to respawn still holds its place at deathAlong; only eliminated cars drop out
+    if (car.alive) alongs.push(car.along);
+    else if (car.pending && !car.eliminated) alongs.push(car.deathAlong);
   }
   let ahead = 0;
   let leader = hero.along;
@@ -1670,6 +1741,70 @@ export function raceStandings(sim: Sim): RaceStanding {
   const nextGap = place <= 1 ? (bestBehind === -Infinity ? 0 : hero.along - bestBehind) : nextAhead === Infinity ? leaderGap : nextAhead;
   const last = alongs.length ? Math.min(...alongs) : hero.along;
   return { place, leaderGap, nextGap, behindField: hero.along - last };
+}
+
+// ---------------------------------------------------------------- race respawns (LEVELS/RACE_RESPAWNS.md v1.0)
+
+/** §2 lane at the respawn point: the lane held at death, else the road centre; null when both are blocked. */
+function respawnLane(sim: Sim, car: Car, s: number): number | null {
+  const race = s - sim.race.originAlong;
+  const course = courseFor(sim.stageId);
+  const split = !!course && sectionAt(course, race)?.type === "split";
+  const clear = (lane: number) => {
+    if (respawnBlocked(sim.stageId, race, lane)) return false;
+    for (const o of sim.cars) {
+      if (o === car || !o.alive) continue;
+      const lat = o.hero ? lateralOf(sim, o) : o.lane;
+      if (Math.abs(o.along - s) < 10 && Math.abs(lat - lane) < 3.2) return false;
+    }
+    return true;
+  };
+  if (clear(car.deathLane)) return car.deathLane;
+  // the road centre is the median barrier in a split (fork) section: no centre fallback there
+  if (!split && clear(0)) return 0;
+  return null;
+}
+
+function respawnRival(sim: Sim, car: Car): boolean {
+  const hero = sim.cars[0];
+  const minS = sim.track.first * 2 + 4;
+  for (const s of respawnCandidates(car.deathAlong, hero.along)) {
+    if (s < minS || !spawnPointOk(sim, s)) continue;
+    const lane = respawnLane(sim, car, s);
+    if (lane == null) continue;
+    car.lane = lane;
+    place(sim, car, s, RESPAWN_SPEED);
+    car.hp = car.maxHp = RACE_HP;
+    car.invuln = RESPAWN_INVULN;
+    car.flash = 0.3;
+    car.recover = 0;
+    car.burst = 0;
+    car.hold = 0;
+    car.leaving = false;
+    car.fireCd = Math.max(car.fireCd, RESPAWN_INVULN);
+    car.ramCd = 0.6;
+    // §2: speed 22, then back up to its own cruise. Racers have no cruise ramp of their own (stepRival sets
+    // speed = cruise), so the start deficit rides the existing rival surface recovery (12 m/s²); no catch-up boost.
+    car.surfDef = Math.max(0, Math.max(SCROLL_MIN, car.raceSpeed) - RESPAWN_SPEED);
+    car.pending = false;
+    car.respawnT = 0;
+    sim.respawnLog.push({ t: sim.time, id: car.id, s: car.along, heroS: hero.along });
+    return true;
+  }
+  return false;
+}
+
+/** §2: count down each pending rival; respawn when due, one per RESPAWN_STAGGER s across the field. */
+function stepRespawns(sim: Sim, dt: number) {
+  if (!sim.race.armed) return;
+  for (let i = 1; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    if (!car.racer || car.alive || !car.pending) continue;
+    car.respawnT -= dt;
+    if (car.respawnT > 1e-9 || sim.time < sim.nextRespawnAt - 1e-9) continue;
+    if (respawnRival(sim, car)) sim.nextRespawnAt = sim.time + RESPAWN_STAGGER;
+    else car.respawnT = RESPAWN_RETRY;
+  }
 }
 
 /**
@@ -1755,7 +1890,8 @@ function spawnPointOk(sim: Sim, s: number) {
 }
 
 function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
-  const car = sim.cars.find((c, i) => i > 0 && !c.alive);
+  // a race rival waiting to respawn keeps its slot (RACE_RESPAWNS §2)
+  const car = sim.cars.find((c, i) => i > 0 && !c.alive && !(c.racer && c.pending));
   if (!car) return null;
   const hero = sim.cars[0];
   sim.spawnFlip += 1;
@@ -1775,6 +1911,12 @@ function spawnEnemy(sim: Sim, kind: EnemyKind, at?: number, lane?: number) {
   if (s < sim.track.first * 2 + 4) return null;
   const st = ENEMY[kind];
   car.kind = kind;
+  // a reused slot is a plain hunter until spawnRivals marks it (an eliminated rival's slot must not keep racing state)
+  car.racer = false;
+  car.raceSpeed = 0;
+  car.pending = false;
+  car.eliminated = false;
+  car.invuln = 0;
   car.lane = lane ?? (kind === "boss" ? 0 : LANES[Math.floor(Math.random() * LANES.length)]);
   place(sim, car, s, s > hero.along ? Math.max(18, hero.speed * 0.6) : Math.max(30, hero.speed + 6));
   car.hp = car.maxHp = st.hp + (kind === "boss" ? 150 * (Math.max(1, Math.floor(sim.wave / 5)) - 1) : 0);
@@ -2291,6 +2433,11 @@ function spawnRivals(sim: Sim) {
     const car = spawnEnemy(sim, RIVAL_KINDS[i], off, RIVAL_LANES[i]);
     if (!car) continue;
     car.racer = true;
+    car.respawnsLeft = sim.rivalBudget;
+    car.kills = 0;
+    car.pending = false;
+    car.eliminated = false;
+    car.invuln = 0;
     car.raceSpeed = RIVAL_SPEEDS[i] ?? RIVAL_SPEED;
     car.speed = car.raceSpeed;
     car.baseSpeed = car.raceSpeed;
@@ -2365,7 +2512,7 @@ function rivalObstacles(sim: Sim, car: Car, dt: number) {
     if (car.bumpCd[i] > 0 || !obstacleOverlap(o, race, car.lane)) continue;
     car.lane = ejectLat(sim.stageId, race, o, car.lane);
     car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
-    car.hp -= 4;
+    if (car.invuln <= 0) car.hp -= 4;
     car.bumpCd[i] = 0.5;
     const p = poseAt(sim.track, car.along);
     car.x = p.x + p.rx * car.lane;
@@ -2420,6 +2567,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.ramCd = Math.max(0, car.ramCd - dt);
   car.fireCd = Math.max(0, car.fireCd - dt);
   car.flash = Math.max(0, car.flash - dt);
+  car.invuln = Math.max(0, car.invuln - dt);
   car.leaving = false;
   const base = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
   rivalSurface(sim, car, base, dt);
@@ -2463,7 +2611,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   // A car still behind does not get a soft-touch. The burst lunge is the only rear hit.
   if (inCone && car.ramCd <= 0 && dist < 4.6 && dS <= 0 && dS > -4) ram(sim, hero, car);
   if (!inCone) return;
-  if (car.alive && car.fireCd <= 0 && hero.alive && sim.phase === "playing") {
+  if (car.alive && car.invuln <= 0 && car.fireCd <= 0 && hero.alive && sim.phase === "playing") {
     enemyShot(sim, car);
     car.fireCd = RIVAL_SHOT_GAP;
   }
@@ -2626,6 +2774,7 @@ function ram(sim: Sim, hero: Car, enemy: Car, hit?: { heroDmg: number; selfDmg: 
 }
 
 function hurtEnemy(sim: Sim, car: Car, dmg: number, rear: boolean) {
+  if (car.racer && car.invuln > 0) return; // RACE_RESPAWNS §3: no damage while respawn-invulnerable
   car.hp -= dmg;
   car.flash = 0.18;
   if (car.kind !== "boss" && car.kind !== "drone") car.speed *= 0.86;
@@ -2716,6 +2865,7 @@ function stepShots(sim: Sim, dt: number) {
     for (const car of sim.cars) {
       if (!car.alive || car.id === s.owner) continue;
       if (s.owner !== 0 && !car.hero) continue; // no enemy friendly fire
+      if (car.racer && car.invuln > 0) continue; // RACE_RESPAWNS §3: hero shots pass through (no score, no hitstop)
       const big = car.kind === "boss";
       const st = car.kind === "hero" ? null : ENEMY[car.kind];
       if (Math.abs(car.y + (st ? st.hitY : 0.6) - s.y) > (st ? st.hitH : 1.6)) continue;
@@ -2762,6 +2912,7 @@ function stepMines(sim: Sim, dt: number) {
     for (const car of sim.cars) {
       if (!car.alive || car.kind === "drone") continue;
       if (m.owner > 0 && !car.hero) continue; // enemy mines only hunt the player
+      if (car.racer && car.invuln > 0) continue; // RACE_RESPAWNS §3: a respawning rival rolls over mines untouched
       if (m.oil && car.hero) continue;
       const dx = car.x - m.x;
       const dz = car.z - m.z;
@@ -2866,6 +3017,7 @@ export function step(sim: Sim, dt: number) {
   stepMines(sim, dt);
   stepPickups(sim, dt);
   if (sim.phase === "playing") stepWaves(sim, dt);
+  if (sim.phase === "playing") stepRespawns(sim, dt);
   if (sim.phase === "playing") stepRace(sim, dt);
   if (hero.alive) scrollFloor(hero);
 }
@@ -2885,6 +3037,19 @@ export function debugSpawn(sim: Sim, kind: EnemyKind, offset: number, lane?: num
   const car = spawnEnemy(sim, kind, offset, lane);
   if (car) car.speed = sim.cars[0].speed;
   return car;
+}
+
+/** tests / ?debug: deal a killing hit through the normal damage path (respects respawn invulnerability) */
+export function debugKill(sim: Sim, car: Car) {
+  if (!car.alive || car.hero) return false;
+  hurtEnemy(sim, car, car.hp + 1, false);
+  return !car.alive;
+}
+
+/** tests: an off-road or bridge-gap reset of a car (RACE_RESPAWNS §1: not a death for a race rival) */
+export function debugResetCar(sim: Sim, car: Car, reason: "offroad" | "fall") {
+  if (reason === "offroad") offroadReset(sim, car);
+  else respawn(sim, car, "fall");
 }
 
 export function formatTime(t: number) {

@@ -204,6 +204,28 @@ for (const prof of profiles) {
   await page.evaluate(() => { for (let i = 0; i < 120 && window.__nf.takedowns === 0 && window.__nf.phase === "playing"; i++) window.__nfAdvance(0.5, "hunt"); });
   const k1 = await page.evaluate(() => window.__nf.takedowns);
   check(P, "an enemy dies", k1 > k0 || k0 > 0, `kills ${k0} -> ${k1}`);
+  // RACE_RESPAWNS v1.0: a killed race rival waits 2.0 s (still placed), comes back behind the hero with 1.5 s invuln
+  const rsp = await page.evaluate(() => {
+    const s = window.__nf;
+    s.hitstop = 0;
+    const r0 = window.__nfRespawns();
+    const v = r0.rivals.find((c) => c.alive && c.invuln <= 0 && c.left > 0);
+    if (!v) return { ok: false, why: "no live rival", r0 };
+    const n0 = r0.log.length;
+    window.__nfKill(v.id);
+    const toast = s.toast;
+    const mid = window.__nfRespawns().rivals.find((c) => c.id === v.id);
+    const t0 = s.time;
+    const queued = r0.rivals.filter((c) => c.pending).length; // an earlier kill may be ahead of it in the 1 s field stagger
+    window.__nfAdvance(1.9, "idle");
+    const early = window.__nfRespawns().rivals.find((c) => c.id === v.id).alive;
+    for (let i = 0; i < 40 && s.phase === "playing" && !window.__nfRespawns().rivals.find((c) => c.id === v.id).alive; i++) window.__nfAdvance(0.1, "idle");
+    const r1 = window.__nfRespawns();
+    const back = r1.rivals.find((c) => c.id === v.id);
+    const entry = r1.log.slice(n0).find((e) => e.id === v.id);
+    return { ok: true, budget: r0.budget, toast, mid, back, entry, phase: s.phase, early, queued, after: entry ? +(entry.t - t0).toFixed(2) : null };
+  });
+  check(P, "race rival respawn: budget 4, waits 2 s while placed, returns behind the hero, invulnerable", rsp.ok && rsp.budget === 4 && /down\s+\+\d+ · back in 2s/.test(rsp.toast) && rsp.mid.pending && !rsp.mid.alive && rsp.mid.left === 3 && !rsp.early && (rsp.phase !== "playing" || (rsp.back.alive && !!rsp.entry && rsp.entry.s <= rsp.entry.heroS + 1e-6 && rsp.after >= 1.99 && rsp.after <= 2.05 + rsp.queued)), JSON.stringify(rsp));
   // Night City is a 3600 m race. Idling DNFs or finishes; it does not wreck. Cover finish -> results -> retry here.
   const finished = await page.evaluate(() => {
     const s = window.__nf;
