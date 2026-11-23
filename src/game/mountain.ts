@@ -507,3 +507,8 @@ export function peakBackdropGeometry(): THREE.BufferGeometry {
   return geo2;
 }
 export type { RGB };
+/** test hook (week-i-polish): a procedural piece's vertex colours (distinct-tone checks) */
+export function passPieceColours(name: string): ArrayLike<number> {
+  const c = piece({ name, s: 0, lx: 0, ly: 0, ry: 0, ground: true, seed: 1, side: 1 });
+  return c ? c.c : [];
+}
