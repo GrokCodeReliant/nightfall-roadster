@@ -4,7 +4,7 @@
  * (kicker ramps and elevated void gaps) keep the thrusters relevant.
  * An authored course (Night City) replaces the seeded bend and the random pieces.
  */
-import { bendAt, COURSE_ORIGIN, sideLiftAt, widthAt, type Course } from "./course";
+import { bendAt, COURSE_ORIGIN, RAMP_DEFAULT, sideLiftAt, widthAt, type Course, type RampProfile } from "./course";
 
 export type Sample = {
   x: number;
@@ -34,7 +34,7 @@ export type Pose = {
   width: number;
 };
 
-export type Piece = { kind: "ramp" | "void"; s: number; len: number; signS: number; label: string };
+export type Piece = { kind: "ramp" | "void"; s: number; len: number; signS: number; label: string; /** BN-22 authored ramp profile */ prof?: RampProfile };
 
 export type Track = {
   /** samples[k] has index first + k and sits at s = (first + k) * STEP */
@@ -114,9 +114,11 @@ function profile(track: Track, s: number) {
   if (!p) return { y: 0, gap: false, kicker: false };
   const d = s - p.s;
   if (p.kind === "ramp") {
-    // up 0→5.4 over 60 m, kicker on the last 12 m, then a long descent to land on
-    if (d <= 60) return { y: lerp(0, 5.4, d / 60), gap: false, kicker: d >= 48 };
-    return { y: lerp(5.4, 0, (d - 60) / 90), gap: false, kicker: false };
+    // up 0→5.4 over 60 m, kicker on the last 12 m, then a long descent to land on (BN-22: an authored profile, e.g. the
+    // Summit Leap's 9.0 m over 80 m with the kicker at 68-80 m and a 120 m descent)
+    const r = p.prof ?? RAMP_DEFAULT;
+    if (d <= r.up) return { y: lerp(0, r.h, d / r.up), gap: false, kicker: d >= r.kick };
+    return { y: lerp(r.h, 0, (d - r.up) / r.down), gap: false, kicker: false };
   }
   // former void (M1, Sara's call): climb to an elevated deck that now runs solid across the old
   // 50 m hole, then descent. Every car can drive it; the hole is gone (no thrust required).
@@ -167,6 +169,7 @@ export function buildCourseTrack(course: Course): Track {
       len: sec.len,
       signS: sec.type === "ramp" ? s - 130 : -1e9,
       label: sec.type === "ramp" ? "RAMP" : "",
+      prof: sec.type === "ramp" ? sec.ramp : undefined,
     });
   }
   ensureTrack(track, COURSE_ORIGIN + course.length + course.runout);

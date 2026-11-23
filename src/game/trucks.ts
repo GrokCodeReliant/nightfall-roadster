@@ -2,7 +2,7 @@
 // hero always catches (below SCROLL_MIN). Pure state + rules here; sim.ts applies contact, world.ts draws logging_truck.
 import { courseFor, edgeKind, LANE_LAT, type Obstacle } from "./course";
 
-export type TruckSpec = { id: string; lane: keyof typeof LANE_LAT; s0: number; s1: number; kind?: "forklift" };
+export type TruckSpec = { id: string; lane: keyof typeof LANE_LAT; s0: number; s1: number; kind?: "forklift" | "rock" };
 /** spawn -> exit, race s (§5 LT placements) */
 export const WOODS_TRUCKS: TruckSpec[] = [
   { id: "LT1", lane: "L3", s0: 1000, s1: 1600 },
@@ -23,7 +23,9 @@ export const PORT_FORKLIFTS: TruckSpec[] = [
 ];
 export const FORKLIFT = { speed: 12, alongHalf: 2, latHalf: 1.1, h: 2.4, dmg: 6 } as const;
 /** collider / pace of one mover (logging truck or forklift) */
-export const moverDims = (spec: TruckSpec) => (spec.kind === "forklift" ? FORKLIFT : TRUCK);
+/** Mountain Pass landed rock (§5 RF): 3 x 3 m static obstacle, OB rule (hero -6 hp), pushed by sim.ts, never stepped here */
+export const ROCK_MOVER = { speed: 0, alongHalf: 1.5, latHalf: 1.5, h: 3, dmg: 6 } as const;
+export const moverDims = (spec: TruckSpec) => (spec.kind === "forklift" ? FORKLIFT : spec.kind === "rock" ? ROCK_MOVER : TRUCK);
 
 export type Truck = { id: string; lane: number; lat: number; s: number; s1: number; alive: boolean; done: boolean; pulling: boolean; spec: TruckSpec };
 
@@ -48,9 +50,9 @@ export function pullOffAt(stageId: string, spec: TruckSpec): number {
 export function stepTrucks(stageId: string, trucks: Truck[], heroS: number, dt: number) {
   const course = courseFor(stageId);
   const edge = course ? course.width / 2 : 12;
-  let alive = trucks.filter((t) => t.alive).length;
+  let alive = trucks.filter((t) => t.alive && t.spec.kind !== "rock").length;
   for (const t of trucks) {
-    if (t.done || t.alive) continue;
+    if (t.done || t.alive || t.spec.kind === "rock") continue;
     if (heroS < t.spec.s0 - TRUCK.spawnAhead) continue;
     // a slot freed too late (or the hero is already on top of the spawn): never pop a truck into view
     if (heroS > t.spec.s0 - 120 || alive >= TRUCK.maxAlive) {
@@ -63,7 +65,7 @@ export function stepTrucks(stageId: string, trucks: Truck[], heroS: number, dt: 
     alive++;
   }
   for (const t of trucks) {
-    if (!t.alive) continue;
+    if (!t.alive || t.spec.kind === "rock") continue;
     t.s += moverDims(t.spec).speed * dt;
     if (t.s >= t.s1) {
       t.pulling = true;

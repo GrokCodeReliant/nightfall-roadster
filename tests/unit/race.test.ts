@@ -96,8 +96,8 @@ test("highway begin arms the race field and a 30 m/s pace; other stages do not",
   assert.equal(highway.wave, 0);
 
   // Night City, Coast Road and Pine Woods are authored races (nightcity / coastroad / woodsroad tests). Classic and the other placeholders stay endless.
-  // Industrial Port is an authored race too (week-i-port: porthazards / portroad tests); Mountain Pass stays a placeholder.
-  for (const id of ["", "classic", "pass"]) {
+  // Industrial Port and Mountain Pass are authored races too (week-i-port: portroad / passroad tests).
+  for (const id of ["", "classic"]) {
     const sim = createSim();
     sim.stageId = id;
     begin(sim);

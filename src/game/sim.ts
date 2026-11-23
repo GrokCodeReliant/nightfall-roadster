@@ -14,7 +14,8 @@ import {
   type Track,
 } from "./road";
 import { freshTrucks, moverDims, stepTrucks, truckAhead, truckObstacle, TRUCK, type Truck } from "./trucks";
-import { bendAt, burstWindows, CRANE, craneAt, cranePhase, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, OIL, OIL_RESIDUE, raceDistance, respawnBlocked, sandAt, sectionAt, sideGapAt, surfaceParams, WASH, washAt, washPhase, type SideGap } from "./course";
+import { freshRocks, stepRocks, type RockState } from "./rockfall";
+import { bendAt, burstWindows, CRANE, craneAt, cranePhase, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, ICE, ICE_RESIDUE, OIL, OIL_RESIDUE, ROCKFALL, raceDistance, respawnBlocked, sandAt, sectionAt, sideGapAt, surfaceParams, WASH, washAt, washPhase, type SideGap } from "./course";
 import { emptyShop, heroMineArm, racePayout, spareLivesTier, type RacePurse, type ShopSave } from "./shop";
 import { RESPAWN_DELAY, RESPAWN_INVULN, RESPAWN_RETRY, RESPAWN_SPEED, RESPAWN_STAGGER, raceKillScore, respawnBudget, respawnCandidates } from "./respawn";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
@@ -176,6 +177,8 @@ export type Car = {
   avoidLane: number;
   /** Industrial Port oil residue (s left at the slick's grip / steer after leaving it) */
   slickT: number;
+  /** the residue is Mountain Pass ice (else port oil) */
+  slickIce: boolean;
   /** BN-19: last crane cycle index that hit this car, per crane id */
   craneN: Record<string, number>;
   /** BN-15: the fork side this car last held (a median with a height step is a wall both ways) */
@@ -352,6 +355,8 @@ export type Sim = {
   nextCrate: number;
   /** BN-17 Pine Woods logging trucks (empty on every other stage); reset by begin() */
   trucks: Truck[];
+  /** BN-19 Mountain Pass rockfall (zones empty on every other stage); reset by begin() */
+  rocks: RockState;
   recycled: number;
   spawnCd: number;
   spawnFlip: number;
@@ -625,6 +630,7 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     truckCd: 0,
     avoidLane: NaN,
     slickT: 0,
+    slickIce: false,
     craneN: {},
     medSide: 0,
     surf: "",
@@ -668,6 +674,7 @@ export function createSim(): Sim {
     up: freshUpgrades(),
     nextCrate: 420,
     trucks: [],
+    rocks: { rocks: [], zones: [] },
     recycled: 0,
     phase: "menu",
     time: 0,
@@ -818,6 +825,7 @@ export function begin(sim: Sim) {
   sim.events.length = 0;
   armRace(sim);
   sim.trucks = sim.race.armed ? freshTrucks(sim.stageId) : [];
+  sim.rocks = freshRocks(sim.race.armed ? sim.stageId : "");
   for (const c of sim.cars) {
     c.truckCd = 0;
     c.avoidLane = NaN;
@@ -1054,11 +1062,49 @@ function surfaceUnder(sim: Sim, car: Car, raceS: number, lat: number): SurfaceHi
   if (sd) {
     const k = surfaceParams(sd);
     // Industrial Port oil: the residue timer refills while on the slick and holds its grip / steer for 0.5 s after
-    if (sd.kind === "oil") car.slickT = OIL_RESIDUE;
+    if (sd.kind === "oil") { car.slickT = OIL_RESIDUE; car.slickIce = false; }
+    // Mountain Pass ice: the same slick path, 0.3 s residue at grip x0.3 / steer x0.55
+    if (sd.kind === "ice") { car.slickT = ICE_RESIDUE; car.slickIce = true; }
     return { id: sd.id, cap: k.cap, decel: k.decel, steerMul: k.steerMul, gripMul: k.gripMul };
   }
+  if (car.slickT > 0 && car.slickIce) return { id: "ice", cap: ICE.cap, decel: ICE.decel, steerMul: ICE.steerMul, gripMul: ICE.gripMul };
   if (car.slickT > 0) return { id: "oil", cap: OIL.cap, decel: OIL.decel, steerMul: OIL.steerMul, gripMul: OIL.gripMul };
   return null;
+}
+
+/** BN-19 rockfall (Mountain Pass §5 RF): spawn / land / crumble on the race clock. At impact every car within 3 m of the
+ *  rock (and not flying over it) takes the hit: hero -14 through damageHero (invuln / shield hold), AI -8; no push, no speed
+ *  change (the truck cooldown keeps the landed rock from also glancing a car it just hit). The landed rock is a static
+ *  mover in sim.trucks for 6 s (OB rule: hero -6 and the glance, rivals steer round it), then crumbles. */
+function rockfall(sim: Sim, hero: Car) {
+  if (sim.phase !== "playing") return;
+  const { landed, gone } = stepRocks(sim.stageId, sim.rocks, hero.along - sim.race.originAlong, sim.time);
+  for (const r of landed) {
+    const p = poseAt(sim.track, sim.race.originAlong + r.s);
+    for (const car of sim.cars) {
+      if (!car.alive || !(car.hero || car.racer)) continue;
+      const lat = car.hero ? lateralOf(sim, car) : car.lane;
+      const ds = car.along - sim.race.originAlong - r.s;
+      if (Math.hypot(ds, lat - r.lat) > ROCKFALL.radius) continue;
+      if (car.y - deckY(sim.track, p, lat) > ROCKFALL.h + 1) continue;
+      car.truckCd = Math.max(car.truckCd, 0.6);
+      sim.events.push({ t: "hit", x: car.x, y: car.y + 1.2, z: car.z, big: true });
+      if (car.hero) {
+        if (damageHero(sim, ROCKFALL.heroDmg)) toast(sim, "Rockfall!", true);
+        continue;
+      }
+      if (car.invuln > 0) continue;
+      car.hp -= ROCKFALL.aiDmg;
+      car.flash = 0.18;
+      if (car.hp <= 0) killAI(sim, car);
+    }
+    sim.trucks.push({ id: r.id, lane: r.lat, lat: r.lat, s: r.s, s1: r.s, alive: true, done: false, pulling: false, spec: { id: r.id, lane: "L1", s0: r.s, s1: r.s, kind: "rock" } });
+  }
+  for (const r of gone) {
+    const t = sim.trucks.find((x) => x.id === r.id);
+    if (t) { t.alive = false; t.done = true; }
+  }
+  if (gone.length) sim.trucks = sim.trucks.filter((t) => t.spec.kind !== "rock" || t.alive);
 }
 
 /** BN-19 crane swing (Industrial Port §5 CS): a car in a crane's active band, 0-6 m over the deck, takes the hit once per
@@ -2779,7 +2825,7 @@ function canyonLane(lane: number, width: number) {
 /** Industrial Port oil on a rival (lane-locked): grip loss carries it wide, toward the outside of the bend (the nearer kerb
  *  on a straight), until the live edge holds it (rails glance). Only while on the slick / its residue. */
 function rivalSlick(sim: Sim, car: Car, dt: number) {
-  if (!car.surf.startsWith("OS") && car.surf !== "oil") return;
+  if (!car.surf.startsWith("OS") && car.surf !== "oil" && !car.surf.startsWith("IC") && car.surf !== "ice") return;
   const course = courseFor(sim.stageId);
   if (!course) return;
   const k = bendAt(course, car.along);
@@ -3260,6 +3306,7 @@ export function step(sim: Sim, dt: number) {
   u.rocketCd = Math.max(0, u.rocketCd - dt);
   sim.idleT = Math.abs(hero.speed) < 6 ? sim.idleT + dt : 0;
   if (sim.race.armed && sim.trucks.length) stepTrucks(sim.stageId, sim.trucks, hero.along - sim.race.originAlong, dt);
+  if (sim.race.armed && sim.rocks.zones.length) rockfall(sim, hero);
   if (hero.alive) drive(sim, hero, input, dt, false);
   sim.prevMine = input.mine;
   if (sim.phase !== "playing") return;

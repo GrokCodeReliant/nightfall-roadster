@@ -6,6 +6,7 @@
  * Pine Woods layout: LEVELS/03_pine_woods.md v1.0 (locked).
  * Open Highway layout: LEVELS/04_open_highway.md v1.0 (locked).
  * Industrial Port layout: LEVELS/05_industrial_port.md v1.0 (locked).
+ * Mountain Pass layout: LEVELS/06_mountain_pass.md v1.0 (locked).
  */
 export const COURSE_ORIGIN = 140;
 export const COURSE_RUNOUT = 300;
@@ -26,7 +27,14 @@ export type Section = {
   edgeR: EdgeKind;
   zone: string;
   curves: Curve[];
+  /** BN-22 ramp profile for a `ramp` section (default: 5.4 m crest at 60 m, kicker 48-60 m, 90 m descent) */
+  ramp?: RampProfile;
 };
+/** BN-22: crest height h at `up` m, kicker from `kick` to `up`, then `down` m back to the road */
+export type RampProfile = { h: number; up: number; kick: number; down: number };
+export const RAMP_DEFAULT: RampProfile = { h: 5.4, up: 60, kick: 48, down: 90 };
+/** the profile of a ramp section (Summit Leap: 9.0 m over 80 m, kicker 68-80 m, 120 m down) */
+export const rampOf = (sec: Section): RampProfile => sec.ramp ?? RAMP_DEFAULT;
 
 export type Median = { s0: number; s1: number; half: number };
 
@@ -254,7 +262,57 @@ export const INDUSTRIAL_PORT: Course = {
   ],
 };
 
-const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS, highway: OPEN_HIGHWAY, port: INDUSTRIAL_PORT };
+/** Locked Mountain Pass section table (LEVELS/06_mountain_pass.md §1). Hairpins R 90 (peak 76 m with the 40 m easing),
+ *  switchbacks R 100 / 120, 18 m (3-lane) roads on the hairpins and switchbacks (BN-16), the BN-22 Summit Leap. */
+export const SUMMIT_LEAP: RampProfile = { h: 9.0, up: 80, kick: 68, down: 120 };
+export const MOUNTAIN_PASS: Course = {
+  id: "pass",
+  length: 4800,
+  runout: COURSE_RUNOUT,
+  width: 24,
+  medians: [
+    { s0: 2010, s1: 2450, half: 0.3 },
+    { s0: 3480, s1: 3960, half: 0.3 },
+  ],
+  tapers: [
+    { s0: 1000, s1: 1040, w0: 24, w1: 18 },
+    { s0: 1260, s1: 1300, w0: 18, w1: 24 },
+    { s0: 1700, s1: 1740, w0: 24, w1: 18 },
+    { s0: 1960, s1: 2000, w0: 18, w1: 24 },
+    // MP-8 holds 24 m through the R1 landing (furthest 2714), then tapers to 18 from 2720 (§3)
+    { s0: 2670, s1: 2720, w0: 24, w1: 24 },
+    { s0: 2720, s1: 2760, w0: 24, w1: 18 },
+    { s0: 3430, s1: 3470, w0: 18, w1: 24 },
+  ],
+  sections: [
+    { id: "MP-0", type: "road", s0: 0, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "lodge", curves: [] },
+    { id: "MP-1", type: "road", s0: 300, len: 500, width: 24, edgeL: "rail", edgeR: "rail", zone: "climb", curves: [curve(300, 250, 300), curve(550, 250, -300)] },
+    { id: "MP-2", type: "tunnel", s0: 800, len: 200, width: 24, edgeL: "rail", edgeR: "rail", zone: "shed", curves: [curve(800, 200, 800)] },
+    { id: "MP-3", type: "road", s0: 1000, len: 260, width: 18, edgeL: "rail", edgeR: "rail", zone: "eagle", curves: [curve(1000, 260, 90)] },
+    { id: "MP-4", type: "road", s0: 1260, len: 440, width: 24, edgeL: "rail", edgeR: "rail", zone: "scree", curves: [] },
+    { id: "MP-5", type: "road", s0: 1700, len: 260, width: 18, edgeL: "rail", edgeR: "rail", zone: "kettle", curves: [curve(1700, 260, -90)] },
+    { id: "MP-6", type: "split", s0: 1960, len: 500, width: 24, edgeL: "rail", edgeR: "rail", zone: "fork-a", curves: [curve(1960, 500, 250)] },
+    { id: "MP-7a", type: "road", s0: 2460, len: 60, width: 24, edgeL: "rail", edgeR: "rail", zone: "ridge", curves: [] },
+    { id: "MP-7", type: "ramp", s0: 2520, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "ridge", curves: [] },
+    {
+      id: "MP-8",
+      type: "road",
+      s0: 2670,
+      len: 800,
+      width: 18,
+      edgeL: "rail",
+      edgeR: "rail",
+      zone: "switch",
+      curves: [curve(2670, 200, 100), curve(2970, 200, -100), curve(3270, 200, 120)],
+    },
+    { id: "MP-9", type: "split", s0: 3470, len: 500, width: 24, edgeL: "rail", edgeR: "rail", zone: "fork-b", curves: [] },
+    { id: "MP-10a", type: "road", s0: 3970, len: 60, width: 24, edgeL: "rail", edgeR: "rail", zone: "leap", curves: [] },
+    { id: "MP-10", type: "ramp", s0: 4030, len: 200, width: 24, edgeL: "rail", edgeR: "rail", zone: "leap", curves: [], ramp: SUMMIT_LEAP },
+    { id: "MP-11", type: "road", s0: 4230, len: 570, width: 24, edgeL: "rail", edgeR: "soft", zone: "summit", curves: [curve(4230, 270, -500)] },
+  ],
+};
+
+const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS, highway: OPEN_HIGHWAY, port: INDUSTRIAL_PORT, pass: MOUNTAIN_PASS };
 
 /** BN-16: live road width at race s (tapers first, then the section's width; 24 off-course). */
 export function widthAt(course: Course, raceS: number): number {
@@ -366,7 +424,10 @@ export const WOODS_OBSTACLES: Obstacle[] = [
 /** Open Highway roadworks (§5 OB): barricade rows on the main (left) side of Fork A. */
 export const HIGHWAY_OBSTACLES: Obstacle[] = [barricade("OB-1", 2150, "L2"), barricade("OB-2", 2330, "L1")];
 
-const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES, woods: WOODS_OBSTACLES, highway: HIGHWAY_OBSTACLES };
+/** Mountain Pass snowdrift row SD (§5): mtn_snowdrift_row_6 on L3 at 3688, 6 m x 1.2 m x 1.0 m tall, OB rule; K-B hops it. */
+export const PASS_OBSTACLES: Obstacle[] = [{ id: "SD", s: 3688, lat: LANE_LAT.L3, latHalf: 3, alongHalf: 0.6, h: 1.0 }];
+
+const OBSTACLES: Record<string, readonly Obstacle[]> = { city: NIGHT_CITY_OBSTACLES, coast: COAST_OBSTACLES, woods: WOODS_OBSTACLES, highway: HIGHWAY_OBSTACLES, pass: PASS_OBSTACLES };
 
 export function obstaclesFor(stageId: string): readonly Obstacle[] {
   return OBSTACLES[stageId] ?? [];
@@ -395,6 +456,9 @@ export const HIGHWAY_KICKERS: LaneKicker[] = [
   { id: "KA3", s: 2252, lat: LANE_LAT.L3, len: 5.3, half: 3 },
   { id: "KA4", s: 2252, lat: LANE_LAT.L4, len: 5.3, half: 3 },
 ];
+
+/** Mountain Pass lane kicker K-B (§3): L3, lip 3680, clears the snowdrift row at 3688 at every speed >= 22. */
+export const PASS_KICKERS: LaneKicker[] = [{ id: "K-B", s: 3680, lat: LANE_LAT.L3, len: 5.3, half: 3 }];
 
 export function laneKickerAt(stageId: string, raceS: number, lat: number): boolean {
   for (const k of stageIdKickers(stageId)) {
@@ -458,7 +522,12 @@ export const PORT_GATES: Gate[] = [
   { id: "G-A", s: 1600, side: "right" },
   { id: "G-B", s: 3070, side: "left" },
 ];
-const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES, port: PORT_GATES };
+/** Mountain Pass: G-A on the outside (right) of Fork A, G-B on the frozen-lake shelf (right) of Fork B. No finish gate. */
+export const PASS_GATES: Gate[] = [
+  { id: "G-A", s: 2300, side: "right" },
+  { id: "G-B", s: 3850, side: "right" },
+];
+const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES, port: PORT_GATES, pass: PASS_GATES };
 
 export function gatesFor(stageId: string): readonly Gate[] {
   return GATES[stageId] ?? [];
@@ -491,7 +560,7 @@ export function tunnelClearance(course: Course): { ok: boolean; nearest: string;
   return { ok: true, nearest, gap };
 }
 
-const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS, woods: WOODS_KICKERS, highway: HIGHWAY_KICKERS };
+const KICKERS: Record<string, readonly LaneKicker[]> = { city: NIGHT_CITY_KICKERS, coast: COAST_KICKERS, woods: WOODS_KICKERS, highway: HIGHWAY_KICKERS, pass: PASS_KICKERS };
 
 export function stageIdKickers(id: string): readonly LaneKicker[] {
   return KICKERS[id] ?? [];
@@ -521,7 +590,8 @@ export function kickerWindow(stageId: string, raceS: number, lat = 0): boolean {
   if (!course) return false;
   for (const sec of course.sections) {
     if (sec.type !== "ramp") continue;
-    if (raceS >= sec.s0 + RAMP_KICK0 - 6 && raceS <= sec.s0 + RAMP_KICK1 + 6) return true;
+    const r = rampOf(sec);
+    if (raceS >= sec.s0 + r.kick - 6 && raceS <= sec.s0 + r.up + 6) return true;
   }
   for (const k of stageIdKickers(stageId)) {
     if (raceS >= k.s - 6 && raceS <= k.s + k.len + 6 && Math.abs(lat - k.lat) <= k.half) return true;
@@ -598,7 +668,7 @@ export function burstWindows(stageId: string): [number, number][] {
 // ---------------------------------------------------------------- BN-8 surfaces, BN-10 timed zones (Coast Road §5)
 
 /** Lane-wide surface patch. lat is the lane centre; the patch covers lat ± half. kind defaults to sand. */
-export type Surface = { id: string; s0: number; s1: number; lat: number; half: number; kind?: "sand" | "gravel" | "oil" | "rail" };
+export type Surface = { id: string; s0: number; s1: number; lat: number; half: number; kind?: "sand" | "gravel" | "oil" | "rail" | "ice" };
 export const SAND = { cap: 34, decel: 14, steerMul: 0.8, gripMul: 1 } as const;
 /** Pine Woods gravel firebreak (§5 GV): cap 36, decel 12 above the cap, steerMul 0.85, no damage. */
 export const GRAVEL = { cap: 36, decel: 12, steerMul: 0.85, gripMul: 1 } as const;
@@ -608,7 +678,11 @@ export const OIL = { cap: 999, decel: 0, steerMul: 0.6, gripMul: 0.25 } as const
 export const OIL_RESIDUE = 0.5;
 /** Industrial Port rail crossing (§5 RX): 8 m strip, cap 38, steer x0.8, slows only. */
 export const RAILX = { cap: 38, decel: 12, steerMul: 0.8, gripMul: 1 } as const;
-export const surfaceParams = (p: Surface) => (p.kind === "gravel" ? GRAVEL : p.kind === "oil" ? OIL : p.kind === "rail" ? RAILX : SAND);
+/** Mountain Pass ice (§5 IC): grip x0.3, steer x0.55 while inside and for ICE_RESIDUE s after; no speed change, no damage,
+ *  no spin (the same slick path as the port oil). */
+export const ICE = { cap: 999, decel: 0, steerMul: 0.55, gripMul: 0.3 } as const;
+export const ICE_RESIDUE = 0.3;
+export const surfaceParams = (p: Surface) => (p.kind === "gravel" ? GRAVEL : p.kind === "oil" ? OIL : p.kind === "ice" ? ICE : p.kind === "rail" ? RAILX : SAND);
 export const WOODS_GRAVEL: Surface[] = [
   { id: "GV1", s0: 2580, s1: 2660, lat: LANE_LAT.L3, half: 3, kind: "gravel" },
   { id: "GV2", s0: 2720, s1: 2800, lat: LANE_LAT.L4, half: 3, kind: "gravel" },
@@ -640,7 +714,17 @@ export const PORT_OIL: Surface[] = [
   oil("OS8", 4150, 4180, 6),
 ];
 export const PORT_RAILX: Surface[] = [2950, 3100, 3250].map((s, i) => ({ id: `RX${i + 1}`, s0: s - 4, s1: s + 4, lat: 6, half: 6, kind: "rail" as const }));
-const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL, highway: HIGHWAY_GRAVEL, port: [...PORT_OIL, ...PORT_RAILX] };
+/** Mountain Pass ice IC1-IC6 (§5): lane-wide patches (18 m sections use the -6 / 0 / +6 lanes). */
+const ice = (id: string, s0: number, s1: number, lat: number): Surface => ({ id, s0, s1, lat, half: 3, kind: "ice" });
+export const PASS_ICE: Surface[] = [
+  ice("IC1", 1120, 1150, -6),
+  ice("IC2", 1820, 1850, 6),
+  ice("IC3", 3050, 3080, 0),
+  ice("IC4", 2150, 2190, LANE_LAT.L2),
+  ice("IC5", 3560, 3620, LANE_LAT.L3),
+  ice("IC6", 3700, 3760, LANE_LAT.L4),
+];
+const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL, highway: HIGHWAY_GRAVEL, port: [...PORT_OIL, ...PORT_RAILX], pass: PASS_ICE };
 export function sandFor(stageId: string): readonly Surface[] {
   return SANDS[stageId] ?? [];
 }
@@ -710,4 +794,27 @@ export function craneAt(stageId: string, raceS: number, lat: number): Crane | nu
     return c;
   }
   return null;
+}
+
+// ---------------------------------------------------------------- BN-19 rockfall (Mountain Pass §5 RF)
+/** A rockfall zone: while the hero is in range, every 2.5 s a rock targets a lane at hero s + 60-90 m (seeded per zone).
+ *  1.0 s shadow telegraph, then the impact (radius 3 m: hero -14 hp, AI -8, no push), then a 3 x 3 m static obstacle
+ *  (OB rule) for 6 s, then it crumbles. Max one live rock per 40 m window; never in the shed. */
+export type RockZone = { id: string; s0: number; s1: number; lanes: number[] };
+export const ROCKFALL = { period: 2.5, telegraph: 1.0, ahead0: 60, ahead1: 90, radius: 3, heroDmg: 14, aiDmg: 8, life: 6, window: 40, drop: 24, half: 1.5, h: 3, iceGap: 40 } as const;
+export const PASS_ROCKFALL: RockZone[] = [
+  { id: "RF1", s0: 1400, s1: 1600, lanes: [LANE_LAT.L1, LANE_LAT.L2, LANE_LAT.L3, LANE_LAT.L4] },
+  // RF2: the inside (left) roadway of Fork A only; RF3: the cliff road (left) of Fork B
+  { id: "RF2", s0: 2250, s1: 2400, lanes: [LANE_LAT.L1, LANE_LAT.L2] },
+  { id: "RF3", s0: 3550, s1: 3850, lanes: [LANE_LAT.L1, LANE_LAT.L2] },
+];
+const ROCKZONES: Record<string, readonly RockZone[]> = { pass: PASS_ROCKFALL };
+export function rockZonesFor(stageId: string): readonly RockZone[] {
+  return ROCKZONES[stageId] ?? [];
+}
+/** seed = hash(stage id, zone id): a small deterministic string hash (same inputs, same rocks) */
+export function rockSeed(stageId: string, zoneId: string): number {
+  let h = 2166136261;
+  for (const ch of `${stageId}:${zoneId}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return h;
 }
