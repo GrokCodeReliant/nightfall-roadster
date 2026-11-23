@@ -21,12 +21,16 @@ export const HIGHWAY_PIECES: [string, string][] = [
 /**
  * week-i-polish (BE's hosted bridge-gap shot): gap_edge_12's rubble slabs and underside sit on the kit atlas's flat light-grey
  * cell (~rgb 102,102,107, no texture). At the near lip (2256-2260, behind the KA3/KA4 kickers) the slabs face the chase cam and
- * read as a flat grey block beside the striped kicker. Re-map those faces onto the piece's own broken-concrete cell (the one
- * its fracture face uses), planar per triangle, so the lip reads as broken concrete. Same material, 0 extra draws / tris.
+ * read as a flat grey block beside the striped kicker (its soffit hangs past the deck end over the gap, light-grey and lit
+ * only by the ambient). Soffits go to the atlas's near-black swatch, the other flat faces to the piece's own broken-concrete
+ * cell (the one its fracture face uses, planar per triangle), and on the near lip the up-facing rubble slabs (proud of the
+ * deck behind the kickers) are dropped. Same material, 0 extra draws, tris only removed.
  */
 export const GAP_EDGE_FLAT_CELL = { u0: 0.9, v0: 0.95 };
 export const GAP_EDGE_CONCRETE_CELL = { u0: 0.508, u1: 0.742, v0: 0.758, v1: 0.956 };
-export function regritGapEdge(g: THREE.BufferGeometry) {
+/** near-black flat swatch on road_kit_atlas (px 128-255 x 736-767, ~rgb 14,14,15) */
+export const GAP_EDGE_SOFFIT_UV: [number, number] = [0.19, 0.734];
+export function regritGapEdge(g: THREE.BufferGeometry, nearLip = false) {
   if (g.userData.regrit) return 0;
   g.userData.regrit = true;
   const pos = g.getAttribute("position"), uv = g.getAttribute("uv");
@@ -39,6 +43,20 @@ export function regritGapEdge(g: THREE.BufferGeometry) {
     if (!flat) continue;
     a.fromBufferAttribute(pos, t); b.fromBufferAttribute(pos, t + 1); c.fromBufferAttribute(pos, t + 2);
     n.subVectors(b, a).cross(e.subVectors(c, a));
+    // near lip (seen from behind, past the KA3 / KA4 kickers): the up-facing rubble slabs stand 0.3-0.5 m proud of the deck
+    // and read as a slab; they are dropped (degenerate) so deck -> kicker -> hazard strip -> fracture face -> gorge reads clean
+    if (nearLip && n.y > 0.5 * n.length()) {
+      for (let k = 1; k < 3; k++) pos.setXYZ(t + k, a.x, a.y, a.z);
+      hit++;
+      continue;
+    }
+    // undersides (seen through the gap past the near lip as a flat light plate): the atlas's near-black swatch, so the
+    // shadowed slab soffit falls back into the gorge instead of reading as a grey block
+    if (n.y < -0.3 * n.length()) {
+      for (let k = 0; k < 3; k++) uv.setXY(t + k, GAP_EDGE_SOFFIT_UV[0], GAP_EDGE_SOFFIT_UV[1]);
+      hit++;
+      continue;
+    }
     const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
     // project on the plane the face is most parallel to (0.035 atlas / m: one 7 m stretch of the cell)
     const pr = (v: THREE.Vector3): [number, number] => (ay >= ax && ay >= az ? [v.x, v.z] : ax >= az ? [v.z, v.y] : [v.x, v.y]);
@@ -53,6 +71,7 @@ export function regritGapEdge(g: THREE.BufferGeometry) {
     hit++;
   }
   uv.needsUpdate = true;
+  pos.needsUpdate = true;
   return hit;
 }
 let loaded = 0;
@@ -120,7 +139,7 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     if (p.name === "tunnel_40" || p.name === "tunnel_portal") m.multiply(new THREE.Matrix4().makeScale(1, MESA_CUT.sy, 1));
     if (p.sz) m.multiply(new THREE.Matrix4().makeScale(1, 1, p.sz));
     if (bakePiece(into, p.name, m, keep)) out.placed.push(p.name);
-    if (p.name === "gap_edge_12") for (const l of into.values()) for (const g of l) if (g.userData.piece === "gap_edge_12") regritGapEdge(g);
+    if (p.name === "gap_edge_12") for (const l of into.values()) for (const g of l) if (g.userData.piece === "gap_edge_12") regritGapEdge(g, p.ry === 0);
   };
   const sAt = (k: number) => s0 + k * 2;
   // desert floor patches (every lap)
