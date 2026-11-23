@@ -585,7 +585,12 @@ export function buildPortChunk(group: THREE.Group, index: number, at: (k: number
   if (gl) parts.set(portLampMaterial(), [gl]);
   if (go) parts.set(portOilMaterial(), [go]);
   if (gw) parts.set(portWaterMaterial(), [gw]);
-  for (const mesh of flushParts(parts, group)) mesh.userData.core = mesh.geometry.getAttribute("position").count;
+  const procedural = [...new Set(out.placed.filter((n) => n.startsWith("port_")))];
+  for (const mesh of flushParts(parts, group)) {
+    mesh.userData.core = mesh.geometry.getAttribute("position").count;
+    // every procedural piece merged into port_props / port_lamps / port_oil / port_water is listed on the mesh (debug, smoke)
+    if (mesh.material === portPropsMaterial()) mesh.userData.pieces = ["port_props", ...procedural];
+  }
   const gr = geo(roof, true, "port_shed_roof");
   if (gr) {
     const rg = new THREE.Group();

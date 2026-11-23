@@ -617,12 +617,18 @@ for (const prof of profiles) {
             ipDraws.ip7.port.roofHidden && ipDraws.ip7.port.roofs > 0 && !ipDraws.pre7.port.roofHidden && ipDraws.ip7.port.forklifts >= 1 && ipDraws.ip9.port.pieces.port_bollard > 0,
             JSON.stringify({ ip2: ipDraws.ip2.port, ip4y: ipDraws.ip4.y, ip7: { roofHidden: ipDraws.ip7.port.roofHidden, roofs: ipDraws.ip7.port.roofs, forklifts: ipDraws.ip7.port.forklifts }, pre7: ipDraws.pre7.port.roofHidden }));
           // BN-19 telegraph: step the race clock through a CS4 cycle at IP-10; the shadow shows in the telegraph / sweep and is gone when idle
-          const ipTel = await page.evaluate(() => {
-            const s = window.__nf, seen = {};
-            const h = s.cars[0], a0 = h.along, x0 = h.x, z0 = h.z;
-            for (let i = 0; i < 80; i++) { s.hitstop = 0; h.invuln = 1e9; h.speed = 0; h.x = x0; h.z = z0; h.along = a0; h.lastAlong = a0; window.__nfAdvance(0.1, "idle"); s.hitstop = 1e9; const l = window.__nfPort().loads.find((x) => x.id === "CS4"); if (l) seen[l.state] = Math.max(seen[l.state] ?? 0, l.shadow); }
-            return seen;
-          });
+          // (the port frame poses the loads on render, so step the sim and let a frame draw between reads)
+          const ipTel = {};
+          await page.evaluate(() => { const h = window.__nf.cars[0]; window.__ipHold = { a: h.along, x: h.x, z: h.z }; });
+          for (let i = 0; i < 70; i++) {
+            const l = await page.evaluate(() => new Promise((r) => {
+              const s = window.__nf, h = s.cars[0], k = window.__ipHold;
+              s.hitstop = 0; h.invuln = 1e9; h.speed = 0; h.x = k.x; h.z = k.z; h.along = k.a; h.lastAlong = k.a;
+              window.__nfAdvance(0.1, "idle"); s.hitstop = 1e9;
+              requestAnimationFrame(() => requestAnimationFrame(() => r(window.__nfPort().loads.find((x) => x.id === "CS4") || null)));
+            }));
+            if (l) ipTel[l.state] = Math.max(ipTel[l.state] ?? 0, l.shadow);
+          }
           await page.evaluate(() => { window.__nf.cars[0].invuln = 0; });
           check(P, "Industrial Port BN-19: crane shadow telegraph shows before / during the sweep, never while idle", (ipTel.telegraph ?? 0) > 0.5 && (ipTel.active ?? 0) > 0.5 && (ipTel.idle ?? 1) === 0, JSON.stringify(ipTel));
           await page.evaluate(() => { window.__nf.hitstop = 0; });
