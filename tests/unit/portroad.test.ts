@@ -192,3 +192,21 @@ test("§9.5 forklift FL1: contact is the OB rule (hero -6 hp), speed stays >= 22
   assert.equal(hp - h.hp, 6);
   assert.ok(minSpeed >= 22, `speed ${minSpeed}`);
 });
+
+test("§9.7 bot completes Industrial Port with the six-rival field", async () => {
+  const { botKeys } = await import("../../src/game/bot.ts");
+  const sim = createSim();
+  sim.carId = "model3";
+  sim.stageId = "port";
+  begin(sim);
+  sim.lull = 1e9;
+  let i = 0;
+  for (; i < 60 * 240 && sim.phase === "playing"; i++) {
+    sim.keysOverride = new Set(botKeys(sim));
+    step(sim, dt);
+  }
+  const rivals = sim.cars.filter((c) => c.racer);
+  console.log(`port bot: phase ${sim.phase} after ${(i / 60).toFixed(1)} s, place ${sim.race.place}, rivals ${rivals.length} (alive ${rivals.filter((c) => c.alive).length}), hp ${sim.cars[0].hp}, lives ${sim.lives}`);
+  assert.equal(sim.phase, "finished");
+  assert.equal(rivals.length, 6);
+});
