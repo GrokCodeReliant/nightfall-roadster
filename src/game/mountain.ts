@@ -113,13 +113,15 @@ function shedPortal(): Piece {
 /** snow surface tone (week-i-polish, playtest: the drift + kicker read as one flat white slab): wind-packed snow with
  *  sastrugi ripples (bands across the row), blue-grey shading toward the foot / in the hollows and a little dirty road
  *  spray at the base; per-vertex so it costs no texture. u = across (m), v = 0 foot .. 1 crest, r = ripple phase. */
-const SNOW_SHADE = C(0x8d9fb8), SNOW_DIRT = C(0x6f747c);
+const SNOW_SHADE = C(0x7286a2), SNOW_DIRT = C(0x5d636c);
 function snowTone(u: number, v: number, r: number): RGB {
+  // kept in mid values (x0.62-0.86): the moon rig clips full-bright snow to one white, which is what read as a slab
   const rip = 0.5 + 0.5 * Math.sin(r * 2.3 + Math.sin(u * 1.7) * 0.8);
-  let c = mix(SNOW_B, SNOW, Math.min(1, 0.25 + 0.75 * v) * (0.55 + 0.45 * rip));
-  c = mix(c, SNOW_SHADE, (1 - v) * 0.45 * (0.6 + 0.4 * hash(u * 3.7 + r)));
-  if (v < 0.18) c = mix(c, SNOW_DIRT, (0.18 - v) / 0.18 * 0.55);
-  return mul(c, 0.93 + 0.1 * hash(u * 5.1 + r * 1.3));
+  let c = mix(SNOW_SHADE, SNOW_B, Math.min(1, 0.2 + 0.8 * v));
+  c = mix(c, SNOW, 0.55 * v * rip);
+  c = mix(c, SNOW_SHADE, 0.35 * (1 - rip) * (0.5 + 0.5 * hash(u * 3.7 + r)));
+  if (v < 0.2) c = mix(c, SNOW_DIRT, ((0.2 - v) / 0.2) * 0.6);
+  return mul(c, 0.62 + 0.24 * (0.5 * rip + 0.5 * hash(u * 5.1 + r * 1.3)));
 }
 function driftRow(): Piece {
   const g = new G();
@@ -151,7 +153,7 @@ function snowKicker(): Piece {
   for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
     const x0 = w - (2 * w * i) / nx, x1 = w - (2 * w * (i + 1)) / nx;
     const z0 = -L + (2 * L * j) / nz, z1 = -L + (2 * L * (j + 1)) / nz;
-    const t = (x: number, z: number) => { const v = (z + L) / (2 * L); let c = snowTone(x, 0.3 + 0.7 * v, z * 2.2); if (Math.abs(Math.abs(x) - 1.5) < 0.8) c = mul(mix(c, SNOW_SHADE, 0.3), 0.95); return c; };
+    const t = (x: number, z: number) => { const v = (z + L) / (2 * L); let c = snowTone(x, 0.3 + 0.7 * v, z * 2.2); if (Math.abs(Math.abs(x) - 1.5) < 0.8) c = mul(mix(c, SNOW_DIRT, 0.35), 0.85); return c; };
     g.quad([x0, Y(z0), z0], [x1, Y(z0), z0], [x1, Y(z1), z1], [x0, Y(z1), z1], t(x0, z0), t(x1, z0), t(x1, z1), t(x0, z1));
   }
   g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_SHADE, SNOW_B, SNOW_SHADE);
