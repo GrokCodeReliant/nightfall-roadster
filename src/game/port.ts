@@ -321,14 +321,16 @@ function waterTile(seed: number): Piece {
   }
   return done(g);
 }
-/** port_oil_decal: 6 x 30 irregular slick (18-gon fan), dark core, iridescent rim (port_oil material) */
+/** port_oil_decal: 6 x 30 irregular slick (18-gon fan). The vertex colour carries no tint, only an edge factor in r
+ *  (1 at the centre, 0 on the rim): interpolated across the fan it is the normalised radial distance, which the
+ *  port_oil shader turns into a soft alpha edge. Colour + sheen come from the material. */
 function oilDecal(seed: number): Piece {
-  const g = new G(), n = 18, core: RGB = [0.008, 0.008, 0.011], rim: RGB = [0.07, 0.06, 0.08];
+  const g = new G(), n = 18, centre: RGB = [1, 1, 1], edge: RGB = [0, 0, 0];
   const rimAt = (k: number): V3 => {
     const a = (k / n) * Math.PI * 2, r = 0.82 + 0.18 * hash(seed + k * 3.3);
     return [Math.cos(a) * 3 * r, 0, Math.sin(a) * 15 * r];
   };
-  for (let k = 0; k < n; k++) g.tri([0, 0, 0], rimAt(k + 1), rimAt(k), core, rim, rim);
+  for (let k = 0; k < n; k++) g.tri([0, 0, 0], rimAt(k + 1), rimAt(k), centre, edge, edge);
   return done(g);
 }
 
@@ -391,12 +393,13 @@ export function portWaterMaterial() {
   }
   return waterMat;
 }
-/** oil: near-black glossy slick with a thin-film rainbow sheen (world-space bands, stronger at grazing view and on the rim).
- *  Emissive so it reads from 120 m under the port fog. */
+/** oil: a dark, near-black wet slick (look fix v2: the v1 thin-film emissive read as a saturated rainbow sheet / glitch).
+ *  Wet = low roughness, so the lamps and sky give a soft specular; alpha fades over the outer 35 % of the fan (soft edge,
+ *  from the vertex edge factor); a faint, low-saturation iridescent tint only at grazing angles, never over the whole slick. */
 let oilMat: THREE.MeshStandardMaterial | null = null;
 export function portOilMaterial() {
   if (!oilMat) {
-    const m = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.94, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    const m = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.14, metalness: 0.0, transparent: true, opacity: 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     m.name = "port_oil";
     m.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader
@@ -404,14 +407,20 @@ export function portOilMaterial() {
         .replace("#include <project_vertex>", "#include <project_vertex>\n vNfW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;");
       sh.fragmentShader = sh.fragmentShader
         .replace("void main() {", "varying vec3 vNfW;\nvoid main() {")
+        .replace("#include <color_fragment>", `#include <color_fragment>
+ float nfEdge = vColor.r;
+ float nfMott = 0.5 + 0.5 * sin( vNfW.x * 1.7 + sin( vNfW.z * 0.45 ) * 2.0 ) * sin( vNfW.z * 0.9 + vNfW.x * 0.4 );
+ diffuseColor.rgb = vec3( 0.010, 0.010, 0.012 ) * ( 0.8 + 0.4 * nfMott );
+ diffuseColor.a *= 0.9 * smoothstep( 0.0, 0.35, nfEdge );`)
         .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
- { float nfB = vNfW.x * 0.37 + vNfW.z * 0.29 + sin( vNfW.x * 0.9 ) * 0.8 + sin( vNfW.z * 0.7 + vNfW.x * 0.3 ) * 0.9;
-   vec3 nfRain = 0.5 + 0.5 * cos( 6.2831 * ( nfB * 0.35 + vec3( 0.0, 0.33, 0.67 ) ) );
-   float nfRim = smoothstep( 0.02, 0.06, vColor.r );
+ { float nfB = vNfW.x * 0.21 + vNfW.z * 0.17 + sin( vNfW.x * 0.6 ) * 0.5 + sin( vNfW.z * 0.4 + vNfW.x * 0.2 ) * 0.6;
+   vec3 nfHue = 0.5 + 0.5 * cos( 6.2831 * ( nfB * 0.3 + vec3( 0.0, 0.33, 0.67 ) ) );
+   vec3 nfTint = mix( vec3( 0.5 ), nfHue, 0.3 );
    float nfGraze = 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) );
-   totalEmissiveRadiance += nfRain * ( 0.025 + 0.11 * nfRim + 0.07 * nfGraze ); }`);
+   float nfRimWet = smoothstep( 0.05, 0.25, nfEdge ) * ( 1.0 - smoothstep( 0.25, 0.5, nfEdge ) );
+   totalEmissiveRadiance += vec3( 0.55, 0.6, 0.68 ) * 0.018 * nfRimWet + nfTint * 0.07 * pow( nfGraze, 2.0 ) * smoothstep( 0.1, 0.6, nfEdge ); }`);
     };
-    m.customProgramCacheKey = () => "nf_port_oil";
+    m.customProgramCacheKey = () => "nf_port_oil_v2";
     oilMat = m;
   }
   return oilMat;
