@@ -158,32 +158,190 @@ export function mesaBlockGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
   return finish(g);
 }
 
-const BANK_TOP = c3(0x8a6c50), BANK_LO = c3(0x5a4432), BED = c3(0x7a6650);
-/** Dry-river banks for the samples of one chunk inside the bridge (both sides), plus the abutment walls at the bridge ends. */
+// ---------------------------------------------------------------- BN-18 gorge (week-i-port riverbed look pass)
+/** The dry-river gorge under the Broken Bridge: rocky sloped banks from the desert rim (|lat| ~22, where the floor is cut)
+ *  down to a pebbly bed (|lat| < ~9.5) at BRIDGE.bedY, a meandering shallow channel with dark water, wet sand / rock
+ *  margins, scattered boulders. All analytic in (s, lat) so chunk seams match. Look only: the gap / fall rules are in sim. */
+export const RIVER = { bedEdge: 9.5, rim: 22, chanHalf: 3.2, chanDip: 0.75, water: -0.32, rocksPer40: 9 };
+const sm = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** channel centre (course lat) and half-width at course s */
+export function riverChannel(s: number): { c: number; w: number } {
+  return { c: 3.2 * Math.sin(s * 0.013 + 0.6) + 1.4 * Math.sin(s * 0.041 + 2.1), w: RIVER.chanHalf + 1.1 * Math.sin(s * 0.027 + 1.3) };
+}
+const bedEdgeAt = (s: number, side: number) => RIVER.bedEdge + 1.4 * Math.sin(s * 0.019 + side * 1.7) + 0.6 * Math.sin(s * 0.053 + side);
+const rimAt = (s: number, side: number) => RIVER.rim + 1.2 * hash(Math.round(s / 2) * 0.7 + side * 3.1);
+/** bed height (absolute y) at (s, lat) inside the bed: gentle swells, the channel dip */
+export function riverBedY(s: number, lat: number): number {
+  const ch = riverChannel(s);
+  const swell = 0.22 * Math.sin(s * 0.07 + lat * 0.4) + 0.14 * Math.sin(s * 0.21 - lat * 0.9) + 0.08 * Math.sin(s * 0.5 + lat * 1.7);
+  const dip = RIVER.chanDip * sm(ch.w + 2.4, ch.w - 0.6, Math.abs(lat - ch.c));
+  return BRIDGE.bedY + 0.1 + swell - dip;
+}
+const BANK_T = [0, 0.07, 0.18, 0.32, 0.47, 0.62, 0.77, 0.9, 1];
+const BED_N = 16;
+/** lateral columns at s, driver's-left to right in course lat, with their heights */
+function gorgeCols(s: number): { l: number; y: number; bank: number }[] {
+  const si = Math.round(s / 2);
+  const out: { l: number; y: number; bank: number }[] = [];
+  const bank = (side: number, rev: boolean) => {
+    const T = rimAt(s, side), B = bedEdgeAt(s, side), yb = riverBedY(s, side * B);
+    const ts = rev ? [...BANK_T].reverse() : BANK_T;
+    for (const t of ts) {
+      if (t === 1) continue; // the bed edge column belongs to the bed
+      const j = Math.sin(Math.PI * t);
+      const l = T - t * (T - B) + (hash(si * 1.9 + t * 17 + side * 5) - 0.5) * 1.1 * j;
+      // rounded lip, steep rocky middle, a softer toe; ledges from the hash
+      const f = t < 0.07 ? 0.02 * (t / 0.07) : t < 0.8 ? 0.02 + 0.86 * Math.pow((t - 0.07) / 0.73, 0.85) : 0.88 + 0.12 * ((t - 0.8) / 0.2);
+      const y = t === 0 ? -0.08 : -0.08 + (yb + 0.08) * f + (hash(si * 3.7 + t * 23 + side * 11) - 0.5) * 1.3 * j;
+      out.push({ l: side * l, y, bank: 1 - t });
+    }
+  };
+  bank(-1, false);
+  const BL = bedEdgeAt(s, -1), BR = bedEdgeAt(s, 1);
+  for (let i = 0; i <= BED_N; i++) {
+    const l = -BL + ((BL + BR) * i) / BED_N + (i > 0 && i < BED_N ? (hash(si * 5.3 + i * 7) - 0.5) * 0.6 : 0);
+    out.push({ l, y: riverBedY(s, l), bank: 0 });
+  }
+  bank(1, true);
+  return out;
+}
+const G_RIM = c3(0x6a5840), G_ROCK = c3(0x6e5440), G_ROCK2 = c3(0x58402e), G_DRY = c3(0x7c6a52), G_PEB = c3(0x8a7a64), G_WET = c3(0x2c2620), G_WET2 = c3(0x3a3028);
+function gorgeColour(s: number, l: number, y: number, bank: number): THREE.Color {
+  const n = hash(Math.round(s * 1.3) * 3.1 + Math.round(l * 2) * 7.7);
+  if (bank > 0) {
+    // rim matches the desert floor, the face is strata rock with jitter
+    const band = 0.5 + 0.5 * Math.sin(y * 1.3 + Math.sin(s * 0.04) * 0.8);
+    const rock = G_ROCK2.clone().lerp(G_ROCK, band).multiplyScalar(0.85 + 0.3 * n);
+    return rock.lerp(G_RIM, sm(0.82, 1, bank));
+  }
+  const ch = riverChannel(s);
+  const d = Math.abs(l - ch.c) - ch.w;
+  const dry = G_DRY.clone().lerp(G_PEB, n * n).multiplyScalar(0.8 + 0.35 * hash(Math.round(s * 0.5) * 13 + Math.round(l) * 3));
+  const wet = G_WET.clone().lerp(G_WET2, n);
+  return dry.lerp(wet, sm(2.8, 0.2, d));
+}
+/** Gorge banks + bed + boulders for one chunk's samples inside the bridge (both sides), plus the rock end walls under the
+ *  abutments. Draws on riverbedMaterial (vertex colours, world-noise grain, depth falloff). */
 export function riverbankGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
   if (ks.length < 2) return null;
   const B = BRIDGE;
   const g: Geo = { pos: [], col: [] };
-  for (const side of [-1, 1]) {
-    for (let n = 1; n < ks.length; n++) {
-      const pa = at(ks[n - 1]), pb = at(ks[n]);
-      const ja = hash(sAt(ks[n - 1]) * 0.7 + side) * 1.5, jb = hash(sAt(ks[n]) * 0.7 + side) * 1.5;
-      const a0 = P(pa, side * (B.half + ja), -0.08, ox, oz), b0 = P(pb, side * (B.half + jb), -0.08, ox, oz);
-      const a1 = P(pa, side * (B.bedHalf + 1.5 + ja * 0.5), -6, ox, oz), b1 = P(pb, side * (B.bedHalf + 1.5 + jb * 0.5), -6, ox, oz);
-      const a2 = P(pa, side * B.bedHalf, B.bedY - 0.05, ox, oz), b2 = P(pb, side * B.bedHalf, B.bedY - 0.05, ox, oz);
-      const ta = BANK_TOP.clone().multiplyScalar(0.85 + 0.3 * hash(sAt(ks[n - 1]) * 1.3 + side)), tb = BANK_TOP.clone().multiplyScalar(0.85 + 0.3 * hash(sAt(ks[n]) * 1.3 + side));
-      const la = BANK_LO.clone().multiplyScalar(0.8 + 0.4 * hash(sAt(ks[n - 1]) * 2.1 + side)), lb = BANK_LO.clone().multiplyScalar(0.8 + 0.4 * hash(sAt(ks[n]) * 2.1 + side));
-      quad(g, a0, b0, b1, a1, ta, tb, lb, la);
-      quad(g, a1, b1, b2, a2, la, lb, BED, BED);
-    }
+  const rows = ks.map((k) => {
+    const s = sAt(k), p = at(k);
+    return gorgeCols(s).map((c) => ({ v: P(p, c.l, c.y, ox, oz), c: gorgeColour(s, c.l, c.y, c.bank) }));
+  });
+  for (let n = 1; n < rows.length; n++) {
+    const a = rows[n - 1], b = rows[n];
+    for (let i = 0; i + 1 < a.length; i++) quad(g, a[i].v, a[i + 1].v, b[i + 1].v, b[i].v, a[i].c, a[i + 1].c, b[i + 1].c, b[i].c);
   }
+  // end walls: rock face from the gorge profile up to the desert floor
   for (const k of [ks[0], ks[ks.length - 1]]) {
     const s = sAt(k);
     if (Math.abs(s - B.s0) > 1.01 && Math.abs(s - B.s1) > 1.01) continue;
-    const p = at(k);
-    quad(g, P(p, -B.half - 1, -0.08, ox, oz), P(p, B.half + 1, -0.08, ox, oz), P(p, B.half + 1, B.bedY - 0.1, ox, oz), P(p, -B.half - 1, B.bedY - 0.1, ox, oz), BANK_TOP, BANK_TOP, BED, BED);
+    const p = at(k), cols = gorgeCols(s);
+    for (let i = 0; i + 1 < cols.length; i++) {
+      const c0 = cols[i], c1 = cols[i + 1];
+      const t0 = P(p, c0.l, -0.08, ox, oz), t1 = P(p, c1.l, -0.08, ox, oz), b0 = P(p, c0.l, c0.y, ox, oz), b1 = P(p, c1.l, c1.y, ox, oz);
+      quad(g, t0, t1, b1, b0, G_RIM, G_RIM, strata(c1.y - B.bedY, s + i), strata(c0.y - B.bedY, s + i + 1));
+    }
   }
-  return finish(g);
+  // boulders on the bed and the bank toes (a rock icosahedron per placement)
+  const s0 = sAt(ks[0]), s1 = sAt(ks[ks.length - 1]);
+  const rock = rockGeometry();
+  const rp = rock.getAttribute("position") as THREE.BufferAttribute, rc = rock.getAttribute("color") as THREE.BufferAttribute;
+  const step = 40 / RIVER.rocksPer40;
+  for (let i = Math.ceil(s0 / step); i * step < s1; i++) {
+    const s = i * step + (hash(i * 2.7 + 5) - 0.5) * step;
+    if (s < B.s0 + 1 || s > B.s1 - 1 || s < s0 || s >= s1) continue;
+    const ch = riverChannel(s);
+    const side = hash(i * 4.1 + 9) < 0.5 ? -1 : 1;
+    const u = hash(i * 6.3 + 13);
+    // bed edge to bank toe, kept out of the open water
+    let l = side * (bedEdgeAt(s, side) * (0.15 + 0.95 * u));
+    if (Math.abs(l - ch.c) < ch.w + 0.4) l = ch.c + side * (ch.w + 0.6 + u * 1.5);
+    const r = 0.3 + Math.pow(hash(i * 8.9 + 17), 2) * 1.5;
+    const k = ks[0] + Math.max(0, Math.min(ks.length - 1, Math.round((s - s0) / 2)));
+    const p = at(k);
+    const base = P(p, l, riverBedY(s, l) - 0.12 * r, ox, oz);
+    const ry = hash(i * 3.3 + 21) * Math.PI * 2, cr = Math.cos(ry), sr = Math.sin(ry);
+    const tone = 0.7 + 0.5 * hash(i * 9.7 + 23);
+    for (let v = 0; v < rp.count; v += 3) {
+      const q = [0, 1, 2].map((d) => {
+        const x = rp.getX(v + d) * r, y = rp.getY(v + d) * r, z = rp.getZ(v + d) * r;
+        return new THREE.Vector3(base.x + x * cr - z * sr, base.y + y, base.z + x * sr + z * cr);
+      });
+      const cc = [0, 1, 2].map((d) => new THREE.Color(rc.getX(v + d) * tone * 1.5, rc.getY(v + d) * tone * 1.45, rc.getZ(v + d) * tone * 1.4));
+      tri(g, q[0], q[1], q[2], cc[0], cc[1], cc[2]);
+    }
+  }
+  rock.dispose();
+  return finish(g, true);
+}
+/** the shallow channel water for one chunk's samples inside the bridge: a strip over the channel at BRIDGE.bedY + water */
+export function riverWaterGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
+  if (ks.length < 2) return null;
+  const pos: number[] = [], nor: number[] = [];
+  const y = BRIDGE.bedY + RIVER.water;
+  const edge = (k: number) => {
+    const s = sAt(k), p = at(k), ch = riverChannel(s);
+    return [P(p, ch.c - ch.w - 1.6, y, ox, oz), P(p, ch.c + ch.w + 1.6, y, ox, oz)];
+  };
+  let prev = edge(ks[0]);
+  for (let n = 1; n < ks.length; n++) {
+    const cur = edge(ks[n]);
+    for (const v of [prev[0], prev[1], cur[1], prev[0], cur[1], cur[0]]) { pos.push(v.x, v.y, v.z); nor.push(0, 1, 0); }
+    prev = cur;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  return geo;
+}
+let bedMat: THREE.MeshLambertMaterial | null = null;
+/** gorge material: vertex colours x world-space grain (gravel speckle, sand ripples), darker with depth below the rim */
+export function riverbedMaterial() {
+  if (bedMat) return bedMat;
+  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
+  m.name = "highway_riverbed";
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace("void main() {", `varying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
+      .replace("#include <color_fragment>", `#include <color_fragment>
+  vec2 q = vWp.xz;
+  float grain = 0.78 + 0.22 * nfNoise(q * 0.45) + 0.16 * nfNoise(q * 1.7) - 0.14 * step(0.82, nfH(floor(q * 3.0)));
+  float ripple = 0.94 + 0.06 * sin(dot(q, vec2(0.83, 0.57)) * 2.6 + nfNoise(q * 0.3) * 4.0);
+  float depth = smoothstep(${(BRIDGE.bedY - 0.4).toFixed(2)}, -0.6, vWp.y);
+  diffuseColor.rgb *= grain * ripple * mix(0.38, 1.0, depth);`);
+  };
+  m.customProgramCacheKey = () => "nf_highway_riverbed";
+  bedMat = m;
+  return m;
+}
+let waterMat: THREE.MeshPhongMaterial | null = null;
+/** shallow dark water: near-black teal, moonlit specular broken up by a world-noise ripple normal */
+export function riverWaterMaterial() {
+  if (waterMat) return waterMat;
+  const m = new THREE.MeshPhongMaterial({ color: 0x0b1519, specular: 0x5a6c7a, shininess: 70, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  m.name = "highway_river_water";
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace("void main() {", `varying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
+      .replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
+  vec2 nq = vWp.xz;
+  vec3 rip = vec3(nfNoise(nq * 0.8) - 0.5 + 0.5 * (nfNoise(nq * 2.9) - 0.5), 0.0, nfNoise(nq * 0.8 + 17.0) - 0.5 + 0.5 * (nfNoise(nq * 2.9 + 9.0) - 0.5));
+  normal = normalize(normal + (viewMatrix * vec4(rip * 0.35, 0.0)).xyz);`)
+      .replace("#include <color_fragment>", `#include <color_fragment>
+  diffuseColor.rgb *= 0.85 + 0.3 * nfNoise(vWp.xz * 0.15);`);
+  };
+  m.customProgramCacheKey = () => "nf_highway_river_water";
+  waterMat = m;
+  return m;
 }
 
 // ---------------------------------------------------------------- salt pans
