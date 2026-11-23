@@ -5,6 +5,7 @@ import {
   nextPiece,
   buildCourseTrack,
   buildTrack,
+  deckY,
   poseAt,
   queryTrack,
   trimTrack,
@@ -12,8 +13,8 @@ import {
   yawFromDir,
   type Track,
 } from "./road";
-import { freshTrucks, stepTrucks, truckAhead, truckObstacle, TRUCK, type Truck } from "./trucks";
-import { burstWindows, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, raceDistance, respawnBlocked, sandAt, sectionAt, sideGapAt, surfaceParams, WASH, washAt, washPhase, type SideGap } from "./course";
+import { freshTrucks, moverDims, stepTrucks, truckAhead, truckObstacle, TRUCK, type Truck } from "./trucks";
+import { bendAt, burstWindows, CRANE, craneAt, cranePhase, courseFor, edgeKind, ejectLat, gatePhase, gatesFor, laneKickerAt, medianAt, obstacleOverlap, obstaclesFor, OIL, OIL_RESIDUE, raceDistance, respawnBlocked, sandAt, sectionAt, sideGapAt, surfaceParams, WASH, washAt, washPhase, type SideGap } from "./course";
 import { emptyShop, heroMineArm, racePayout, spareLivesTier, type RacePurse, type ShopSave } from "./shop";
 import { RESPAWN_DELAY, RESPAWN_INVULN, RESPAWN_RETRY, RESPAWN_SPEED, RESPAWN_STAGGER, raceKillScore, respawnBudget, respawnCandidates } from "./respawn";
 import { STEER_SENS_DEFAULT, clampSteerSens } from "./settings";
@@ -173,6 +174,12 @@ export type Car = {
   truckCd: number;
   /** BN-17: lane a rival is sliding to round a truck (NaN = none) */
   avoidLane: number;
+  /** Industrial Port oil residue (s left at the slick's grip / steer after leaving it) */
+  slickT: number;
+  /** BN-19: last crane cycle index that hit this car, per crane id */
+  craneN: Record<string, number>;
+  /** BN-15: the fork side this car last held (a median with a height step is a wall both ways) */
+  medSide: number;
   /** Surface under the car this frame: "" | sand id (SD1..) | wash id while on (W1..). Coast Road only. */
   surf: string;
   /** Rival-only speed deficit from sand / wave wash (m/s below cruise). 0 off Coast Road. */
@@ -617,6 +624,9 @@ function makeCar(id: number, hero: boolean, lane: number, baseSpeed: number): Ca
     bumpCd: [],
     truckCd: 0,
     avoidLane: NaN,
+    slickT: 0,
+    craneN: {},
+    medSide: 0,
     surf: "",
     surfDef: 0,
     respawnsLeft: 0,
@@ -717,7 +727,7 @@ export function createSim(): Sim {
 function place(sim: Sim, car: Car, along: number, speed: number) {
   const p = poseAt(sim.track, along);
   car.x = p.x + p.rx * car.lane;
-  car.y = p.y;
+  car.y = deckY(sim.track, p, car.lane);
   car.z = p.z + p.rz * car.lane;
   car.yaw = yawFromDir(p.tx, p.tz);
   car.speed = speed;
@@ -1043,9 +1053,34 @@ function surfaceUnder(sim: Sim, car: Car, raceS: number, lat: number): SurfaceHi
   const sd = sandAt(sim.stageId, raceS, lat);
   if (sd) {
     const k = surfaceParams(sd);
+    // Industrial Port oil: the residue timer refills while on the slick and holds its grip / steer for 0.5 s after
+    if (sd.kind === "oil") car.slickT = OIL_RESIDUE;
     return { id: sd.id, cap: k.cap, decel: k.decel, steerMul: k.steerMul, gripMul: k.gripMul };
   }
+  if (car.slickT > 0) return { id: "oil", cap: OIL.cap, decel: OIL.decel, steerMul: OIL.steerMul, gripMul: OIL.gripMul };
   return null;
+}
+
+/** BN-19 crane swing (Industrial Port §5 CS): a car in a crane's active band, 0-6 m over the deck, takes the hit once per
+ *  sweep (hero -14 through damageHero, so invuln / shield hold; AI -8 unless invulnerable). No push, no speed change. */
+function craneHit(sim: Sim, car: Car, raceS: number, lat: number, deck: number) {
+  if (!car.alive || sim.phase !== "playing" || !sim.race.armed) return;
+  const c = craneAt(sim.stageId, raceS, lat);
+  if (!c) return;
+  const ph = cranePhase(c, sim.time);
+  if (ph.state !== "active" || car.craneN[c.id] === ph.n) return;
+  const up = car.y - deck;
+  if (up < -0.5 || up > CRANE.h) return;
+  car.craneN[c.id] = ph.n;
+  sim.events.push({ t: "hit", x: car.x, y: car.y + 1.2, z: car.z, big: true });
+  if (car.hero) {
+    if (damageHero(sim, CRANE.heroDmg)) toast(sim, "Crane load!", true);
+    return;
+  }
+  if (car.invuln > 0) return;
+  car.hp -= CRANE.aiDmg;
+  car.flash = 0.18;
+  if (car.hp <= 0) killAI(sim, car);
 }
 
 function scrollFloor(car: Car) {
@@ -1068,7 +1103,7 @@ function forkLane(sim: Sim, car: Car, atS: number): number {
 
 /** §8.2 (Pine Woods): a reset / respawn point within 15 m (bumper to bumper) of a live logging truck in that lane */
 function truckNear(sim: Sim, raceS: number, lat: number) {
-  return sim.trucks.some((t) => t.alive && Math.abs(raceS - t.s) < 15 + TRUCK.alongHalf && Math.abs(lat - t.lat) < 3 + TRUCK.latHalf);
+  return sim.trucks.some((t) => t.alive && Math.abs(raceS - t.s) < 15 + moverDims(t.spec).alongHalf && Math.abs(lat - t.lat) < 3 + moverDims(t.spec).latHalf);
 }
 
 /** Tire-blow, then back to lane center a short way behind. One fail does not end the race. */
@@ -1381,11 +1416,35 @@ function dropMine(sim: Sim, car: Car) {
 /** Jersey median. Grounded cars, and anyone within 1 m of the deck, glance off. A higher hop crosses. */
 function glanceMedian(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>) {
   const course = courseFor(sim.stageId);
-  if (!course || car.y > q.y + 1) return q;
+  if (!course) return q;
   const med = medianAt(course, q.s - sim.race.originAlong);
-  if (!med) return q;
+  if (!med) {
+    car.medSide = 0;
+    return q;
+  }
+  // BN-15: where the two sides stand at different heights, the median is a wall on both faces for anyone not clearly
+  // above the higher deck (a car that moved across it this frame is put back on the side it held)
+  const base = { s: q.s, y: q.y - (sim.track.liftAt ? sim.track.liftAt(q.s, q.lateral) : 0) };
+  const yL = deckY(sim.track, base, -1), yR = deckY(sim.track, base, 1);
+  const step = Math.abs(yL - yR) > 0.5;
   const inset = car.hero || car.kind === "hero" ? 1.15 : ENEMY[car.kind].clamp;
   const keep = med.half + inset;
+  if (step && car.medSide && Math.sign(q.lateral) !== car.medSide && car.y < Math.max(yL, yR) + 1) {
+    const target = car.medSide * (keep + 0.05);
+    const delta = target - q.lateral;
+    car.x += q.rx * delta;
+    car.z += q.rz * delta;
+    car.lat = car.medSide * Math.max(4, Math.abs(car.lat));
+    car.slideT = Math.max(car.slideT, WALL_SLIDE);
+    if (car.hero && sim.scrapeCd <= 0) {
+      sim.scrapeCd = 0.18;
+      sim.events.push({ t: "scrape" });
+    }
+    scrollFloor(car);
+    return queryTrack(sim.track, car.x, car.z, car.along);
+  }
+  if (Math.abs(q.lateral) >= keep - 1e-3) car.medSide = Math.sign(q.lateral);
+  if (car.y > q.y + 1) return q;
   if (Math.abs(q.lateral) >= keep - 1e-3) return q;
   const side = Math.sign(q.lateral) || Math.sign(car.lane) || -1;
   const target = side * (keep + 0.05);
@@ -1460,11 +1519,11 @@ function glanceObstacles(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, d
 function glanceTrucks(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, dt: number) {
   car.truckCd = Math.max(0, car.truckCd - dt);
   if (!sim.trucks.length || !car.alive || sim.phase !== "playing" || car.truckCd > 0) return q;
-  if (car.y > q.y + TRUCK.h) return q;
   const race = q.s - sim.race.originAlong;
   for (const t of sim.trucks) {
     if (!t.alive) continue;
     const o = truckObstacle(t);
+    if (car.y > q.y + o.h) continue;
     if (!obstacleOverlap(o, race, q.lateral)) continue;
     const target = ejectLat(sim.stageId, race, o, q.lateral);
     const delta = target - q.lateral;
@@ -1474,7 +1533,7 @@ function glanceTrucks(sim: Sim, car: Car, q: ReturnType<typeof queryTrack>, dt: 
     car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
     car.slideT = Math.max(car.slideT, WALL_SLIDE);
     car.truckCd = 0.5;
-    if (car.hero) damageHero(sim, TRUCK.dmg);
+    if (car.hero) damageHero(sim, moverDims(t.spec).dmg);
     else {
       car.hp -= 4;
       if (car.hp <= 0) {
@@ -1553,6 +1612,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   if (wantThrust && !infiniteFuel) car.fuel = Math.max(0, car.fuel - 36 * dt);
   else if (!infiniteFuel) car.fuel = Math.min(car.maxFuel, car.fuel + 18 * dt);
 
+  car.slickT = Math.max(0, car.slickT - dt);
   const surfQ = car.hero && courseFor(sim.stageId) ? queryTrack(sim.track, car.x, car.z, car.along) : null;
   const surf = surfQ ? surfaceUnder(sim, car, surfQ.s - sim.race.originAlong, surfQ.lateral) : null;
   if (car.hero) car.surf = surf ? surf.id : "";
@@ -1662,7 +1722,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
           const latIn = clamp(q.lateral, -(edge - 0.15), edge - 0.15);
           car.x = p.x + p.rx * latIn;
           car.z = p.z + p.rz * latIn;
-          if (!p.gap) car.y = p.y;
+          if (!p.gap) car.y = deckY(sim.track, p, latIn);
           q = queryTrack(sim.track, car.x, car.z, p.s);
         }
       } else {
@@ -1754,6 +1814,7 @@ function drive(sim: Sim, car: Car, input: Input, dt: number, infiniteFuel: boole
   }
 
   passGates(sim, car, car.lastAlong, q.s, q.lateral);
+  craneHit(sim, car, q.s - sim.race.originAlong, q.lateral, q.y);
   car.lastAlong = car.along = q.s;
 
   if (car.hero && car.alive) {
@@ -2624,9 +2685,10 @@ function tryRacePass(sim: Sim, car: Car, dt: number) {
   if (!car.racer && lined) car.lane = heroLat;
   holdMedianSide(sim, car);
   const p = poseAt(sim.track, car.along);
+  car.lane = canyonLane(car.lane, p.width);
   car.x = p.x + p.rx * car.lane;
   car.z = p.z + p.rz * car.lane;
-  car.y = p.y;
+  car.y = deckY(sim.track, p, car.lane);
   car.grounded = true;
   car.yaw = yawFromDir(p.tx, p.tz);
   car.lastAlong = car.along;
@@ -2640,11 +2702,11 @@ function rivalTrucks(sim: Sim, car: Car, dt: number) {
   car.truckCd = Math.max(0, car.truckCd - dt);
   if (!sim.trucks.length || !car.alive || car.truckCd > 0) return;
   const race = car.along - sim.race.originAlong;
-  const deck = poseAt(sim.track, car.along).y;
-  if (car.y > deck + TRUCK.h) return;
+  const deck = deckY(sim.track, poseAt(sim.track, car.along), car.lane);
   for (const t of sim.trucks) {
     if (!t.alive) continue;
     const o = truckObstacle(t);
+    if (car.y > deck + o.h) continue;
     if (!obstacleOverlap(o, race, car.lane)) continue;
     car.lane = ejectLat(sim.stageId, race, o, car.lane);
     car.speed = Math.max(SCROLL_MIN, car.speed * 0.85);
@@ -2666,7 +2728,7 @@ function rivalObstacles(sim: Sim, car: Car, dt: number) {
   if (car.bumpCd.length !== rows.length) car.bumpCd = rows.map(() => 0);
   for (let i = 0; i < rows.length; i++) car.bumpCd[i] = Math.max(0, car.bumpCd[i] - dt);
   const race = car.along - sim.race.originAlong;
-  const deck = poseAt(sim.track, car.along).y;
+  const deck = deckY(sim.track, poseAt(sim.track, car.along), car.lane);
   for (let i = 0; i < rows.length; i++) {
     const o = rows[i];
     if (car.y > deck + o.h) continue;
@@ -2700,11 +2762,31 @@ function flyRival(sim: Sim, car: Car, dt: number, cruise: number) {
     if (car.y < p.y - GAP_DROP) gapReset(sim, car);
     return;
   }
-  if (car.y <= p.y) {
-    car.y = p.y;
+  const deck = deckY(sim.track, p, car.lane);
+  if (car.y <= deck) {
+    car.y = deck;
     car.vy = 0;
     car.grounded = true;
   }
+}
+
+/** BN-16: in a narrow (18 m) canyon a rival's lane target stays within the live width less a lane half (+-9 -> +-6) */
+function canyonLane(lane: number, width: number) {
+  const lim = width / 2 - 3;
+  return Math.abs(lane) > lim ? Math.sign(lane) * lim : lane;
+}
+
+/** Industrial Port oil on a rival (lane-locked): grip loss carries it wide, toward the outside of the bend (the nearer kerb
+ *  on a straight), until the live edge holds it (rails glance). Only while on the slick / its residue. */
+function rivalSlick(sim: Sim, car: Car, dt: number) {
+  if (!car.surf.startsWith("OS") && car.surf !== "oil") return;
+  const course = courseFor(sim.stageId);
+  if (!course) return;
+  const k = bendAt(course, car.along);
+  const out = k > 1e-5 ? 1 : k < -1e-5 ? -1 : Math.sign(car.lane) || 1;
+  const p = poseAt(sim.track, car.along);
+  const lim = p.width / 2 - 1.6;
+  car.lane = clamp(car.lane + out * 2.6 * dt, -lim, lim);
 }
 
 /** Sand and wave wash slow rivals the same way (they ignore the foam telegraph). Recovery is 12 m/s². */
@@ -2735,6 +2817,7 @@ function stepRival(sim: Sim, car: Car, dt: number) {
   car.invuln = Math.max(0, car.invuln - dt);
   car.leaving = false;
   const base = Math.max(SCROLL_MIN, car.raceSpeed > 0 ? car.raceSpeed : RIVAL_SPEED);
+  car.slickT = Math.max(0, car.slickT - dt);
   rivalSurface(sim, car, base, dt);
   const cruise = Math.max(SCROLL_MIN, base - car.surfDef);
   const hero = sim.cars[0];
@@ -2745,8 +2828,10 @@ function stepRival(sim: Sim, car: Car, dt: number) {
     car.along += cruise * dt;
     avoidTrucks(sim, car, dt);
     rivalKeepOffGap(sim, car, dt);
+    rivalSlick(sim, car, dt);
     holdMedianSide(sim, car);
     const p = poseAt(sim.track, car.along);
+    car.lane = canyonLane(car.lane, p.width);
     car.x = p.x + p.rx * car.lane;
     car.z = p.z + p.rz * car.lane;
     car.yaw = yawFromDir(p.tx, p.tz);
@@ -2754,21 +2839,23 @@ function stepRival(sim: Sim, car: Car, dt: number) {
     car.lat = 0;
     const race = p.s - sim.race.originAlong;
     const lip = courseFor(sim.stageId) && (p.kicker || laneKickerAt(sim.stageId, race, car.lane));
+    const deck = deckY(sim.track, p, car.lane);
     if (lip && car.speed > 15) {
       car.grounded = false;
       car.vy = Math.max(8, car.speed * 0.45);
-      car.y = p.y + 0.15;
+      car.y = deck + 0.15;
     } else if (courseFor(sim.stageId) && sideGapAt(sim.stageId, race, car.lane)) {
       // drove off the snapped deck: no ground, falls (flyRival resets it 6.2 m down)
       car.grounded = false;
       car.vy = Math.min(car.vy, 0);
     } else {
-      car.y = p.y;
+      car.y = deck;
       car.grounded = true;
       car.vy = 0;
     }
   }
   rivalObstacles(sim, car, dt);
+  if (car.alive) craneHit(sim, car, car.along - sim.race.originAlong, car.lane, deckY(sim.track, poseAt(sim.track, car.along), car.lane));
   if (!car.alive || sim.phase !== "playing") return;
   if (!hero.alive) return;
   const { fx, fz } = fxDir(car.yaw);

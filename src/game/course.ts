@@ -5,6 +5,7 @@
  * Coast Road layout: LEVELS/02_coast_road.md v1.1 (locked).
  * Pine Woods layout: LEVELS/03_pine_woods.md v1.0 (locked).
  * Open Highway layout: LEVELS/04_open_highway.md v1.0 (locked).
+ * Industrial Port layout: LEVELS/05_industrial_port.md v1.0 (locked).
  */
 export const COURSE_ORIGIN = 140;
 export const COURSE_RUNOUT = 300;
@@ -29,6 +30,12 @@ export type Section = {
 
 export type Median = { s0: number; s1: number; half: number };
 
+/** BN-16 width taper (race s): the live road width runs w0 -> w1 over s0-s1. */
+export type Taper = { s0: number; s1: number; w0: number; w1: number };
+/** BN-15 per-side height: the side lat > latMin (the right roadway of a split) climbs 0 -> h over s0-up, holds to down, and
+ *  descends to 0 at s1. The median is a wall on both faces while the sides differ. */
+export type SideLift = { s0: number; up: number; down: number; s1: number; h: number; latMin: number };
+
 export type Course = {
   id: string;
   length: number;
@@ -36,6 +43,8 @@ export type Course = {
   width: number;
   sections: Section[];
   medians: Median[];
+  tapers?: Taper[];
+  lifts?: SideLift[];
 };
 
 function curve(s0: number, len: number, R: number): Curve {
@@ -207,7 +216,63 @@ export const OPEN_HIGHWAY: Course = {
   ],
 };
 
-const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS, highway: OPEN_HIGHWAY };
+/** Locked Industrial Port section table (LEVELS/05_industrial_port.md §1). 18 m (3-lane) container canyons IP-2 / IP-10
+ *  with 40 m tapers (BN-16); Fork A's right side climbs onto the container tops (BN-15, 5.2 m); Long Shed tunnel IP-7. */
+export const INDUSTRIAL_PORT: Course = {
+  id: "port",
+  length: 4600,
+  runout: COURSE_RUNOUT,
+  width: 24,
+  medians: [
+    { s0: 1250, s1: 1730, half: 0.3 },
+    { s0: 2860, s1: 3380, half: 0.3 },
+  ],
+  tapers: [
+    { s0: 700, s1: 740, w0: 24, w1: 18 },
+    { s0: 1200, s1: 1240, w0: 18, w1: 24 },
+    { s0: 4000, s1: 4040, w0: 24, w1: 18 },
+    { s0: 4300, s1: 4340, w0: 18, w1: 24 },
+  ],
+  lifts: [{ s0: 1250, up: 1310, down: 1660, s1: 1720, h: 5.2, latMin: 0.3 }],
+  sections: [
+    { id: "IP-0", type: "road", s0: 0, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "gate", curves: [] },
+    { id: "IP-1", type: "road", s0: 300, len: 400, width: 24, edgeL: "soft", edgeR: "soft", zone: "warehouse", curves: [curve(300, 400, 450)] },
+    { id: "IP-2", type: "road", s0: 700, len: 500, width: 18, edgeL: "rail", edgeR: "rail", zone: "canyon", curves: [] },
+    { id: "IP-3", type: "road", s0: 1200, len: 40, width: 24, edgeL: "rail", edgeR: "rail", zone: "canyon-exit", curves: [] },
+    { id: "IP-4", type: "split", s0: 1240, len: 500, width: 24, edgeL: "rail", edgeR: "rail", zone: "stack", curves: [curve(1240, 500, -600)] },
+    { id: "IP-5a", type: "road", s0: 1740, len: 60, width: 24, edgeL: "soft", edgeR: "soft", zone: "dock", curves: [] },
+    { id: "IP-5", type: "ramp", s0: 1800, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "drydock", curves: [] },
+    { id: "IP-6", type: "road", s0: 1950, len: 600, width: 24, edgeL: "soft", edgeR: "soft", zone: "crane", curves: [curve(1950, 600, 500)] },
+    { id: "IP-7", type: "tunnel", s0: 2550, len: 240, width: 24, edgeL: "rail", edgeR: "rail", zone: "shed", curves: [] },
+    { id: "IP-8", type: "split", s0: 2790, len: 600, width: 24, edgeL: "soft", edgeR: "soft", zone: "rail-spur", curves: [] },
+    { id: "IP-9", type: "road", s0: 3390, len: 210, width: 24, edgeL: "soft", edgeR: "rail", zone: "quay", curves: [] },
+    // IP-9 carries Ramp R2 Quay Kick at 3600-3750 (§3); split out so the track builds the ramp profile there
+    { id: "IP-9r", type: "ramp", s0: 3600, len: 150, width: 24, edgeL: "rail", edgeR: "rail", zone: "quay", curves: [] },
+    { id: "IP-9b", type: "road", s0: 3750, len: 250, width: 24, edgeL: "soft", edgeR: "rail", zone: "quay", curves: [curve(3750, 250, -700)] },
+    { id: "IP-10", type: "road", s0: 4000, len: 300, width: 18, edgeL: "rail", edgeR: "rail", zone: "gauntlet", curves: [] },
+    { id: "IP-11", type: "road", s0: 4300, len: 300, width: 24, edgeL: "soft", edgeR: "soft", zone: "finish", curves: [] },
+  ],
+};
+
+const COURSES: Record<string, Course> = { city: NIGHT_CITY, coast: COAST_ROAD, woods: PINE_WOODS, highway: OPEN_HIGHWAY, port: INDUSTRIAL_PORT };
+
+/** BN-16: live road width at race s (tapers first, then the section's width; 24 off-course). */
+export function widthAt(course: Course, raceS: number): number {
+  for (const t of course.tapers ?? []) if (raceS >= t.s0 && raceS <= t.s1) return t.w0 + ((t.w1 - t.w0) * (raceS - t.s0)) / (t.s1 - t.s0);
+  const sec = sectionAt(course, raceS);
+  return sec ? sec.width : course.width;
+}
+/** BN-15: extra deck height at race s / lat (0 on the ground side). Smoothstep climb / descent. */
+export function sideLiftAt(course: Course, raceS: number, lat: number): number {
+  for (const l of course.lifts ?? []) {
+    if (lat <= l.latMin || raceS <= l.s0 || raceS >= l.s1) continue;
+    const ease = (t: number) => t * t * (3 - 2 * t);
+    if (raceS < l.up) return l.h * ease((raceS - l.s0) / (l.up - l.s0));
+    if (raceS > l.down) return l.h * ease((l.s1 - raceS) / (l.s1 - l.down));
+    return l.h;
+  }
+  return 0;
+}
 
 export function courseFor(stageId: string): Course | null {
   return COURSES[stageId] ?? null;
@@ -387,7 +452,13 @@ export function sideGapAt(stage: string, s: number, lat: number): SideGap | null
   for (const g of SIDE_GAPS[stage] ?? []) if (s >= g.s0 && s < g.s1 && lat > g.latMin && lat < g.latMax) return g;
   return null;
 }
-const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES };
+/** Industrial Port: G1 on Warehouse Row, G-A on the container tops (right) of Fork A, G-B on the yard road (left) of Fork B. */
+export const PORT_GATES: Gate[] = [
+  { id: "G1", s: 600, side: "both" },
+  { id: "G-A", s: 1600, side: "right" },
+  { id: "G-B", s: 3070, side: "left" },
+];
+const GATES: Record<string, readonly Gate[]> = { city: NIGHT_CITY_GATES, coast: COAST_GATES, woods: WOODS_GATES, highway: HIGHWAY_GATES, port: PORT_GATES };
 
 export function gatesFor(stageId: string): readonly Gate[] {
   return GATES[stageId] ?? [];
@@ -472,7 +543,7 @@ export function respawnBlocked(stageId: string, raceS: number, lat: number): boo
 export function ejectLat(stageId: string, raceS: number, o: Obstacle, carLat: number): number {
   const course = courseFor(stageId);
   const med = course ? medianAt(course, raceS) : null;
-  const road = 12;
+  const road = course ? widthAt(course, raceS) / 2 : 12;
   let lo = -road;
   let hi = road;
   if (med) {
@@ -527,11 +598,17 @@ export function burstWindows(stageId: string): [number, number][] {
 // ---------------------------------------------------------------- BN-8 surfaces, BN-10 timed zones (Coast Road §5)
 
 /** Lane-wide surface patch. lat is the lane centre; the patch covers lat ± half. kind defaults to sand. */
-export type Surface = { id: string; s0: number; s1: number; lat: number; half: number; kind?: "sand" | "gravel" };
+export type Surface = { id: string; s0: number; s1: number; lat: number; half: number; kind?: "sand" | "gravel" | "oil" | "rail" };
 export const SAND = { cap: 34, decel: 14, steerMul: 0.8, gripMul: 1 } as const;
 /** Pine Woods gravel firebreak (§5 GV): cap 36, decel 12 above the cap, steerMul 0.85, no damage. */
 export const GRAVEL = { cap: 36, decel: 12, steerMul: 0.85, gripMul: 1 } as const;
-export const surfaceParams = (p: Surface) => (p.kind === "gravel" ? GRAVEL : SAND);
+/** Industrial Port oil slick (§5 OS): grip x0.25, steer x0.6 while inside and for OIL_RESIDUE s after; no speed change,
+ *  no damage, no spin. The cap is out of reach so the shared surface path never slows a car on oil. */
+export const OIL = { cap: 999, decel: 0, steerMul: 0.6, gripMul: 0.25 } as const;
+export const OIL_RESIDUE = 0.5;
+/** Industrial Port rail crossing (§5 RX): 8 m strip, cap 38, steer x0.8, slows only. */
+export const RAILX = { cap: 38, decel: 12, steerMul: 0.8, gripMul: 1 } as const;
+export const surfaceParams = (p: Surface) => (p.kind === "gravel" ? GRAVEL : p.kind === "oil" ? OIL : p.kind === "rail" ? RAILX : SAND);
 export const WOODS_GRAVEL: Surface[] = [
   { id: "GV1", s0: 2580, s1: 2660, lat: LANE_LAT.L3, half: 3, kind: "gravel" },
   { id: "GV2", s0: 2720, s1: 2800, lat: LANE_LAT.L4, half: 3, kind: "gravel" },
@@ -550,7 +627,20 @@ export const HIGHWAY_GRAVEL: Surface[] = [
   { id: "GV2", s0: 3600, s1: 3680, lat: LANE_LAT.L3, half: 3, kind: "gravel" },
   { id: "GV3", s0: 3800, s1: 3880, lat: LANE_LAT.L4, half: 3, kind: "gravel" },
 ];
-const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL, highway: HIGHWAY_GRAVEL };
+/** Industrial Port oil OS1-OS8 (§5; lane 0 / lane +6 are the canyon lanes) and rail crossings RX1-RX3 (Fork B right side). */
+const oil = (id: string, s0: number, s1: number, lat: number): Surface => ({ id, s0, s1, lat, half: 3, kind: "oil" });
+export const PORT_OIL: Surface[] = [
+  oil("OS1", 500, 530, LANE_LAT.L2),
+  oil("OS2", 900, 930, 0),
+  oil("OS3", 1400, 1440, LANE_LAT.L1),
+  oil("OS4", 2150, 2185, LANE_LAT.L3),
+  oil("OS5", 2400, 2435, LANE_LAT.L2),
+  oil("OS6", 2950, 2990, LANE_LAT.L2),
+  oil("OS7", 3150, 3190, LANE_LAT.L1),
+  oil("OS8", 4150, 4180, 6),
+];
+export const PORT_RAILX: Surface[] = [2950, 3100, 3250].map((s, i) => ({ id: `RX${i + 1}`, s0: s - 4, s1: s + 4, lat: 6, half: 6, kind: "rail" as const }));
+const SANDS: Record<string, readonly Surface[]> = { coast: COAST_SAND, woods: WOODS_GRAVEL, highway: HIGHWAY_GRAVEL, port: [...PORT_OIL, ...PORT_RAILX] };
 export function sandFor(stageId: string): readonly Surface[] {
   return SANDS[stageId] ?? [];
 }
@@ -583,4 +673,41 @@ export function washPhase(w: Wash, time: number): "on" | "telegraph" | "off" {
   if (c < WASH.on) return "on";
   if (c >= WASH.period - WASH.telegraph) return "telegraph";
   return "off";
+}
+
+// ---------------------------------------------------------------- BN-19 telegraphed overhead hazards (Industrial Port §5 CS)
+/** Crane swing: a container load sweeps across the road in an 8 m band. 6 s cycle on the race clock: idle, 1.0 s ground-shadow
+ *  telegraph, 0.8 s active sweep. In the active band (0-6 m over the deck): hero -14 hp, AI -8, once per sweep; no push, no
+ *  speed change; invuln / shield respected. `side: "right"` = the container tops only (CS-T). */
+export type Crane = { id: string; s: number; side: "both" | "right"; phase: number };
+export const CRANE = { period: 6, telegraph: 1.0, active: 0.8, half: 4, h: 6, heroDmg: 14, aiDmg: 8 } as const;
+export const PORT_CRANES: Crane[] = [
+  { id: "CS1", s: 1050, side: "both", phase: 0 },
+  { id: "CS-T", s: 1500, side: "right", phase: 1.5 },
+  { id: "CS2", s: 2200, side: "both", phase: 3 },
+  { id: "CS3", s: 2350, side: "both", phase: 4.5 },
+  { id: "CS4", s: 4200, side: "both", phase: 2.25 },
+];
+const CRANES: Record<string, readonly Crane[]> = { port: PORT_CRANES };
+export function cranesFor(stageId: string): readonly Crane[] {
+  return CRANES[stageId] ?? [];
+}
+/** phase of a crane at race-clock `time`: cycle index n, state, and u (0..1 through the telegraph or the sweep) */
+export function cranePhase(c: Crane, time: number): { n: number; state: "idle" | "telegraph" | "active"; u: number } {
+  const t = time - c.phase;
+  const n = Math.floor(t / CRANE.period);
+  const k = t - n * CRANE.period;
+  const a0 = CRANE.period - CRANE.active, t0 = a0 - CRANE.telegraph;
+  if (k >= a0) return { n, state: "active", u: (k - a0) / CRANE.active };
+  if (k >= t0) return { n, state: "telegraph", u: (k - t0) / CRANE.telegraph };
+  return { n, state: "idle", u: k / t0 };
+}
+/** the crane band under (race s, lat), or null (CS-T only over the container tops, lat > median) */
+export function craneAt(stageId: string, raceS: number, lat: number): Crane | null {
+  for (const c of cranesFor(stageId)) {
+    if (Math.abs(raceS - c.s) > CRANE.half) continue;
+    if (c.side === "right" && lat <= 0.3) continue;
+    return c;
+  }
+  return null;
 }

@@ -13,10 +13,39 @@ const hash = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5
 const c3 = (hex: number) => new THREE.Color(hex);
 
 let terrain: THREE.MeshLambertMaterial | null = null;
+/** Open Highway terrain (mounds, Mesa Cut, the BN-18 gorge): vertex-coloured Lambert. Below the desert rim (world y < -0.6,
+ *  only the gorge reaches there) it adds world-space grain and darkens with depth; the gorge's channel water sits at exactly
+ *  RIVER_WATER_Y and is shaded as dark water with a fresnel night-sky sheen and moon glints. Same draw as the mounds. */
 export function terrainMaterial() {
   if (!terrain) {
     terrain = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
     terrain.name = "highway_terrain";
+    terrain.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      sh.fragmentShader = sh.fragmentShader
+        .replace("void main() {", `varying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
+        .replace("#include <color_fragment>", `#include <color_fragment>
+  float nfGorge = 1.0 - step(-0.6, vWp.y);
+  float nfWater = 1.0 - step(0.015, abs(vWp.y - (${RIVER_WATER_Y.toFixed(3)})));
+  vec2 q = vWp.xz;
+  if (nfGorge > 0.5) {
+    float grain = 0.78 + 0.22 * nfNoise(q * 0.45) + 0.16 * nfNoise(q * 1.7) - 0.14 * step(0.82, nfH(floor(q * 3.0)));
+    float ripple = 0.94 + 0.06 * sin(dot(q, vec2(0.83, 0.57)) * 2.6 + nfNoise(q * 0.3) * 4.0);
+    float depth = smoothstep(${(BRIDGE.bedY - 0.4).toFixed(2)}, -0.6, vWp.y);
+    diffuseColor.rgb *= mix(vec3(1.0), vec3(grain * ripple), 1.0 - nfWater) * mix(0.45, 1.0, depth);
+  }`)
+        .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+  if (nfWater > 0.5) {
+    vec2 wq = vWp.xz;
+    float nfFr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.0);
+    float rip = nfNoise(wq * 0.8) * 0.6 + nfNoise(wq * 2.9 + 9.0) * 0.4;
+    float glint = smoothstep(0.78, 0.95, nfNoise(wq * vec2(0.35, 2.2) + 5.0) * rip);
+    totalEmissiveRadiance += vec3(0.045, 0.07, 0.09) * (0.6 + 1.2 * nfFr) * (0.7 + 0.6 * rip) + vec3(0.32, 0.36, 0.42) * glint;
+  }`);
+    };
+    terrain.customProgramCacheKey = () => "nf_highway_terrain_gorge";
   }
   return terrain;
 }
@@ -162,11 +191,14 @@ export function mesaBlockGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
 /** The dry-river gorge under the Broken Bridge: rocky sloped banks from the desert rim (|lat| ~22, where the floor is cut)
  *  down to a pebbly bed (|lat| < ~9.5) at BRIDGE.bedY, a meandering shallow channel with dark water, wet sand / rock
  *  margins, scattered boulders. All analytic in (s, lat) so chunk seams match. Look only: the gap / fall rules are in sim. */
-export const RIVER = { bedEdge: 9.5, rim: 22, chanHalf: 3.2, chanDip: 0.75, water: -0.32, rocksPer40: 9 };
+export const RIVER = { bedEdge: 9.5, rim: 22, chanHalf: 3.4, chanDip: 1.0, water: -0.22, rocksPer40: 9 };
+/** absolute y of the channel water surface (the terrain shader keys the water shading on it) */
+export const RIVER_WATER_Y = BRIDGE.bedY + RIVER.water;
 const sm = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /** channel centre (course lat) and half-width at course s */
 export function riverChannel(s: number): { c: number; w: number } {
-  return { c: 3.2 * Math.sin(s * 0.013 + 0.6) + 1.4 * Math.sin(s * 0.041 + 2.1), w: RIVER.chanHalf + 1.1 * Math.sin(s * 0.027 + 1.3) };
+  // meanders on the right half of the bed, so the channel reads through the BN-18 gap window (right deck, lat 0.3-13)
+  return { c: 3.6 + 2.6 * Math.sin(s * 0.013 + 0.6) + 1.2 * Math.sin(s * 0.041 + 2.1), w: RIVER.chanHalf + 1.0 * Math.sin(s * 0.027 + 1.3) };
 }
 const bedEdgeAt = (s: number, side: number) => RIVER.bedEdge + 1.4 * Math.sin(s * 0.019 + side * 1.7) + 0.6 * Math.sin(s * 0.053 + side);
 const rimAt = (s: number, side: number) => RIVER.rim + 1.2 * hash(Math.round(s / 2) * 0.7 + side * 3.1);
@@ -205,7 +237,7 @@ function gorgeCols(s: number): { l: number; y: number; bank: number }[] {
   bank(1, true);
   return out;
 }
-const G_RIM = c3(0x6a5840), G_ROCK = c3(0x6e5440), G_ROCK2 = c3(0x58402e), G_DRY = c3(0x7c6a52), G_PEB = c3(0x8a7a64), G_WET = c3(0x2c2620), G_WET2 = c3(0x3a3028);
+const G_RIM = c3(0x6a5840), G_ROCK = c3(0x6e5440), G_ROCK2 = c3(0x58402e), G_DRY = c3(0x8a765a), G_PEB = c3(0xa09078), G_WET = c3(0x2a2622), G_WET2 = c3(0x3c342c), G_WATER = c3(0x16262e);
 function gorgeColour(s: number, l: number, y: number, bank: number): THREE.Color {
   const n = hash(Math.round(s * 1.3) * 3.1 + Math.round(l * 2) * 7.7);
   if (bank > 0) {
@@ -221,7 +253,7 @@ function gorgeColour(s: number, l: number, y: number, bank: number): THREE.Color
   return dry.lerp(wet, sm(2.8, 0.2, d));
 }
 /** Gorge banks + bed + boulders for one chunk's samples inside the bridge (both sides), plus the rock end walls under the
- *  abutments. Draws on riverbedMaterial (vertex colours, world-noise grain, depth falloff). */
+ *  abutments. Drawn on terrainMaterial (vertex colours; world-noise grain and depth falloff below the rim). */
 export function riverbankGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
   if (ks.length < 2) return null;
   const B = BRIDGE;
@@ -275,13 +307,13 @@ export function riverbankGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
     }
   }
   rock.dispose();
-  return finish(g, true);
+  return finish(g);
 }
 /** the shallow channel water for one chunk's samples inside the bridge: a strip over the channel at BRIDGE.bedY + water */
 export function riverWaterGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
   if (ks.length < 2) return null;
-  const pos: number[] = [], nor: number[] = [];
-  const y = BRIDGE.bedY + RIVER.water;
+  const pos: number[] = [], nor: number[] = [], col: number[] = [];
+  const y = RIVER_WATER_Y;
   const edge = (k: number) => {
     const s = sAt(k), p = at(k), ch = riverChannel(s);
     return [P(p, ch.c - ch.w - 1.6, y, ox, oz), P(p, ch.c + ch.w + 1.6, y, ox, oz)];
@@ -289,61 +321,15 @@ export function riverWaterGeometry(at: (k: number) => Pose, ks: number[], sAt: (
   let prev = edge(ks[0]);
   for (let n = 1; n < ks.length; n++) {
     const cur = edge(ks[n]);
-    for (const v of [prev[0], prev[1], cur[1], prev[0], cur[1], cur[0]]) { pos.push(v.x, v.y, v.z); nor.push(0, 1, 0); }
+    for (const v of [prev[0], prev[1], cur[1], prev[0], cur[1], cur[0]]) { pos.push(v.x, v.y, v.z); nor.push(0, 1, 0); col.push(G_WATER.r, G_WATER.g, G_WATER.b); }
     prev = cur;
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   return geo;
 }
-let bedMat: THREE.MeshLambertMaterial | null = null;
-/** gorge material: vertex colours x world-space grain (gravel speckle, sand ripples), darker with depth below the rim */
-export function riverbedMaterial() {
-  if (bedMat) return bedMat;
-  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
-  m.name = "highway_riverbed";
-  m.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
-    sh.fragmentShader = sh.fragmentShader
-      .replace("void main() {", `varying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
-      .replace("#include <color_fragment>", `#include <color_fragment>
-  vec2 q = vWp.xz;
-  float grain = 0.78 + 0.22 * nfNoise(q * 0.45) + 0.16 * nfNoise(q * 1.7) - 0.14 * step(0.82, nfH(floor(q * 3.0)));
-  float ripple = 0.94 + 0.06 * sin(dot(q, vec2(0.83, 0.57)) * 2.6 + nfNoise(q * 0.3) * 4.0);
-  float depth = smoothstep(${(BRIDGE.bedY - 0.4).toFixed(2)}, -0.6, vWp.y);
-  diffuseColor.rgb *= grain * ripple * mix(0.38, 1.0, depth);`);
-  };
-  m.customProgramCacheKey = () => "nf_highway_riverbed";
-  bedMat = m;
-  return m;
-}
-let waterMat: THREE.MeshPhongMaterial | null = null;
-/** shallow dark water: near-black teal, moonlit specular broken up by a world-noise ripple normal */
-export function riverWaterMaterial() {
-  if (waterMat) return waterMat;
-  const m = new THREE.MeshPhongMaterial({ color: 0x0b1519, specular: 0x5a6c7a, shininess: 70, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-  m.name = "highway_river_water";
-  m.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
-    sh.fragmentShader = sh.fragmentShader
-      .replace("void main() {", `varying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
-      .replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
-  vec2 nq = vWp.xz;
-  vec3 rip = vec3(nfNoise(nq * 0.8) - 0.5 + 0.5 * (nfNoise(nq * 2.9) - 0.5), 0.0, nfNoise(nq * 0.8 + 17.0) - 0.5 + 0.5 * (nfNoise(nq * 2.9 + 9.0) - 0.5));
-  normal = normalize(normal + (viewMatrix * vec4(rip * 0.35, 0.0)).xyz);`)
-      .replace("#include <color_fragment>", `#include <color_fragment>
-  diffuseColor.rgb *= 0.85 + 0.3 * nfNoise(vWp.xz * 0.15);`);
-  };
-  m.customProgramCacheKey = () => "nf_highway_river_water";
-  waterMat = m;
-  return m;
-}
-
 // ---------------------------------------------------------------- salt pans
 const SALT = { s0: 4100, s1: 4900, inner: 12.6, outer: 53, blend: 9, y: 0.0 };
 /** A salt-pan tile (40 x 40 at course s / lat, rigid on OH-9's straight) as an 8 x 8 grid with an edge-blend attribute. */

@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
 import { BRIDGE, DESERT_PATCH, HIGHWAY_FAR, MESA_CUT, desertMounds, desertPatches, desertScatter, highwayIn, type HighwayPlace } from "./highwaycourse";
-import { mesaBlockGeometry, mesaSilhouetteMaterial, moundGeometry, riverbankGeometry, riverbedMaterial, riverWaterGeometry, riverWaterMaterial, saltGeometry, saltMaterial, terrainMaterial, tunnelGlowMat } from "./highwayterrain";
+import { mesaBlockGeometry, mesaSilhouetteMaterial, moundGeometry, riverbankGeometry, riverWaterGeometry, saltGeometry, saltMaterial, terrainMaterial, tunnelGlowMat } from "./highwayterrain";
 
 export const HIGHWAY_PIECES: [string, string][] = [
   ["highway", "desert_cactus_a"], ["highway", "desert_cactus_b"], ["highway", "desert_scrub"], ["highway", "desert_rock_spire"],
@@ -109,12 +109,12 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     const ks = (a: number, b: number) => { const r: number[] = []; for (let k = 0; k <= seg; k++) if (sAt(k) >= a - 0.01 && sAt(k) <= b + 0.01) r.push(k); return r; };
     const mg = mesaBlockGeometry(at, ks(MESA_CUT.s0, MESA_CUT.s1), sAt, ox, oz);
     if (mg) terra.push(mg);
-    // week-i-port: the gorge (banks, bed, boulders) on its own grained / depth-darkened material, plus the dark channel water
+    // week-i-port: the gorge (banks, bed, boulders) and the dark channel water, on the terrain material (no extra draw)
     const bk = ks(BRIDGE.s0, BRIDGE.s1);
     const rg = riverbankGeometry(at, bk, sAt, ox, oz);
-    if (rg) parts.set(riverbedMaterial(), [rg]);
+    if (rg) terra.push(rg);
     const wg = riverWaterGeometry(at, bk, sAt, ox, oz);
-    if (wg) parts.set(riverWaterMaterial(), [wg]);
+    if (wg) terra.push(wg);
   }
   const list = c.lap === 0 ? highwayIn(s0, s1) : [];
   for (const p of list) {

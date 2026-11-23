@@ -4,7 +4,7 @@
  * (kicker ramps and elevated void gaps) keep the thrusters relevant.
  * An authored course (Night City) replaces the seeded bend and the random pieces.
  */
-import { bendAt, COURSE_ORIGIN, type Course } from "./course";
+import { bendAt, COURSE_ORIGIN, sideLiftAt, widthAt, type Course } from "./course";
 
 export type Sample = {
   x: number;
@@ -48,6 +48,10 @@ export type Track = {
   courseId: string;
   /** Curvature at an absolute s. Null on the procedural highway. */
   bend: ((absS: number) => number) | null;
+  /** BN-16 live width at an absolute s (null: track.width everywhere) */
+  widthAt?: ((absS: number) => number) | null;
+  /** BN-15 per-side deck lift at an absolute s / lateral (null: none) */
+  liftAt?: ((absS: number, lat: number) => number) | null;
   gen: { i: number; x: number; z: number; h: number };
 };
 
@@ -150,6 +154,8 @@ export function buildCourseTrack(course: Course): Track {
     authored: true,
     courseId: course.id,
     bend: (absS) => bendAt(course, absS),
+    widthAt: course.tapers || course.sections.some((x) => x.width !== course.width) ? (absS) => widthAt(course, absS - COURSE_ORIGIN) : null,
+    liftAt: course.lifts?.length ? (absS, lat) => sideLiftAt(course, absS - COURSE_ORIGIN, lat) : null,
     gen: { i: 0, x: 0, z: 0, h: 0 },
   };
   for (const sec of course.sections) {
@@ -232,8 +238,12 @@ export function poseAt(track: Track, s: number): Pose {
     gap: a.gap && b.gap,
     kicker: a.kicker || b.kicker,
     slope: (b.y - a.y) / STEP,
-    width: track.width,
+    width: track.widthAt ? track.widthAt(d) : track.width,
   };
+}
+/** deck height at absolute s / lateral: the centreline pose y plus any BN-15 side lift */
+export function deckY(track: Track, p: { y: number; s: number }, lat: number) {
+  return p.y + (track.liftAt ? track.liftAt(p.s, lat) : 0);
 }
 
 export type Query = Pose & { lateral: number };
@@ -279,20 +289,24 @@ export function queryTrack(track: Track, x: number, z: number, hint?: number): Q
   const rz = l(a.rz, b.rz);
   const cx = l(a.x, b.x);
   const cz = l(a.z, b.z);
+  const lateral = (x - cx) * rx + (z - cz) * rz;
+  const qs = a.s + STEP * bestT;
+  const lift = track.liftAt ? track.liftAt(qs, lateral) : 0;
+  const liftSlope = track.liftAt ? (track.liftAt(qs + 1, lateral) - track.liftAt(qs - 1, lateral)) / 2 : 0;
   return {
     x: cx,
-    y: l(a.y, b.y),
+    y: l(a.y, b.y) + lift,
     z: cz,
     tx: l(a.tx, b.tx),
     tz: l(a.tz, b.tz),
     rx,
     rz,
-    s: a.s + STEP * bestT,
+    s: qs,
     gap: a.gap && b.gap,
     kicker: (a.kicker || b.kicker) && bestT < 0.85,
-    slope: (b.y - a.y) / STEP,
-    width: track.width,
-    lateral: (x - cx) * rx + (z - cz) * rz,
+    slope: (b.y - a.y) / STEP + liftSlope,
+    width: track.widthAt ? track.widthAt(qs) : track.width,
+    lateral,
   };
 }
 
