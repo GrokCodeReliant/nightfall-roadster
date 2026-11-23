@@ -18,6 +18,43 @@ export const HIGHWAY_PIECES: [string, string][] = [
   ["city", "tunnel_40"], ["city", "tunnel_portal"], ["city", "barricade_3m"], ["city", "ramp_kicker_1m"], ["woods", "woods_gravel_decal"],
   ["kit", "sign_fork"], ["kit", "barrier_jersey_4m"], ["kit", "start_grid_paint_40"], ["kit", "ramp_lip_chevron_24"], ["city", "finish_gantry_24"],
 ];
+/**
+ * week-i-polish (BE's hosted bridge-gap shot): gap_edge_12's rubble slabs and underside sit on the kit atlas's flat light-grey
+ * cell (~rgb 102,102,107, no texture). At the near lip (2256-2260, behind the KA3/KA4 kickers) the slabs face the chase cam and
+ * read as a flat grey block beside the striped kicker. Re-map those faces onto the piece's own broken-concrete cell (the one
+ * its fracture face uses), planar per triangle, so the lip reads as broken concrete. Same material, 0 extra draws / tris.
+ */
+export const GAP_EDGE_FLAT_CELL = { u0: 0.9, v0: 0.95 };
+export const GAP_EDGE_CONCRETE_CELL = { u0: 0.508, u1: 0.742, v0: 0.758, v1: 0.956 };
+export function regritGapEdge(g: THREE.BufferGeometry) {
+  if (g.userData.regrit) return 0;
+  g.userData.regrit = true;
+  const pos = g.getAttribute("position"), uv = g.getAttribute("uv");
+  const C = GAP_EDGE_CONCRETE_CELL, W = C.u1 - C.u0, H = C.v1 - C.v0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e = new THREE.Vector3();
+  let hit = 0;
+  for (let t = 0; t + 2 < pos.count; t += 3) {
+    let flat = true;
+    for (let k = 0; k < 3; k++) if (uv.getX(t + k) < GAP_EDGE_FLAT_CELL.u0 || uv.getY(t + k) < GAP_EDGE_FLAT_CELL.v0) flat = false;
+    if (!flat) continue;
+    a.fromBufferAttribute(pos, t); b.fromBufferAttribute(pos, t + 1); c.fromBufferAttribute(pos, t + 2);
+    n.subVectors(b, a).cross(e.subVectors(c, a));
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    // project on the plane the face is most parallel to (0.035 atlas / m: one 7 m stretch of the cell)
+    const pr = (v: THREE.Vector3): [number, number] => (ay >= ax && ay >= az ? [v.x, v.z] : ax >= az ? [v.z, v.y] : [v.x, v.y]);
+    const p = [pr(a), pr(b), pr(c)];
+    const mu = Math.min(...p.map((q) => q[0])), mv = Math.min(...p.map((q) => q[1]));
+    const su = Math.max(...p.map((q) => q[0])) - mu, sv = Math.max(...p.map((q) => q[1])) - mv;
+    const sc = Math.min(0.035, (W * 0.9) / Math.max(su, 1e-3), (H * 0.9) / Math.max(sv, 1e-3));
+    // deterministic offset inside the cell from the triangle's position (chunks don't all show the same patch)
+    const h = Math.abs(Math.sin(a.x * 12.9898 + a.z * 78.233) * 43758.5453) % 1;
+    const ou = C.u0 + h * Math.max(0, W - su * sc), ov = C.v0 + ((h * 7.31) % 1) * Math.max(0, H - sv * sc);
+    for (let k = 0; k < 3; k++) uv.setXY(t + k, ou + (p[k][0] - mu) * sc, ov + (p[k][1] - mv) * sc);
+    hit++;
+  }
+  uv.needsUpdate = true;
+  return hit;
+}
 let loaded = 0;
 let asked = false;
 export const highwayReady = () => loaded >= HIGHWAY_PIECES.length;
@@ -83,6 +120,7 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     if (p.name === "tunnel_40" || p.name === "tunnel_portal") m.multiply(new THREE.Matrix4().makeScale(1, MESA_CUT.sy, 1));
     if (p.sz) m.multiply(new THREE.Matrix4().makeScale(1, 1, p.sz));
     if (bakePiece(into, p.name, m, keep)) out.placed.push(p.name);
+    if (p.name === "gap_edge_12") for (const l of into.values()) for (const g of l) if (g.userData.piece === "gap_edge_12") regritGapEdge(g);
   };
   const sAt = (k: number) => s0 + k * 2;
   // desert floor patches (every lap)

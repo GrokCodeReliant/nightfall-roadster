@@ -410,17 +410,21 @@ export function portOilMaterial() {
         .replace("#include <color_fragment>", `#include <color_fragment>
  float nfEdge = vColor.r;
  float nfMott = 0.5 + 0.5 * sin( vNfW.x * 1.7 + sin( vNfW.z * 0.45 ) * 2.0 ) * sin( vNfW.z * 0.9 + vNfW.x * 0.4 );
- diffuseColor.rgb = vec3( 0.010, 0.010, 0.012 ) * ( 0.8 + 0.4 * nfMott );
- diffuseColor.a *= 0.9 * smoothstep( 0.0, 0.35, nfEdge );`)
+ diffuseColor.rgb = vec3( 0.006, 0.006, 0.007 ) * ( 0.8 + 0.4 * nfMott );
+ diffuseColor.a *= 0.94 * smoothstep( 0.0, 0.3, nfEdge );`)
         .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
  { float nfB = vNfW.x * 0.21 + vNfW.z * 0.17 + sin( vNfW.x * 0.6 ) * 0.5 + sin( vNfW.z * 0.4 + vNfW.x * 0.2 ) * 0.6;
    vec3 nfHue = 0.5 + 0.5 * cos( 6.2831 * ( nfB * 0.3 + vec3( 0.0, 0.33, 0.67 ) ) );
    vec3 nfTint = mix( vec3( 0.5 ), nfHue, 0.3 );
    float nfGraze = 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) );
    float nfRimWet = smoothstep( 0.05, 0.25, nfEdge ) * ( 1.0 - smoothstep( 0.25, 0.5, nfEdge ) );
-   totalEmissiveRadiance += vec3( 0.55, 0.6, 0.68 ) * 0.018 * nfRimWet + nfTint * 0.07 * pow( nfGraze, 2.0 ) * smoothstep( 0.1, 0.6, nfEdge ); }`);
+   // v3 (week-i-polish, playtest: v2 was dark-on-dark and vanished 60-90 m out): a wet sheen smeared along the lane
+   // (stretched streaks, low-sat cool grey, stronger toward grazing so it reads at distance) + a brighter wet tide-line rim
+   float nfSmear = 0.5 + 0.5 * sin( vNfW.x * 0.9 + vNfW.z * 0.23 + sin( vNfW.z * 0.31 ) * 1.6 );
+   float nfSheen = ( 0.035 + 0.11 * pow( nfGraze, 1.6 ) ) * ( 0.45 + 0.55 * nfSmear * nfSmear ) * smoothstep( 0.15, 0.55, nfEdge );
+   totalEmissiveRadiance += vec3( 0.55, 0.6, 0.7 ) * ( 0.05 * nfRimWet + nfSheen ) + nfTint * 0.06 * pow( nfGraze, 2.0 ) * smoothstep( 0.1, 0.6, nfEdge ); }`);
     };
-    m.customProgramCacheKey = () => "nf_port_oil_v2";
+    m.customProgramCacheKey = () => "nf_port_oil_v3";
     oilMat = m;
   }
   return oilMat;

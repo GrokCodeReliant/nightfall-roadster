@@ -19,7 +19,7 @@ export const PORT_COUNTS = {
   containers: { canyon: 316, deck: 116, crane: 100, gauntlet: 175 } as Record<string, number>,
   cranes: 7, swinging: 5, oil: 8, signFork: 10, jersey: 250, ends: 4, parapets: 235, bollards: { stack: 80, quay: 60 },
   guardrail: 150, shed: 6, portals: 2, racking: 12, railTiles: 13, crossings: 3, flatcars: 6, hulls: 3, warehouses: 10,
-  crate: 1, booth: 1, fence: 40, water: 12, containerRamps: 2, deckTop: 1,
+  crate: 2, booth: 1, fence: 40, water: 12, containerRamps: 2, deckTop: 1,
 };
 /** IP-6 Crane Alley gantries (4) + CS1 / CS-T / CS4 = 7 STS cranes; the swinging ones carry a load (course.ts PORT_CRANES) */
 export const PORT_CRANE_S = [1050, 1500, 2050, 2200, 2350, 2500, 4200];
@@ -33,7 +33,9 @@ export const PORT_SIGN_SIDE: [number, number][] = [
   ...PORT_GATES.filter((g) => g.side === "right").map((g) => [g.s, 1] as [number, number]),
   ...PORT_GATES.filter((g) => g.side === "left").map((g) => [g.s, -1] as [number, number]),
 ];
-export const PORT_CRATES: [number, number][] = [[1650, LANE_LAT.L1]];
+/** §2 crates: Fork A quay floor L1 at 1650, Fork B rail spur L4 at 3300 (week-i-polish: the L4 crate was missing; the art
+ *  list's "1 crate" total only counts IP-4, the course table places both; same reused kit crate, visual only) */
+export const PORT_CRATES: [number, number][] = [[1650, LANE_LAT.L1], [3300, LANE_LAT.L4]];
 export const PORT_WATER = { s0: 3400, lat0: 15, tile: 40 };
 /** container: 2.44 W x 2.6 H x 12.2 L */
 export const BOX = { w: 2.44, h: 2.6, l: 12.2 };

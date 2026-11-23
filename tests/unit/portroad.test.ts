@@ -66,7 +66,7 @@ test("locked ART LIST counts: every placement count matches §A", () => {
   assert.equal(n("port_flatcar"), 6);
   assert.equal(n("port_ship_hull_backdrop"), 3);
   assert.equal(n("port_warehouse_block"), 10);
-  assert.equal(n("coast_crate"), 1);
+  assert.equal(n("coast_crate"), 2); // L1 1650 (Fork A quay) + L4 3300 (Fork B rail spur), §2
   assert.equal(n("port_security_booth"), 1);
   assert.equal(n("port_fence_4m"), 40);
   assert.equal(n("port_water_tile"), 12);

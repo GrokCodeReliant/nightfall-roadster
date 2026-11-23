@@ -12,7 +12,7 @@ import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type Coas
 import { chunkCourse } from "./coastcourse";
 import { BRIDGE_HIDE, PINE_LOD, buildWoodsChunk, floorPatchGeometry, loadWoods, makeTruckMesh, woodsPineGeometry, woodsReady } from "./woods";
 import { FLOOR_PATCH, woodsFog } from "./woodscourse";
-import { PAINT_GLSL } from "./roadpaint";
+import { lanePaintX, PAINT_GLSL } from "./roadpaint";
 import { WOODS_LOOK } from "./woodscourse";
 import { buildHighwayChunk, desertPatchGeometry, highwayFarGroup, highwayReady, loadHighway } from "./highway";
 import { BRIDGE, DESERT_PATCH, DESERT_SCATTER, HIGHWAY_GAP, HIGHWAY_LOOK } from "./highwaycourse";
@@ -165,7 +165,7 @@ export type World = {
   /** test harness: the next frame puts the chase cam straight on its target (after a teleport). Gameplay easing unchanged. */
   debugSnapCamera: () => void;
   /** test harness: what is under a screen point (NDC): material name, texture, and the pieces merged into that mesh. */
-  debugPick: (x: number, y: number) => { mat: string; map: boolean; color: string; emissive: string; pieces: string[]; dist: number; at: number[]; n: number[] }[];
+  debugPick: (x: number, y: number) => { mat: string; map: boolean; color: string; emissive: string; pieces: string[]; dist: number; at: number[]; n: number[]; uv?: number[] }[];
   carInfo: () => CarInfo;
   setCar: (id: CarId) => void;
   setStage: (id: StageId) => void;
@@ -2113,7 +2113,13 @@ export function createWorld(canvas: HTMLCanvasElement): World {
           if (sim.track.widthAt) {
             const gp = g.getAttribute("position") as THREE.BufferAttribute;
             const mid = sampleAt(sim.track, i0 + SEG / 2).s;
-            for (let v = 0; v < gp.count; v++) gp.setX(v, gp.getX(v) * (sim.track.widthAt(mid + gp.getZ(v)) / 24));
+            // week-i-polish: the lane-paint piece is re-laid, not squeezed: an 18 m road paints 3 lanes (-6 / 0 / +6, dashes at
+            // +-3, no centre line) instead of 4 narrow ones; see lanePaintX
+            const paintPiece = k.mesh.name === "kitroad:lanepaint_straight_40";
+            for (let v = 0; v < gp.count; v++) {
+              const w = sim.track.widthAt(mid + gp.getZ(v));
+              gp.setX(v, paintPiece ? lanePaintX(gp.getX(v), w) : gp.getX(v) * (w / 24));
+            }
           }
           bendGeometry(g, frame, true);
           c = { p: g.getAttribute("position").array as Float32Array, n: g.getAttribute("normal").array as Float32Array, uv: g.getAttribute("uv").array as Float32Array };
@@ -2822,7 +2828,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const shown = (o: THREE.Object3D | null) => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
       return ray.intersectObjects(scene.children, true).filter((h) => shown(h.object)).slice(0, 6).map((h) => {
         const m = (h.object as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance), at: [h.point.x, h.point.y, h.point.z].map((v) => Math.round(v * 10) / 10), n: h.face ? [h.face.normal.x, h.face.normal.y, h.face.normal.z].map((v) => Math.round(v * 100) / 100) : [] };
+        return { mat: m?.name ?? "", map: !!m?.map, color: m?.color?.getHexString?.() ?? "", emissive: m?.emissive?.getHexString?.() ?? "", pieces: (h.object.userData.pieces as string[]) ?? [h.object.name], dist: Math.round(h.distance), at: [h.point.x, h.point.y, h.point.z].map((v) => Math.round(v * 10) / 10), n: h.face ? [h.face.normal.x, h.face.normal.y, h.face.normal.z].map((v) => Math.round(v * 100) / 100) : [], uv: h.uv ? [Math.round(h.uv.x * 1000) / 1000, Math.round(h.uv.y * 1000) / 1000] : [] };
       });
     },
     carInfo: () => carInfo,

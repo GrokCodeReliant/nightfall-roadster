@@ -41,3 +41,18 @@ vec3 nfPaint( vec3 c, vec3 t ) {
 }
 #define NF_YELLOW vec3( ${f(YELLOW)} )
 #define NF_AMBER vec3( ${f(AMBER)} )`;
+
+/**
+ * week-i-polish (playtest: the Port canyon read as 4 narrow lanes; LEVELS/05 + 06: 18 m = 3 lanes at -6 / 0 / +6).
+ * Lateral re-layout of the 24 m 4-lane paint piece (lanepaint_straight_40: centre double line + studs |x| < 0.3, dashed lane
+ * lines at |x| 6, edge lines + studs at |x| 11.3-11.7) for a live road width w (18..24). t = 0 at 24 m (unchanged), 1 at 18 m:
+ * the centre line + studs narrow to nothing (lane 0 is the middle lane), the dashed lines slide 6 -> 3 (the 3-lane dividers),
+ * the edge lines keep the old squeeze to the kerb (11.6 -> 8.7). Continuous through the 24 <-> 18 tapers.
+ */
+export function lanePaintX(x: number, w: number): number {
+  const t = Math.min(1, Math.max(0, (24 - w) / 6));
+  const a = Math.abs(x), sg = Math.sign(x);
+  if (a < 3) return x * (1 - t);
+  if (a < 9) return sg * (a - 3 * t);
+  return x * (w / 24);
+}

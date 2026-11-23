@@ -12,7 +12,7 @@ import type { ChunkCourse } from "./coastcourse";
 import { SUMMIT_LEAP } from "./course";
 import { acc, bake, C, done, G, geo, hash, mix, mul, type Piece, type RGB, type V3 } from "./port";
 import { edgeAt, passIn, PASS_SHED, type PassPlace } from "./passcourse";
-import { passGroundY, PASS_FLOOR, PASS_LAKE_Y } from "./passterrain";
+import { passGroundY, PASS_FLOOR, PASS_LAKE_Y, wallSetback } from "./passterrain";
 
 export const PASS_PIECES: [string, string][] = [
   ["coast", "coast_guardrail_end_4m"], ["coast", "coast_crate"],
@@ -110,26 +110,54 @@ function shedPortal(): Piece {
   for (let i = 0; i < 10; i++) r.quad([-W + i * W * 0.2, H - 1.0, -1.22], [-W + (i + 1) * W * 0.2, H - 1.0, -1.22], [-W + (i + 1) * W * 0.2, H - 0.4, -1.22], [-W + i * W * 0.2, H - 0.4, -1.22], i % 2 ? YEL : DARK);
   return done(g, undefined, r);
 }
+/** snow surface tone (week-i-polish, playtest: the drift + kicker read as one flat white slab): wind-packed snow with
+ *  sastrugi ripples (bands across the row), blue-grey shading toward the foot / in the hollows and a little dirty road
+ *  spray at the base; per-vertex so it costs no texture. u = across (m), v = 0 foot .. 1 crest, r = ripple phase. */
+const SNOW_SHADE = C(0x8d9fb8), SNOW_DIRT = C(0x6f747c);
+function snowTone(u: number, v: number, r: number): RGB {
+  const rip = 0.5 + 0.5 * Math.sin(r * 2.3 + Math.sin(u * 1.7) * 0.8);
+  let c = mix(SNOW_B, SNOW, Math.min(1, 0.25 + 0.75 * v) * (0.55 + 0.45 * rip));
+  c = mix(c, SNOW_SHADE, (1 - v) * 0.45 * (0.6 + 0.4 * hash(u * 3.7 + r)));
+  if (v < 0.18) c = mix(c, SNOW_DIRT, (0.18 - v) / 0.18 * 0.55);
+  return mul(c, 0.93 + 0.1 * hash(u * 5.1 + r * 1.3));
+}
 function driftRow(): Piece {
   const g = new G();
-  const n = 6, prof: [number, number][] = [[-0.75, 0], [-0.35, 0.8], [0.25, 1.0], [0.75, 0]];
+  // 7 columns x 5 profile segments, lumpy crest, end caps: 70 + 8 = 78 tris (budget 80)
+  const n = 7, prof: [number, number][] = [[-0.75, 0], [-0.5, 0.45], [-0.25, 0.82], [0.1, 1.0], [0.45, 0.72], [0.75, 0]];
+  const W = 6 / n;
+  const hAt = (i: number) => 0.85 + 0.12 * Math.sin(i * 1.7) + 0.06 * (hash(i * 2.9) - 0.5);
+  const zJit = (i: number, j: number) => (j === 0 || j === prof.length - 1 ? 0 : 0.12 * (hash(i * 7.1 + j * 3.3) - 0.5));
+  const V = (i: number, j: number): V3 => [-3 + i * W, prof[j][1] * hAt(i), prof[j][0] * 1.6 + zJit(i, j)];
   for (let i = 0; i < n; i++) {
-    const x0 = -3 + i, x1 = x0 + 1, h0 = 0.85 + 0.15 * Math.sin(i * 1.7), h1 = 0.85 + 0.15 * Math.sin((i + 1) * 1.7);
     for (let j = 0; j < prof.length - 1; j++) {
-      const [za, ya] = prof[j], [zb, yb] = prof[j + 1];
-      g.quad([x0, ya * h0, za * 1.6], [x1, ya * h1, za * 1.6], [x1, yb * h1, zb * 1.6], [x0, yb * h0, zb * 1.6], j === 1 ? SNOW : SNOW_B);
+      const t = (k: number, jj: number) => snowTone(-3 + k * W, prof[jj][1], (prof[jj][0] + 0.75) * 4 + k * 0.6);
+      g.quad(V(i, j), V(i + 1, j), V(i + 1, j + 1), V(i, j + 1), t(i, j), t(i + 1, j), t(i + 1, j + 1), t(i, j + 1));
     }
+  }
+  // end caps (fan from the foot centre): 4 tris each
+  for (const i of [0, n]) {
+    const base: V3 = [-3 + i * W, 0, 0.0];
+    for (let j = 0; j < prof.length - 2; j++) g.tri(base, V(i, j + 1), V(i, j + 2), SNOW_SHADE, mix(SNOW_B, SNOW_SHADE, 0.4), mix(SNOW_B, SNOW_SHADE, 0.4));
   }
   return done(g);
 }
 function snowKicker(): Piece {
   const g = new G(), l = new G();
   const w = 3.02, L = 2.65, h = 1.16;
-  g.quad([w, 0, -L], [-w, 0, -L], [-w, h, L], [w, h, L], SNOW);
-  g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_B);
-  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], SNOW_B);
-  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], SNOW_B);
-  for (let i = 0; i < 4; i++) { const z = -L + 0.8 + i * 1.2, y = (h * (z + L)) / (2 * L) + 0.02; l.quad([w - 0.2, y, z], [-w + 0.2, y, z], [-w + 0.2, y + 0.06, z + 0.3], [w - 0.2, y + 0.06, z + 0.3], CHEV); }
+  // ramp face as a 4 x 6 grid with packed-snow tone, two darker tyre-packed lanes and blue-grey shading at the foot (48 tris)
+  const nx = 4, nz = 6;
+  const Y = (z: number) => (h * (z + L)) / (2 * L);
+  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+    const x0 = w - (2 * w * i) / nx, x1 = w - (2 * w * (i + 1)) / nx;
+    const z0 = -L + (2 * L * j) / nz, z1 = -L + (2 * L * (j + 1)) / nz;
+    const t = (x: number, z: number) => { const v = (z + L) / (2 * L); let c = snowTone(x, 0.3 + 0.7 * v, z * 2.2); if (Math.abs(Math.abs(x) - 1.5) < 0.8) c = mul(mix(c, SNOW_SHADE, 0.3), 0.95); return c; };
+    g.quad([x0, Y(z0), z0], [x1, Y(z0), z0], [x1, Y(z1), z1], [x0, Y(z1), z1], t(x0, z0), t(x1, z0), t(x1, z1), t(x0, z1));
+  }
+  g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_SHADE, SNOW_B, SNOW_SHADE);
+  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], SNOW_SHADE, SNOW_SHADE, SNOW_B);
+  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], SNOW_SHADE, SNOW_B, SNOW_B, SNOW_SHADE);
+  for (let i = 0; i < 4; i++) { const z = -L + 0.8 + i * 1.2, y = Y(z) + 0.02; l.quad([w - 0.2, y, z], [-w + 0.2, y, z], [-w + 0.2, y + 0.06, z + 0.3], [w - 0.2, y + 0.06, z + 0.3], CHEV); }
   return done(g, l);
 }
 function lakeTile(seed: number): Piece {
@@ -279,12 +307,16 @@ function strip(g: G, ice: G, name: string, pl: PassPlace, atK: (k: number) => Po
   for (let i = 0; i < n; i++) {
     const sa = (i * len) / n, sb = ((i + 1) * len) / n;
     const a = at(k0 + sa / 2), b = at(k0 + sb / 2);
-    const ea = edgeAt(pl.s + sa) + 0.9, eb = edgeAt(pl.s + sb) + 0.9;
+    // week-i-polish: MP-6 rock cut set back behind a snowy verge (wallSetback; 0 elsewhere and for the scree)
+    const wa = scree ? 0 : wallSetback(pl.s + sa), wb = scree ? 0 : wallSetback(pl.s + sb);
+    const ea = edgeAt(pl.s + sa) + 0.9 + wa, eb = edgeAt(pl.s + sb) + 0.9 + wb;
     const na = hash(seed + i * 3.1), nb = hash(seed + (i + 1) * 3.1);
     const L = (p: Pose, e: number, y: number) => P(p, side * e, y, ox, oz);
     if (!scree) {
       // rock cut: foot -> face (5 m) -> brow (11-13 m) -> snow back
-      const fa = 5 + na * 2, fb = 5 + nb * 2, ta = 11 + na * 2.5, tb = 11 + nb * 2.5;
+      // set-back sections carry a lower, laid-back face (brow 8.5-10.5 instead of 11-13.5)
+      const la = 1 - 0.22 * (wa / 4.5), lb = 1 - 0.22 * (wb / 4.5);
+      const fa = (5 + na * 2) * la, fb = (5 + nb * 2) * lb, ta = (11 + na * 2.5) * la, tb = (11 + nb * 2.5) * lb;
       g.quad(L(a, ea, PASS_FLOOR), L(b, eb, PASS_FLOOR), L(b, eb + 0.7, fb), L(a, ea + 0.7, fa), ROCK_D, ROCK_D, mul(ROCK, 0.9 + nb * 0.2), mul(ROCK, 0.9 + na * 0.2));
       g.quad(L(a, ea + 0.7, fa), L(b, eb + 0.7, fb), L(b, eb + 2.2, tb), L(a, ea + 2.2, ta), mul(ROCK, 0.9 + na * 0.2), mul(ROCK, 0.9 + nb * 0.2), mix(ROCK, SNOW_B, 0.3), mix(ROCK, SNOW_B, 0.3));
       g.quad(L(a, ea + 2.2, ta), L(b, eb + 2.2, tb), L(b, eb + 7, tb + 1.5), L(a, ea + 7, ta + 1.5), SNOW_B, SNOW_B, SNOW, SNOW);
