@@ -1147,6 +1147,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       });
     }
   }
+  // Mountain Pass world state (declared before the first applyStage(): it clears the pass world on every stage switch)
+  const passStat = { roofHidden: false, rocks: [] as { id: string; state: string; y: number; shadow: boolean }[], peaks: false };
+  const passTiles = new Map<string, THREE.Mesh>();
+  const passMovers: THREE.InstancedMesh[] = [];
+  let passPeaks: THREE.Mesh | null = null;
+  const TILE = 192, TILE_RES = 6, TILE_REACH = 330;
   function applyStage() {
     const st = STAGES.find((x) => x.id === stage) ?? STAGES[0];
     (scene.background as THREE.Color).setHex(st.sky);
@@ -1607,11 +1613,6 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
 
   // ---------------------------------------------------------------- Mountain Pass: terrain tiles, shed roof, rockfall, peaks
-  const passStat = { roofHidden: false, rocks: [] as { id: string; state: string; y: number; shadow: boolean }[], peaks: false };
-  const passTiles = new Map<string, THREE.Mesh>();
-  const passMovers: THREE.InstancedMesh[] = [];
-  let passPeaks: THREE.Mesh | null = null;
-  const TILE = 192, TILE_RES = 6, TILE_REACH = 330;
   function clearPassWorld() {
     for (const m of passTiles.values()) { scene.remove(m); m.geometry.dispose(); }
     passTiles.clear();
