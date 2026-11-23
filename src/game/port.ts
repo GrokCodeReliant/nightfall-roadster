@@ -26,13 +26,13 @@ export function loadPort() {
 }
 
 // ---------------------------------------------------------------- tiny tri builder (local piece space: +X left, +Y up, +Z forward)
-type RGB = [number, number, number];
-const C = (hex: number): RGB => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
-const mul = (c: RGB, k: number): RGB => [c[0] * k, c[1] * k, c[2] * k];
-const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-function hash(n: number) { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
-type V3 = [number, number, number];
-class G {
+export type RGB = [number, number, number];
+export const C = (hex: number): RGB => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
+export const mul = (c: RGB, k: number): RGB => [c[0] * k, c[1] * k, c[2] * k];
+export const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+export function hash(n: number) { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); }
+export type V3 = [number, number, number];
+export class G {
   p: number[] = [];
   c: number[] = [];
   tri(a: V3, b: V3, c: V3, ca: RGB, cb: RGB = ca, cc: RGB = ca) { this.p.push(...a, ...b, ...c); this.c.push(...ca, ...cb, ...cc); }
@@ -64,8 +64,8 @@ class G {
     }
   }
 }
-type Piece = { p: Float32Array; c: Float32Array; lp: Float32Array; lc: Float32Array; rp?: Float32Array; rc?: Float32Array };
-const done = (g: G, l?: G, r?: G): Piece => ({ p: new Float32Array(g.p), c: new Float32Array(g.c), lp: new Float32Array(l?.p ?? []), lc: new Float32Array(l?.c ?? []), rp: r ? new Float32Array(r.p) : undefined, rc: r ? new Float32Array(r.c) : undefined });
+export type Piece = { p: Float32Array; c: Float32Array; lp: Float32Array; lc: Float32Array; rp?: Float32Array; rc?: Float32Array };
+export const done = (g: G, l?: G, r?: G): Piece => ({ p: new Float32Array(g.p), c: new Float32Array(g.c), lp: new Float32Array(l?.p ?? []), lc: new Float32Array(l?.c ?? []), rp: r ? new Float32Array(r.p) : undefined, rc: r ? new Float32Array(r.c) : undefined });
 
 // ---------------------------------------------------------------- palette (night: mid values; the hemi / moon rig lifts them)
 export const CONTAINER_TINTS = [0x8a3324, 0x2e5a8a, 0x3f6b3a, 0x8a8c8e, 0xb8642a, 0x2f7a78].map(C);
@@ -418,17 +418,17 @@ export function portOilMaterial() {
 }
 
 // ---------------------------------------------------------------- per-chunk baking
-type Acc = { p: number[]; c: number[] };
-const acc = (): Acc => ({ p: [], c: [] });
+export type Acc = { p: number[]; c: number[] };
+export const acc = (): Acc => ({ p: [], c: [] });
 const tv = new THREE.Vector3();
-function bake(into: Acc, src: Float32Array, col: Float32Array, m: THREE.Matrix4) {
+export function bake(into: Acc, src: Float32Array, col: Float32Array, m: THREE.Matrix4) {
   for (let i = 0; i < src.length; i += 3) {
     tv.set(src[i], src[i + 1], src[i + 2]).applyMatrix4(m);
     into.p.push(tv.x, tv.y, tv.z);
   }
   for (let i = 0; i < col.length; i++) into.c.push(col[i]);
 }
-function geo(a: Acc, normals: boolean, piece: string): THREE.BufferGeometry | null {
+export function geo(a: Acc, normals: boolean, piece: string): THREE.BufferGeometry | null {
   if (!a.p.length) return null;
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(a.p, 3));
