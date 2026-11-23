@@ -165,7 +165,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
-  highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[] };
+  highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[]; gapCut: boolean; bedCut: boolean };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
@@ -1468,7 +1468,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
   // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
   // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
-  const highwayStat = { patches: 0, far: false, rotors: 0, mesas: [] as number[][], cam: [] as number[] };
+  const highwayStat = { patches: 0, far: false, rotors: 0, mesas: [] as number[][], cam: [] as number[], gapCut: false, bedCut: false };
   const scatterM = new THREE.Matrix4();
   const scatterS = new THREE.Matrix4();
   function highwayFrame(sim: Sim, cityLo: number, cityHi: number) {
@@ -1564,6 +1564,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       highwayStat.far = far.group.visible;
       highwayStat.rotors = far.rotors.length;
       highwayStat.mesas = far.group.userData.mesas ?? [];
+      highwayStat.gapCut = gapCut.half.value.x > 0;
+      highwayStat.bedCut = bedCut.half.value.x > 0;
       highwayStat.cam = [camera.position.x, camera.position.y, camera.position.z, camera.fov, camera.far];
     }
   }

@@ -534,6 +534,24 @@ for (const prof of profiles) {
         for (const [k, d] of Object.entries(ohDraws)) console.log(`DRAW [${P}] highway ${k}: ${d.draws} draws, ${d.tris} tris, patches ${d.hw.patches}, far ${d.hw.far}`);
         const ohWorst = Math.max(...Object.values(ohDraws).map((d) => d.draws));
         check(P, `Open Highway scenery streams, desert floor + far backdrop, draws under the ceiling at OH-0 / OH-3 / OH-4 / OH-5 / OH-9 (${P === "phone" ? "≤160" : "logged"})`, Object.values(ohDraws).every((d) => d.stage === "highway" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.hw.patches > 20 && d.hw.far && d.hw.rotors === 6 && d.hero.alive) && drawGate(P, ohWorst), JSON.stringify(ohDraws));
+        // BN-18 (openhighway-v2): the right deck is cut at 2260-2296 (road + riverbed cut boxes live) and a slow hero rolling
+        // into the gap falls and gets the off-road reset: lat -6 (main side), ~12 m back, hull / lives kept
+        const ohGap = await page.evaluate(() => {
+          const s = window.__nf, h = s.cars[0];
+          const smp = (a) => s.track.samples[Math.round(a / 2) - s.track.first];
+          const p = smp(s.race.originAlong + 2266);
+          if (!p) return { ok: false, why: "no sample" };
+          s.hitstop = 0; h.alive = true; h.invuln = 0; h.lat = 0; if (s.up) s.up.shieldT = 0;
+          h.x = p.x + p.rx * 6.4; h.z = p.z + p.rz * 6.4; h.y = p.y; h.vy = 0; h.along = p.s; h.lastAlong = p.s; h.speed = 14; h.lane = 6.4;
+          const hp = h.hp, lives = s.lives, from = h.along;
+          let reset = null, minY = h.y;
+          for (let i = 0; i < 240 && !reset; i++) {
+            const a = h.along; s.hitstop = 0; window.__nfAdvance(1 / 60, []); minY = Math.min(minY, h.y);
+            if (h.along < a - 5) { const q = smp(h.along); reset = { back: Math.round(a - h.along), lat: q ? +(((h.x - q.x) * q.rx + (h.z - q.z) * q.rz)).toFixed(2) : null, hp: h.hp, lives: s.lives, alive: h.alive }; }
+          }
+          return { ok: true, hw: window.__nfHighway(), hp, lives, minY: +minY.toFixed(1), phase: s.phase, end: { along: Math.round(h.along - s.race.originAlong), y: +h.y.toFixed(1), speed: +h.speed.toFixed(1) }, reset };
+        });
+        check(P, "Open Highway BN-18: gap cut on the right deck + riverbed live; a slow hero falls in and is reset to the main side, hull / lives kept", ohGap.ok && ohGap.hw.gapCut && ohGap.hw.bedCut && ohGap.reset && ohGap.reset.alive && Math.abs(ohGap.reset.lat - -6) <= 1 && ohGap.reset.back >= 6 && ohGap.reset.back <= 30 && ohGap.reset.hp === ohGap.hp && ohGap.reset.lives === ohGap.lives && ohGap.minY < -2, JSON.stringify(ohGap));
         await page.evaluate(() => { window.__nf.hitstop = 0; });
         const ohFin = await page.evaluate(() => {
           const s = window.__nf, h = s.cars[0];
