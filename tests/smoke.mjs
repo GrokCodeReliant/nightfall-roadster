@@ -535,6 +535,14 @@ for (const prof of profiles) {
         const ohWorst = Math.max(...Object.values(ohDraws).map((d) => d.draws));
         // openhighway-v2: floor patches stay off the OH-9 salt pans, so the lake stop carries ~18-21 (was > 20)
         check(P, `Open Highway scenery streams, desert floor + far backdrop, draws under the ceiling at OH-0 / OH-3 / OH-4 / OH-5 / OH-9 (${P === "phone" ? "≤160" : "logged"})`, Object.values(ohDraws).every((d) => d.stage === "highway" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.hw.patches > 10 && d.hw.far && d.hw.rotors === 6 && d.hero.alive) && drawGate(P, ohWorst), JSON.stringify(ohDraws));
+        // week-i-port Task 1b (David): at OH-5 the Mesa Cut walls are the dedicated rock-cut shell (terrain material, no texture)
+        // plus the lamp fixtures; no live mesh carries the kit tunnel shell / white strips or a road / lane-paint / atlas material
+        {
+          const tun = ohDraws.oh5.hw.tunnel || [];
+          const shell = tun.filter((t) => t.pieces.includes("mesa_tunnel_shell")), lamps = tun.filter((t) => t.pieces.includes("mesa_tunnel_lamps"));
+          const bad = tun.filter((t) => t.map || /road|paint|lane|city|kit|asphalt/i.test(t.mat) || t.pieces.some((n) => /tunnel_40|tunnel_light_strip/.test(n)));
+          check(P, "Open Highway Mesa Cut: tunnel walls on their own rock-cut wall material + lamp fixtures, never the road / lane material", shell.length > 0 && lamps.length > 0 && bad.length === 0 && shell.every((t) => t.mat === "highway_terrain") && lamps.every((t) => t.mat === "highway_tunnel_lamps"), JSON.stringify(tun));
+        }
         // BN-18 (openhighway-v2): the right deck is cut at 2260-2296 (road + riverbed cut boxes live) and a slow hero rolling
         // into the gap falls and gets the off-road reset: lat -6 (main side), ~12 m back, hull / lives kept
         const ohGap = await page.evaluate(() => {

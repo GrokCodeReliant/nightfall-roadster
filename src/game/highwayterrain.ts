@@ -42,7 +42,7 @@ export function terrainMaterial() {
     float nfFr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.0);
     float rip = nfNoise(wq * 0.8) * 0.6 + nfNoise(wq * 2.9 + 9.0) * 0.4;
     float glint = smoothstep(0.78, 0.95, nfNoise(wq * vec2(0.35, 2.2) + 5.0) * rip);
-    totalEmissiveRadiance += vec3(0.045, 0.07, 0.09) * (0.6 + 1.2 * nfFr) * (0.7 + 0.6 * rip) + vec3(0.32, 0.36, 0.42) * glint;
+    totalEmissiveRadiance += vec3(0.018, 0.03, 0.04) * (0.6 + 1.4 * nfFr) * (0.6 + 0.8 * rip) + vec3(0.3, 0.34, 0.4) * glint;
   }`);
     };
     terrain.customProgramCacheKey = () => "nf_highway_terrain_gorge";
@@ -187,6 +187,103 @@ export function mesaBlockGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
   return finish(g);
 }
 
+// ---------------------------------------------------------------- Mesa Cut tunnel shell (week-i-port, David's live note)
+/** The kit tunnel_40 shell (city atlas tiles, stretched y x2.6) plus its white light strips read as a second road surface
+ *  standing on its side (asphalt + lane dashes). The Mesa Cut now has its own shell: rock-cut walls (rough shotcrete, jittered
+ *  rock tones) rising to a vaulted concrete ceiling (crown 19.5 m, above the 13.5 m chase cam), on terrainMaterial, plus
+ *  warm lamp fixtures on tunnelLampMaterial. No road / lane-paint material anywhere in it. */
+export const MESA_TUNNEL = { wall: 13.3, top: 19.5, spring: 14.5, lampEvery: 8, lampY: 8.0, lampS0: 2504 };
+/** cross-section (lat >= 0 half; mirrored): kerb foot, rough rock-cut wall, springline, vault to the crown */
+const TUN_PROF: [number, number, number][] = [
+  // [lat, y, kind 0 kerb / 1 wall / 2 ceiling]
+  [12.6, 0.02, 0], [13.3, 0.25, 0], [13.45, 1.6, 1], [13.7, 4.5, 1], [13.78, 6.6, 1], [13.82, 8.0, 1], [13.86, 9.4, 1], [13.95, 12.0, 1], [14.0, 14.5, 1],
+  [13.2, 16.8, 2], [11.2, 18.4, 2], [7.5, 19.3, 2], [0, 19.6, 2],
+];
+const T_KERB = c3(0x5e5a54), T_ROCK = c3(0x6a5442), T_ROCK2 = c3(0x4a3a2e), T_CEIL = c3(0x77736c), T_CEIL2 = c3(0x5c5852), T_PANEL = c3(0x34312d), T_POOL = c3(0xc08a52);
+function tunnelColour(s: number, lat: number, y: number, kind: number): THREE.Color {
+  const n = hash(Math.round(s * 1.1) * 3.7 + Math.round(y * 1.3) * 11 + Math.round(lat));
+  if (kind === 0) return T_KERB.clone().multiplyScalar(0.85 + 0.25 * n);
+  // lamp pools: the wall and vault brighten around each fixture (every 8 m, on the wall at 8 m)
+  const d = Math.abs(((s - MESA_TUNNEL.lampS0) % MESA_TUNNEL.lampEvery + MESA_TUNNEL.lampEvery) % MESA_TUNNEL.lampEvery - MESA_TUNNEL.lampEvery / 2);
+  const pool = Math.max(0, 1 - d / 3.6) * Math.max(0, 1 - Math.abs(y - MESA_TUNNEL.lampY) / 6.5);
+  if (kind === 1) {
+    const band = 0.5 + 0.5 * Math.sin(y * 1.7 + Math.sin(s * 0.11) * 1.3);
+    return T_ROCK2.clone().lerp(T_ROCK, band * 0.8 + 0.2 * n).multiplyScalar(0.8 + 0.35 * n).lerp(T_POOL, 0.75 * pool);
+  }
+  // ceiling: segmental concrete rings every 4 m with dark joints, a darker service panel down the crown
+  const joint = Math.abs(((s % 4) + 4) % 4 - 2) > 1.7 ? 0.55 : 1;
+  const base = lat < 3 ? T_PANEL : T_CEIL2.clone().lerp(T_CEIL, n);
+  return base.clone().multiplyScalar(joint * (0.9 + 0.2 * n)).lerp(T_POOL, 0.5 * pool);
+}
+/** Mesa Cut shell for the samples of one chunk inside MESA_CUT (both walls + vault). ks: chunk sample indices. */
+export function mesaTunnelGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
+  if (ks.length < 2) return null;
+  const g: Geo = { pos: [], col: [] };
+  const row = (k: number) => {
+    const s = sAt(k), p = at(k), si = Math.round(s / 2);
+    const pts: { v: THREE.Vector3; c: THREE.Color }[] = [];
+    const full: [number, number, number][] = [...TUN_PROF.map(([l, y, t]) => [-l, y, t] as [number, number, number]), ...[...TUN_PROF].reverse().slice(1).map(([l, y, t]) => [l, y, t] as [number, number, number])];
+    for (const [l, y, kind] of full) {
+      // rock-cut walls are rough: lateral jitter on the wall rows only (kerb and vault stay true)
+      const j = kind === 1 ? (hash(si * 2.3 + y * 5 + Math.sign(l) * 7) - 0.5) * 0.5 : 0;
+      pts.push({ v: P(p, l + Math.sign(l) * j, p.y + y, ox, oz), c: tunnelColour(s, Math.abs(l), y, kind) });
+    }
+    return pts;
+  };
+  let prev = row(ks[0]);
+  for (let n = 1; n < ks.length; n++) {
+    const cur = row(ks[n]);
+    for (let i = 0; i + 1 < cur.length; i++) quad(g, prev[i].v, prev[i + 1].v, cur[i + 1].v, cur[i].v, prev[i].c, prev[i + 1].c, cur[i + 1].c, cur[i].c);
+    prev = cur;
+  }
+  const geo = finish(g);
+  geo.userData.piece = "mesa_tunnel_shell";
+  return geo;
+}
+/** Lamp fixtures: a warm lit panel every 8 m on each wall at 8 m, and a continuous dim strip each side of the crown. */
+export function mesaTunnelLamps(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
+  if (ks.length < 2) return null;
+  const pos: number[] = [], col: number[] = [];
+  const LAMP = [1.0, 0.7, 0.32], STRIP = [0.85, 0.78, 0.62];
+  const push = (v: THREE.Vector3[], c: number[]) => { for (const x of v) { pos.push(x.x, x.y, x.z); col.push(c[0], c[1], c[2]); } };
+  const s0 = sAt(ks[0]), s1 = sAt(ks[ks.length - 1]);
+  const kOf = (s: number) => ks[0] + Math.max(0, Math.min(ks.length - 1, Math.round((s - s0) / 2)));
+  for (let s = MESA_TUNNEL.lampS0 + Math.ceil((s0 - MESA_TUNNEL.lampS0) / MESA_TUNNEL.lampEvery) * MESA_TUNNEL.lampEvery; s < s1; s += MESA_TUNNEL.lampEvery) {
+    if (s < MESA_CUT.s0 + 2 || s > MESA_CUT.s1 - 2) continue;
+    const p = at(kOf(s));
+    const dz = s - sAt(kOf(s));
+    const f = (l: number, y: number, z: number) => P({ ...p, x: p.x + p.tx * (dz + z), z: p.z + p.tz * (dz + z) } as Pose, l, p.y + y, ox, oz);
+    for (const side of [-1, 1]) {
+      // sodium fixture: 1.0 m x 0.6 m (a lamp, not a stripe; the amber pool on the rock around it does the lighting), on the wall face at 8 m (in the chase-cam frame), facing the road
+      const l = side * 13.5, y0 = MESA_TUNNEL.lampY - 0.3, y1 = MESA_TUNNEL.lampY + 0.3;
+      push([f(l, y0, -0.5), f(l, y1, -0.5), f(l, y1, 0.5), f(l, y0, -0.5), f(l, y1, 0.5), f(l, y0, 0.5)], LAMP);
+    }
+  }
+  // crown strips (two dim lines, 0.3 m wide, at lat +-3.2 just under the vault)
+  for (let n = 1; n < ks.length; n++) {
+    const pa = at(ks[n - 1]), pb = at(ks[n]);
+    for (const side of [-1, 1]) {
+      const y = 19.05, a = side * 3.05, b = side * 3.35;
+      push([P(pa, a, pa.y + y, ox, oz), P(pa, b, pa.y + y, ox, oz), P(pb, b, pb.y + y, ox, oz), P(pa, a, pa.y + y, ox, oz), P(pb, b, pb.y + y, ox, oz), P(pb, a, pb.y + y, ox, oz)], STRIP);
+    }
+  }
+  if (!pos.length) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  geo.userData.piece = "mesa_tunnel_lamps";
+  return geo;
+}
+let lampMat: THREE.MeshBasicMaterial | null = null;
+/** unlit warm fixtures (vertex colours), fogged like the rest of the stage; double-sided so the strips read from below */
+export function tunnelLampMaterial() {
+  if (!lampMat) {
+    lampMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    lampMat.name = "highway_tunnel_lamps";
+  }
+  return lampMat;
+}
+
 // ---------------------------------------------------------------- BN-18 gorge (week-i-port riverbed look pass)
 /** The dry-river gorge under the Broken Bridge: rocky sloped banks from the desert rim (|lat| ~22, where the floor is cut)
  *  down to a pebbly bed (|lat| < ~9.5) at BRIDGE.bedY, a meandering shallow channel with dark water, wet sand / rock
@@ -237,7 +334,7 @@ function gorgeCols(s: number): { l: number; y: number; bank: number }[] {
   bank(1, true);
   return out;
 }
-const G_RIM = c3(0x6a5840), G_ROCK = c3(0x6e5440), G_ROCK2 = c3(0x58402e), G_DRY = c3(0x8a765a), G_PEB = c3(0xa09078), G_WET = c3(0x2a2622), G_WET2 = c3(0x3c342c), G_WATER = c3(0x16262e);
+const G_RIM = c3(0x6a5840), G_ROCK = c3(0x6e5440), G_ROCK2 = c3(0x58402e), G_DRY = c3(0x8a765a), G_PEB = c3(0xa09078), G_WET = c3(0x2a2622), G_WET2 = c3(0x3c342c), G_WATER = c3(0x0d171c);
 function gorgeColour(s: number, l: number, y: number, bank: number): THREE.Color {
   const n = hash(Math.round(s * 1.3) * 3.1 + Math.round(l * 2) * 7.7);
   if (bank > 0) {

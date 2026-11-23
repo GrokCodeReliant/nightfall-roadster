@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { bakePiece, bakePieceBent, chunkFrame, flushParts, getPiece, inNode, loadPieces, placeMatrix, type Parts, type Pose } from "./city";
 import type { ChunkCourse } from "./coastcourse";
 import { BRIDGE, DESERT_PATCH, HIGHWAY_FAR, MESA_CUT, desertMounds, desertPatches, desertScatter, highwayIn, type HighwayPlace } from "./highwaycourse";
-import { mesaBlockGeometry, mesaSilhouetteMaterial, moundGeometry, riverbankGeometry, riverWaterGeometry, saltGeometry, saltMaterial, terrainMaterial, tunnelGlowMat } from "./highwayterrain";
+import { mesaBlockGeometry, mesaSilhouetteMaterial, mesaTunnelGeometry, mesaTunnelLamps, moundGeometry, tunnelLampMaterial, riverbankGeometry, riverWaterGeometry, saltGeometry, saltMaterial, terrainMaterial, tunnelGlowMat } from "./highwayterrain";
 
 export const HIGHWAY_PIECES: [string, string][] = [
   ["highway", "desert_cactus_a"], ["highway", "desert_cactus_b"], ["highway", "desert_scrub"], ["highway", "desert_rock_spire"],
@@ -109,6 +109,11 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     const ks = (a: number, b: number) => { const r: number[] = []; for (let k = 0; k <= seg; k++) if (sAt(k) >= a - 0.01 && sAt(k) <= b + 0.01) r.push(k); return r; };
     const mg = mesaBlockGeometry(at, ks(MESA_CUT.s0, MESA_CUT.s1), sAt, ox, oz);
     if (mg) terra.push(mg);
+    // week-i-port (David): the Mesa Cut's own rock-cut shell + vaulted ceiling (terrain material) and lamp fixtures
+    const tg = mesaTunnelGeometry(at, ks(MESA_CUT.s0, MESA_CUT.s1), sAt, ox, oz);
+    if (tg) terra.push(tg);
+    const lg = mesaTunnelLamps(at, ks(MESA_CUT.s0, MESA_CUT.s1), sAt, ox, oz);
+    if (lg) parts.set(tunnelLampMaterial(), [lg]);
     // week-i-port: the gorge (banks, bed, boulders) and the dark channel water, on the terrain material (no extra draw)
     const bk = ks(BRIDGE.s0, BRIDGE.s1);
     const rg = riverbankGeometry(at, bk, sAt, ox, oz);
@@ -121,7 +126,10 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     const pose = at(kAt(p.s));
     if (!p.ground && (pose as Pose & { gap?: boolean }).gap) continue;
     // Mesa Cut (openhighway-v2): the raised shell keeps its roof; walls / strips glow dim amber (tunnelGlowMat)
-    if (p.name === "tunnel_40" || p.name === "tunnel_portal" || p.name === "tunnel_light_strip_4m") { put(p, tun); continue; }
+    // Mesa Cut (week-i-port): the kit tunnel shell and its white strips are replaced by the procedural shell / lamps above
+    // (they read as a road on its side); the portals keep the kit piece, raised and amber-graded (tunnelGlowMat)
+    if (p.name === "tunnel_40" || p.name === "tunnel_light_strip_4m") { out.placed.push(p.name); continue; }
+    if (p.name === "tunnel_portal") { put(p, tun); continue; }
     // OH-9 salt pans: the tile's footprint as a cracked, edge-blended pan (saltMaterial), not the flat atlas-white tile
     // BN-18 riverbed tiles: their footprint is the procedural gorge bed above (the flat atlas strip read as a slab)
     if (p.name === "riverbed_strip_40") { out.placed.push(p.name); continue; }

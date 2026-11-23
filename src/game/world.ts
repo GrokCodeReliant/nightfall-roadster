@@ -165,7 +165,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
-  highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[]; gapCut: boolean; bedCut: boolean };
+  highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[]; gapCut: boolean; bedCut: boolean; tunnel: { mat: string; map: boolean; pieces: string[] }[] };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
@@ -2592,7 +2592,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       applyStage();
     },
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
-    highwayInfo: () => ({ ...highwayStat }),
+    highwayInfo: () => {
+      // week-i-port Task 1b: every live mesh carrying a Mesa Cut tunnel piece, with its material (smoke: no road / lane paint)
+      const tunnel: { mat: string; map: boolean; pieces: string[] }[] = [];
+      scene.traverse((o) => {
+        const pcs = (o.userData.pieces ?? []) as string[];
+        if (!(o as THREE.Mesh).isMesh || !pcs.some((n) => /tunnel_40|tunnel_light_strip|mesa_tunnel/.test(n))) return;
+        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        tunnel.push({ mat: m.name, map: !!m.map, pieces: pcs });
+      });
+      return { ...highwayStat, tunnel };
+    },
     woodsInfo: () => ({ ...woodsStat, stands: pineStands.length, truckPool: trucks.length, roofs: chunks.filter((c) => c.roof).length }),
     startRollout,
     skipRollout,
