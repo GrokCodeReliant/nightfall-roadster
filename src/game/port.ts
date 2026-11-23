@@ -308,7 +308,7 @@ function hull(seed: number): Piece {
     l.quad([x0, y, -78 + 0.06], [x0 + 2.2, y, -78 + 0.06], [x0 + 2.2, y + 1.4, -78 + 0.06], [x0, y + 1.4, -78 + 0.06], WIN);
   }
   for (const z of [-20, 40]) { g.box(-0.6, 0.6, 18, 40, z - 0.6, z + 0.6, sup); l.box(-0.4, 0.4, 40, 40.8, z - 0.4, z + 0.4, LAMP_R); }
-  for (const sx of [-1, 1]) for (let i = 0; i < 9; i++) l.box(sx * 15.05 - 0.05, sx * 15.05 + 0.05, 16, 16.4, -80 + i * 18, -79.2 + i * 18, LAMP_W);
+  for (const sx of [-1, 1]) for (let i = 0; i < 9; i++) { const x = sx * 15.08, z = -80 + i * 18; l.quad([x, 16, z], [x, 16.4, z], [x, 16.4, z + 0.8], [x, 16, z + 0.8], LAMP_W); }
   return done(g, l);
 }
 /** IP-9 quay water tile (40 x 40), slight ripple shading; drawn on port_water (y -1.5, over the -1.6 harbour plane) */

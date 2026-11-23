@@ -588,6 +588,72 @@ for (const prof of profiles) {
         creditsBefore = (await cardBank()).credits;
         await page.click("button:has-text('Title')");
         await page.waitForSelector(".nf-carpick");
+        // ---- Industrial Port (LEVELS/05, week-i-port): authored 4600 m race. Title blurb, start, IP-2 canyon / IP-4 tops /
+        // IP-6 crane alley / IP-7 Long Shed / IP-9 quay draws (procedural port scenery), crane loads + telegraph shadows,
+        // shed roof hidden inside, FL2 forklift drawn, finish -> results. Then back to Open Highway.
+        {
+          await page.click("[aria-label='Next stage']");
+          const ipStage = await page.textContent(".nf-stagepick .nf-carpick-name");
+          const ipLede = await page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+          check(P, "Industrial Port title shows the race blurb", ipStage === "Industrial Port" && ipLede.mode === "race" && /^Race six rivals to the finish\./.test(ipLede.text), JSON.stringify({ ipStage, ipLede }));
+          await page.click(".nf-btn");
+          await page.waitForSelector(".nf-hud");
+          await page.evaluate(() => window.__nfSkipRollout());
+          await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+          const ipStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, authored: s.track.authored }; });
+          check(P, "Industrial Port start: race armed at 4600 m on the authored course, 6 rivals, no waves, drives", ipStart.stage === "port" && ipStart.armed && ipStart.dist === 4600 && ipStart.authored && ipStart.rivals === 6 && ipStart.wave === 0 && ipStart.phase === "playing" && ipStart.m > 10, JSON.stringify(ipStart));
+          const ipAt = async (raceS, lat) => ({ ...(await ohAt(raceS, lat)), port: await page.evaluate(() => window.__nfPort()), y: await page.evaluate(() => +window.__nf.cars[0].y.toFixed(2)) });
+          // FL2 spawns while the hero is 120-300 m short of 2600: pass 2400 first so it is alive in the shed
+          const ipDraws = { ip2: await ipAt(900, 0), ip4: await ipAt(1500, 6), ip6: await ipAt(2200, 3), pre7: await ipAt(2400, 3), ip7: await ipAt(2640, -3), ip9: await ipAt(3500, 3), ip10: await ipAt(4150, 0) };
+          await page.screenshot({ path: `${SHOTS}/${P}-port-ip10.png` });
+          for (const [k, d] of Object.entries(ipDraws)) console.log(`DRAW [${P}] port ${k}: ${d.draws} draws, ${d.tris} tris, chunks ${d.port.chunks}, loads ${d.port.loads.length}, forklifts ${d.port.forklifts}`);
+          const ipWorst = Math.max(...Object.values(ipDraws).map((d) => d.draws));
+          const ipTris = Math.max(...Object.values(ipDraws).map((d) => d.tris));
+          check(P, `Industrial Port scenery streams (procedural port pieces + yard), draws under the ceiling at IP-2 / IP-4 / IP-6 / IP-7 / IP-9 / IP-10 (${P === "phone" ? "≤160" : "tris ≤250k"})`, Object.values(ipDraws).every((d) => d.stage === "port" && d.cityChunks >= 3 && d.framed && d.draws > 20 && d.port.pieces.port_props >= 3 && d.hero.alive) && drawGate(P, ipWorst) && (P === "phone" || ipTris <= 250000), JSON.stringify(Object.fromEntries(Object.entries(ipDraws).map(([k, d]) => [k, { draws: d.draws, tris: d.tris, chunks: d.port.chunks, pieces: d.port.pieces, loads: d.port.loads, roofHidden: d.port.roofHidden, forklifts: d.port.forklifts, y: d.y }]))));
+          check(P, "Industrial Port pieces: canyon containers + crane at IP-2, Fork A tops (hero at 5.2 m), crane loads posed, oil decals, Long Shed roof hidden inside / shown outside, FL2 drawn in the shed",
+            ipDraws.ip2.port.pieces.port_container_12 > 0 && ipDraws.ip2.port.pieces.port_sts_crane > 0 && ipDraws.ip2.port.loads.some((l) => l.id === "CS1") &&
+            Math.abs(ipDraws.ip4.y - 5.2) <= 0.15 && ipDraws.ip4.port.pieces.port_parapet_4m > 0 && ipDraws.ip4.port.loads.some((l) => l.id === "CS-T") &&
+            ipDraws.ip6.port.loads.some((l) => l.id === "CS2") && ipDraws.ip2.port.pieces.port_oil_decal > 0 &&
+            ipDraws.ip7.port.roofHidden && ipDraws.ip7.port.roofs > 0 && !ipDraws.pre7.port.roofHidden && ipDraws.ip7.port.forklifts >= 1 && ipDraws.ip9.port.pieces.port_bollard > 0,
+            JSON.stringify({ ip2: ipDraws.ip2.port, ip4y: ipDraws.ip4.y, ip7: { roofHidden: ipDraws.ip7.port.roofHidden, roofs: ipDraws.ip7.port.roofs, forklifts: ipDraws.ip7.port.forklifts }, pre7: ipDraws.pre7.port.roofHidden }));
+          // BN-19 telegraph: step the race clock through a CS4 cycle at IP-10; the shadow shows in the telegraph / sweep and is gone when idle
+          const ipTel = await page.evaluate(() => {
+            const s = window.__nf, seen = {};
+            const h = s.cars[0], a0 = h.along, x0 = h.x, z0 = h.z;
+            for (let i = 0; i < 80; i++) { s.hitstop = 0; h.invuln = 1e9; h.speed = 0; h.x = x0; h.z = z0; h.along = a0; h.lastAlong = a0; window.__nfAdvance(0.1, "idle"); s.hitstop = 1e9; const l = window.__nfPort().loads.find((x) => x.id === "CS4"); if (l) seen[l.state] = Math.max(seen[l.state] ?? 0, l.shadow); }
+            return seen;
+          });
+          await page.evaluate(() => { window.__nf.cars[0].invuln = 0; });
+          check(P, "Industrial Port BN-19: crane shadow telegraph shows before / during the sweep, never while idle", (ipTel.telegraph ?? 0) > 0.5 && (ipTel.active ?? 0) > 0.5 && (ipTel.idle ?? 1) === 0, JSON.stringify(ipTel));
+          await page.evaluate(() => { window.__nf.hitstop = 0; });
+          const ipFin = await page.evaluate(() => {
+            const s = window.__nf, h = s.cars[0];
+            h.alive = true; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.max(h.hp, 1);
+            for (let g = 0; g < 20 && !s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first]; g++) {
+              const last = s.track.samples[s.track.samples.length - 40];
+              h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.speed = 36; h.invuln = 1e9;
+              window.__nfAdvance(0.02, ["KeyW"]);
+            }
+            h.invuln = 0;
+            const sm = s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first];
+            if (!sm) return { ok: false };
+            h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.speed = 30;
+            window.__nfAdvance(0.2, "idle");
+            return { ok: true, phase: s.phase, place: s.race.place, mode: s.result && s.result.mode };
+          });
+          const ipOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+          const ipCard = await page.evaluate(() => {
+            const card = document.querySelector(".nf-overlay .nf-card");
+            const best = (card?.querySelector(".nf-best")?.textContent || "").trim();
+            const body = (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim();
+            return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim() };
+          });
+          check(P, "Industrial Port finish -> results: place, Industrial Port 4.6 km, no Wave text", ipOver && ipFin.ok && ipFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(ipCard.title) && /Industrial Port · 4\.6 km course/.test(ipCard.text) && !/wave/i.test(ipCard.text), JSON.stringify({ ipFin, ipCard }));
+          creditsBefore = (await cardBank()).credits;
+          await page.click("button:has-text('Title')");
+          await page.waitForSelector(".nf-carpick");
+          await page.click("[aria-label='Previous stage']");
+        }
         await page.click("[aria-label='Previous stage']");
       }
       await page.click("[aria-label='Previous stage']");
