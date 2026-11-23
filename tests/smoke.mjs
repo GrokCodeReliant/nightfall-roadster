@@ -533,7 +533,8 @@ for (const prof of profiles) {
         await page.screenshot({ path: `${SHOTS}/${P}-highway-oh9.png` });
         for (const [k, d] of Object.entries(ohDraws)) console.log(`DRAW [${P}] highway ${k}: ${d.draws} draws, ${d.tris} tris, patches ${d.hw.patches}, far ${d.hw.far}`);
         const ohWorst = Math.max(...Object.values(ohDraws).map((d) => d.draws));
-        check(P, `Open Highway scenery streams, desert floor + far backdrop, draws under the ceiling at OH-0 / OH-3 / OH-4 / OH-5 / OH-9 (${P === "phone" ? "≤160" : "logged"})`, Object.values(ohDraws).every((d) => d.stage === "highway" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.hw.patches > 20 && d.hw.far && d.hw.rotors === 6 && d.hero.alive) && drawGate(P, ohWorst), JSON.stringify(ohDraws));
+        // openhighway-v2: floor patches stay off the OH-9 salt pans, so the lake stop carries ~18-21 (was > 20)
+        check(P, `Open Highway scenery streams, desert floor + far backdrop, draws under the ceiling at OH-0 / OH-3 / OH-4 / OH-5 / OH-9 (${P === "phone" ? "≤160" : "logged"})`, Object.values(ohDraws).every((d) => d.stage === "highway" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.hw.patches > 10 && d.hw.far && d.hw.rotors === 6 && d.hero.alive) && drawGate(P, ohWorst), JSON.stringify(ohDraws));
         // BN-18 (openhighway-v2): the right deck is cut at 2260-2296 (road + riverbed cut boxes live) and a slow hero rolling
         // into the gap falls and gets the off-road reset: lat -6 (main side), ~12 m back, hull / lives kept
         const ohGap = await page.evaluate(() => {
