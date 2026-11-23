@@ -250,7 +250,18 @@ export function passPieceTris(name: string, o: Partial<PassPlace> = {}): number 
 // ---------------------------------------------------------------- spline-bent strips (built straight into chunk space)
 /** chunk-local point at road pose p, course lat (right +), absolute y */
 const P = (p: Pose, lat: number, y: number, ox: number, oz: number): V3 => [p.x + p.rx * lat - ox, y, p.z + p.rz * lat - oz];
-function strip(g: G, ice: G, name: string, pl: PassPlace, at: (k: number) => Pose, k0: number, ox: number, oz: number) {
+/** pose at a fractional chunk sample index (strips start on odd metres: k = (s - s0) / 2 is not always whole) */
+export function poseAtK(at: (k: number) => Pose, k: number): Pose {
+  const i = Math.floor(k), f = k - i;
+  const a = at(i);
+  if (f <= 1e-6) return a;
+  const b = at(i + 1), l = (u: number, v: number) => u + (v - u) * f;
+  const tx = l(a.tx, b.tx), tz = l(a.tz, b.tz), tn = Math.hypot(tx, tz) || 1;
+  const rx = l(a.rx, b.rx), rz = l(a.rz, b.rz), rn = Math.hypot(rx, rz) || 1;
+  return { x: l(a.x, b.x), y: l(a.y, b.y), z: l(a.z, b.z), tx: tx / tn, tz: tz / tn, rx: rx / rn, rz: rz / rn };
+}
+function strip(g: G, ice: G, name: string, pl: PassPlace, atK: (k: number) => Pose, k0: number, ox: number, oz: number) {
+  const at = (k: number) => poseAtK(atK, k);
   const len = pl.len ?? 40, side = pl.side ?? Math.sign(-pl.lx) ?? 1, seed = pl.seed ?? 0;
   if (name === "mtn_ice_decal") {
     const n = 8, lat = -pl.lx;

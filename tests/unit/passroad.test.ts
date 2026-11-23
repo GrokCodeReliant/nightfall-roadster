@@ -314,3 +314,14 @@ test("terrain: the corridor sits under the deck on every leg; uphill walls climb
   const up = passGroundY(p.x - p.rx * 40, p.z - p.rz * 40), down = passGroundY(p.x + p.rx * 40, p.z + p.rz * 40);
   assert.ok(up > 10 && down < -10, `MP-1 uphill ${up.toFixed(1)} / valley ${down.toFixed(1)}`);
 });
+
+test("pass strips sample fractional chunk indices (odd-metre starts) without reading past the sample array", async () => {
+  const { poseAtK } = await import("../../src/game/mountain.ts");
+  const at = (k: number) => {
+    assert.ok(Number.isInteger(k), `integer sample index, got ${k}`);
+    return { x: k * 2, y: k * 0.1, z: 0, tx: 1, tz: 0, rx: 0, rz: 1 };
+  };
+  const p = poseAtK(at, 3.5);
+  assert.ok(Math.abs(p.x - 7) < 1e-9 && Math.abs(p.y - 0.35) < 1e-9 && p.tx === 1 && p.rz === 1);
+  assert.equal(poseAtK(at, 4).x, 8);
+});
