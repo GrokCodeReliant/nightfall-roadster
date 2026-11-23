@@ -6,7 +6,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { hasBoost, ROLL_HAND, ROLL_NOSE, ROLL_OUT0, ROLL_OUT1, rollLocalZ, rollProgress, rollRigBack, rollRoadsterHeight, stepNonRoadsterRoll, type Kind, type PickupKind, type Sim } from "./sim";
-import { ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
+import { deckY, ensureTrack, poseAt, sampleAt, STEP, yawFromDir, type Piece } from "./road";
 import { courseFor, washFor, washPhase } from "./course";
 import { CROWN_CUT, buildCoastChunk, coastReady, foamClock, loadCoast, type CoastCrown } from "./coast";
 import { chunkCourse } from "./coastcourse";
@@ -17,6 +17,9 @@ import { WOODS_LOOK } from "./woodscourse";
 import { buildHighwayChunk, desertPatchGeometry, highwayFarGroup, highwayReady, loadHighway } from "./highway";
 import { BRIDGE, DESERT_PATCH, DESERT_SCATTER, HIGHWAY_GAP, HIGHWAY_LOOK } from "./highwaycourse";
 import { cutMaterial, hazeBand, rockGeometry, rockMaterial } from "./highwayterrain";
+import { CRANE_BOOM_Y, buildPortChunk, craneCableGeometry, craneLoadGeometry, craneLoadPose, craneShadowGeometry, forkliftGeometry, loadPort, portPropsMaterial, portReady } from "./port";
+import { BOX, PORT_LOOK, PORT_SWING, SHED_HIDE } from "./portcourse";
+import { cranePhase } from "./course";
 import { TRUCK } from "./trucks";
 
 type Wheel = { pivot: THREE.Group; spin: THREE.Group };
@@ -165,6 +168,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
+  portInfo: () => { roofHidden: boolean; roofs: number; loads: { id: string; state: string; lat: number; bottom: number; shadow: number }[]; forklifts: number; chunks: number; pieces: Record<string, number> };
   highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[]; gapCut: boolean; bedCut: boolean; tunnel: { mat: string; map: boolean; pieces: string[] }[] };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
@@ -1086,6 +1090,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   let hwFloorMat: THREE.MeshStandardMaterial | null = null;
   const hwRoadMats = new Map<string, THREE.MeshStandardMaterial>();
   const trucks: THREE.Group[] = [];
+  /** Industrial Port [loads, cables, shadows, forklifts]: world-level instanced meshes (4 draws at most) */
+  const portMovers: THREE.InstancedMesh[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshStandardMaterial({ color: 0x141820, roughness: 0.9, metalness: 0.08 }),
@@ -1116,8 +1122,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   let stage: StageId = "city";
   let gateBoost = 0;
   /** Stages dressed by a GLB kit (Night City, Coast Road, Pine Woods). Every other id keeps the procedural skyline. */
-  const scenic = () => stage === "city" || stage === "coast" || stage === "woods" || stage === "highway";
-  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : stage === "highway" ? highwayReady() : cityReady());
+  const scenic = () => stage === "city" || stage === "coast" || stage === "woods" || stage === "highway" || stage === "port";
+  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : stage === "highway" ? highwayReady() : stage === "port" ? portReady() : cityReady());
   function releaseScenery(ch: Chunk) {
     ch.lamp = null;
     ch.roof = null;
@@ -1190,6 +1196,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       hwFloorMat.roughness = 1;
       seaY = -0.08;
     }
+    if (stage === "port") {
+      // week-i-port: harbour night. Cool hemi with a sodium ground bounce, pale moon; the plane is the harbour water at
+      // -1.6 (seaMat as built: dark, glossy), the yard apron / quay walls stand on it (port.ts). Port only.
+      hemi.color.setHex(PORT_LOOK.hemiSky);
+      hemi.groundColor.setHex(PORT_LOOK.hemiGround);
+      hemi.intensity = PORT_LOOK.hemi;
+      moon.color.setHex(PORT_LOOK.moonColor);
+      moon.intensity = PORT_LOOK.moon;
+      fill.intensity = PORT_LOOK.fill;
+    }
     // Open Highway's floor is its own clone (the riverbed is cut out of it); every other stage keeps seaMat
     sea.material = stage === "highway" && hwFloorMat ? hwFloorMat : seaMat;
     // Open Highway: the floor is the lowest surface, drawn right after the haze band without writing depth, so the mesa
@@ -1210,6 +1226,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "coast") loadCoast();
     if (stage === "woods") loadWoods();
     if (stage === "highway") loadHighway();
+    if (stage === "port") loadPort();
+    for (const m of portMovers) m.count = 0;
     if (desertPatchMesh) desertPatchMesh.count = 0;
     if (scrubMesh) scrubMesh.count = 0;
     if (rockMesh) rockMesh.count = 0;
@@ -1244,6 +1262,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const cc = chunkCourse("highway", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
       const out = buildHighwayChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
       ch.patches = out.patches;
+      ch.city.position.set(o.x, 0, o.z);
+      ch.built = true;
+      return;
+    }
+    if (stage === "port") {
+      releaseScenery(ch);
+      const at = (k: number) => sampleAt(sim.track, i0 + k);
+      const ramps = sim.track.pieces.filter((p) => p.kind === "ramp").map((p) => p.s);
+      const cc = chunkCourse("port", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
+      const out = buildPortChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
+      ch.roof = out.roof;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
       return;
@@ -1323,7 +1352,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       if (a.gap && b.gap) continue;
       const i = k * 2;
       ri.push(i, i + 1, i + 2, i + 1, i + 3, i + 2);
-      const wo = half + 0.35;
+      // BN-16 (port canyons): the edge walls follow the live width
+      const wo = (track.widthAt ? track.widthAt(a.s) / 2 : half) + 0.35;
       for (const side of [-1, 1]) {
         const base = wp.length / 3;
         const ax = a.x + a.rx * side * wo - ox;
@@ -1421,6 +1451,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "coast") coastFrame(sim);
     if (stage === "woods") woodsFrame(sim, cityLo, cityHi);
     if (stage === "highway") highwayFrame(sim, cityLo, cityHi);
+    if (stage === "port") portFrame(sim);
     if (scenic()) {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
@@ -1467,6 +1498,83 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
   // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
+  // ---------------------------------------------------------------- Industrial Port: shed roof, crane loads + shadows, forklifts
+  const portStat = { roofHidden: false, loads: [] as { id: string; state: string; lat: number; bottom: number; shadow: number }[], forklifts: 0 };
+  const pm = new THREE.Matrix4(), pq = new THREE.Quaternion(), pv = new THREE.Vector3(), ps = new THREE.Vector3(), pc = new THREE.Color();
+  function ensurePortMovers() {
+    if (portMovers.length) return;
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.78, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+    shadowMat.name = "port_crane_shadow";
+    const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, n: number, name: string) => {
+      const m = new THREE.InstancedMesh(geo, mat, n);
+      m.count = 0;
+      m.frustumCulled = false;
+      m.name = name;
+      scene.add(m);
+      portMovers.push(m);
+      return m;
+    };
+    mk(craneLoadGeometry(), portPropsMaterial(), PORT_SWING.length, "port_crane_loads");
+    mk(craneCableGeometry(), portPropsMaterial(), PORT_SWING.length, "port_crane_cables");
+    const sh = mk(craneShadowGeometry(), shadowMat, PORT_SWING.length, "port_crane_shadows");
+    sh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(PORT_SWING.length * 3), 3);
+    mk(forkliftGeometry(), portPropsMaterial(), 2, "port_forklifts");
+  }
+  function portFrame(sim: Sim) {
+    ensurePortMovers();
+    const hero = sim.cars[0];
+    const heroS = hero.along - sim.race.originAlong;
+    // Long Shed roof / header hidden while the chase cam or the hero is in the shed window (BN-7, roof-hiding only)
+    const camS = heroS - Math.hypot(camera.position.x - hero.x, camera.position.z - hero.z);
+    const under = sim.race.armed && heroS >= SHED_HIDE[0] && camS <= SHED_HIDE[1];
+    portStat.roofHidden = under;
+    for (const ch of chunks) if (ch.roof) ch.roof.visible = !under;
+    const [loads, cables, shadows, forks] = portMovers;
+    let n = 0;
+    portStat.loads = [];
+    if (sim.race.armed) for (const c of PORT_SWING) {
+      const d = c.s - heroS;
+      if (d < -60 || d > 260) continue;
+      const ph = cranePhase(c, sim.time);
+      const lp = craneLoadPose(c.reach, ph);
+      const q = poseAt(sim.track, sim.race.originAlong + c.s);
+      const deck = q.y + c.lift;
+      const yaw = Math.atan2(q.tx, q.tz);
+      pq.setFromAxisAngle(pv.set(0, 1, 0), yaw);
+      const top = deck + lp.bottom + BOX.h + 0.5;
+      // load: spreader top at `top`, container hanging below (length across the road)
+      ps.set(1, 1, 1);
+      pm.compose(pv.set(q.x + q.rx * lp.lat, top, q.z + q.rz * lp.lat), pq, ps);
+      loads.setMatrixAt(n, pm);
+      ps.set(1, Math.max(0.1, CRANE_BOOM_Y - top), 1);
+      pm.compose(pv.set(q.x + q.rx * lp.lat, top, q.z + q.rz * lp.lat), pq, ps);
+      cables.setMatrixAt(n, pm);
+      // telegraph shadow on the deck band (8 m x 24 m; CS-T: the tops half only, so it is narrowed and shifted right)
+      const wide = c.side === "right" ? 0.5 : 1, off = c.side === "right" ? 6.15 : 0;
+      ps.set(lp.shadow > 0 ? wide : 0.0001, 1, lp.shadow > 0 ? 1 : 0.0001);
+      pm.compose(pv.set(q.x + q.rx * off, deck + 0.07, q.z + q.rz * off), pq, ps);
+      shadows.setMatrixAt(n, pm);
+      shadows.setColorAt(n, pc.setRGB(0.55 * lp.shadow, 0.08 * lp.shadow, 0.03 * lp.shadow).lerp(pc.clone().setRGB(0, 0, 0), 0.4));
+      portStat.loads.push({ id: c.id, state: ph.state, lat: +lp.lat.toFixed(2), bottom: +lp.bottom.toFixed(2), shadow: +lp.shadow.toFixed(2) });
+      n++;
+    }
+    for (const m of [loads, cables, shadows]) { m.count = n; m.instanceMatrix.needsUpdate = true; }
+    if (shadows.instanceColor) shadows.instanceColor.needsUpdate = true;
+    // BN-17 forklifts (sim.trucks on the port): pose on the course, forks +Z forward
+    let f = 0;
+    for (const t of sim.trucks) {
+      if (!t.alive || f >= 2) continue;
+      const p = poseAt(sim.track, sim.race.originAlong + t.s);
+      pq.setFromAxisAngle(pv.set(0, 1, 0), Math.atan2(p.tx, p.tz));
+      ps.set(1, 1, 1);
+      pm.compose(pv.set(p.x + p.rx * t.lat, deckY(sim.track, p, t.lat), p.z + p.rz * t.lat), pq, ps);
+      forks.setMatrixAt(f++, pm);
+    }
+    forks.count = f;
+    forks.instanceMatrix.needsUpdate = true;
+    portStat.forklifts = f;
+  }
+
   // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
   const highwayStat = { patches: 0, far: false, rotors: 0, mesas: [] as number[][], cam: [] as number[], gapCut: false, bedCut: false };
   const scatterM = new THREE.Matrix4();
@@ -1822,7 +1930,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
   function applyRoadLook() {
     const on = stage === "coast";
-    const yellow = stage === "coast" || stage === "woods" || stage === "highway";
+    const yellow = stage === "coast" || stage === "woods" || stage === "highway" || stage === "port";
     const swap = (mesh: THREE.Mesh) => {
       const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
       const paint = yellow && mesh.name === "kitroad:lanepaint_straight_40" && base.isMeshStandardMaterial && !!base.map;
@@ -1871,6 +1979,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
           let src = k.sliced.get(step);
           if (!src) { src = sliceZ(k.base, step); k.sliced.set(step, src); }
           const g = src.clone();
+          // BN-16 (Industrial Port 18 m canyons + tapers): the 24 m kit road is squeezed to the live width before bending
+          if (sim.track.widthAt) {
+            const gp = g.getAttribute("position") as THREE.BufferAttribute;
+            const mid = sampleAt(sim.track, i0 + SEG / 2).s;
+            for (let v = 0; v < gp.count; v++) gp.setX(v, gp.getX(v) * (sim.track.widthAt(mid + gp.getZ(v)) / 24));
+          }
           bendGeometry(g, frame, true);
           c = { p: g.getAttribute("position").array as Float32Array, n: g.getAttribute("normal").array as Float32Array, uv: g.getAttribute("uv").array as Float32Array };
           g.dispose();
@@ -2592,6 +2706,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       applyStage();
     },
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
+    portInfo: () => {
+      const pieces: Record<string, number> = {};
+      let n = 0;
+      for (const ch of chunks) {
+        if (!ch.built || ch.index < 0 || !ch.city.visible) continue;
+        n++;
+        ch.city.traverse((o) => { for (const p of (o.userData.pieces ?? []) as string[]) pieces[p] = (pieces[p] ?? 0) + 1; });
+      }
+      return { ...portStat, roofs: chunks.filter((c) => c.roof && c.index >= 0).length, chunks: n, pieces };
+    },
     highwayInfo: () => {
       // week-i-port Task 1b: every live mesh carrying a Mesa Cut tunnel piece, with its material (smoke: no road / lane paint)
       const tunnel: { mat: string; map: boolean; pieces: string[] }[] = [];

@@ -93,7 +93,8 @@ export function portPlacements(): PortPlace[] {
   }
   // signs (10 sign_fork): kerb pairs at G1 / Fork A / Fork B, single-side gates on their kerb + the median (G-A on the tops)
   for (const s of PORT_SIGN_PAIRS) for (const lat of [10.6, -10.6]) add("sign_fork", s, -lat, Math.PI, { ground: false });
-  for (const [s, side] of PORT_SIGN_SIDE) for (const lat of [10.6, 1.6]) add("sign_fork", s, -lat * side, Math.PI, { ground: false, ly: side > 0 ? sideLiftAt(INDUSTRIAL_PORT, s, 1) : 0 });
+  // (deck pieces take the BN-15 side lift at their own lat in port.ts, so G-A stands on the tops)
+  for (const [s, side] of PORT_SIGN_SIDE) for (const lat of [10.6, 1.6]) add("sign_fork", s, -lat * side, Math.PI, { ground: false });
   // rails: R1 Dry Dock Hump and R2 Quay Kick spans, alternating sides (75 each)
   for (const a of [1800, 3600]) for (let i = 0; i < 75; i++) {
     const side = i % 2 ? 1 : -1;
@@ -109,7 +110,7 @@ export function portPlacements(): PortPlace[] {
   }
   // STS cranes (legs outside the 24 m), oil decals, forklift / crane loads are world-level
   for (const s of PORT_CRANE_S) add("port_sts_crane", s, 0, 0, { ground: true, ly: s === 1500 ? 0 : 0 });
-  for (const o of PORT_OIL) add("port_oil_decal", (o.s0 + o.s1) / 2, -o.lat, 0, { ground: false, ly: 0.06 + (o.lat > 0.3 ? sideLiftAt(INDUSTRIAL_PORT, (o.s0 + o.s1) / 2, o.lat) : 0), sz: (o.s1 - o.s0) / 30 });
+  for (const o of PORT_OIL) add("port_oil_decal", (o.s0 + o.s1) / 2, -o.lat, 0, { ground: false, ly: 0.06, sz: (o.s1 - o.s0) / 30 });
   for (const [s, lat] of PORT_CRATES) add("coast_crate", s, -lat, 0.3, { ground: false });
   // IP-5 dry dock: dock walls left, the basin hull right
   add("port_ship_hull_backdrop", 1880, -70, 0);
@@ -123,7 +124,7 @@ export function portPlacements(): PortPlace[] {
   for (const x of PORT_RAILX) add("port_rail_crossing_12", (x.s0 + x.s1) / 2, -x.lat, 0, { ground: false, ly: 0.04 });
   for (let i = 0; i < C.flatcars; i++) add("port_flatcar", 2900 + i * 80 + (i % 2) * 15, -17, 0);
   // IP-9 quay: 12 water tiles (2 rows x 6) beyond the quay edge, 2 hulls moored off it
-  for (let i = 0; i < 6; i++) for (let r = 0; r < 2; r++) add("port_water_tile", PORT_WATER.s0 + 20 + i * 40, -(PORT_WATER.lat0 + 20 + r * 40), 0, { ly: -0.04 });
+  for (let i = 0; i < 6; i++) for (let r = 0; r < 2; r++) add("port_water_tile", PORT_WATER.s0 + 20 + i * 40, -(PORT_WATER.lat0 + 20 + r * 40), 0, { ly: -1.5 });
   add("port_ship_hull_backdrop", 3520, -130, 0);
   add("port_ship_hull_backdrop", 3760, -140, 0.04);
   out.sort((a, b) => a.s - b.s);
