@@ -658,7 +658,7 @@ for (const prof of profiles) {
           creditsBefore = (await cardBank()).credits;
           await page.click("button:has-text('Title')");
           await page.waitForSelector(".nf-carpick");
-          // (summit MP-11 is the open snowfield: station + gantry only, so 1 props chunk there)
+          // (summit MP-11 is the open snowfield 120 m before the course end: station + gantry only, 1-2 built chunks there)
           // ---- Mountain Pass (LEVELS/06, week-i-pass): authored 4800 m race. Title blurb, start, MP-0 lodge / MP-2 shed (roof
           // hidden inside) / MP-3 hairpin / MP-8 switchbacks / MP-9 lake / MP-10 Summit Leap / MP-11 station draws (procedural
           // mountain scenery + streamed terrain tiles + peak backdrops), rockfall telegraph, finish -> results. Back to the port.
@@ -680,8 +680,8 @@ for (const prof of profiles) {
             const mpWorst = Math.max(...Object.values(mpDraws).map((d) => d.draws));
             const mpTris = Math.max(...Object.values(mpDraws).map((d) => d.tris));
             check(P, `Mountain Pass scenery streams (procedural mountain pieces + terrain tiles + peaks), draws under the ceiling at MP-0 / MP-2 / MP-3 / MP-8 / MP-9 / MP-10 / MP-11 (${P === "phone" ? "≤160" : "tris ≤250k"})`,
-              Object.entries(mpDraws).every(([k, d]) => d.stage === "pass" && d.cityChunks >= 3 && d.framed && d.draws > 15 && d.pass.pieces.mtn_props >= (k === "mp11" ? 1 : 3) && d.pass.tiles >= 4 && d.pass.peaks && d.hero.alive) && drawGate(P, mpWorst) && (P === "phone" || mpTris <= 250000),
-              JSON.stringify(Object.fromEntries(Object.entries(mpDraws).map(([k, d]) => [k, { draws: d.draws, tris: d.tris, chunks: d.pass.chunks, tiles: d.pass.tiles, framed: d.framed, peaks: d.pass.peaks, alive: d.hero.alive, pieces: d.pass.pieces, roofHidden: d.pass.roofHidden }]))));
+              Object.entries(mpDraws).every(([k, d]) => d.stage === "pass" && d.cityChunks >= (k === "mp11" ? 1 : 3) && d.framed && d.draws > 15 && d.pass.pieces.mtn_props >= (k === "mp11" ? 1 : 3) && d.pass.tiles >= 4 && d.pass.peaks && d.hero.alive) && drawGate(P, mpWorst) && (P === "phone" || mpTris <= 250000),
+              JSON.stringify(Object.fromEntries(Object.entries(mpDraws).map(([k, d]) => [k, { stage: d.stage, cityChunks: d.cityChunks, draws: d.draws, tris: d.tris, chunks: d.pass.chunks, tiles: d.pass.tiles, framed: d.framed, peaks: d.pass.peaks, alive: d.hero.alive, pieces: d.pass.pieces, roofHidden: d.pass.roofHidden }]))));
             check(P, "Mountain Pass pieces: lodge at MP-0, shed roof hidden inside / shown outside, chevrons + ice at Eagle Bend, frozen lake at MP-9, ski-jump structure at MP-10, summit station at MP-11",
               mpDraws.mp0.pass.pieces.mtn_lodge > 0 && mpDraws.mp2.pass.roofHidden && mpDraws.mp2.pass.roofs > 0 && !mpDraws.pre2.pass.roofHidden && mpDraws.mp3.pass.pieces.mtn_chevron_board > 0 && mpDraws.mp3.pass.pieces.mtn_ice_decal > 0 &&
               mpDraws.mp9.pass.pieces.mtn_frozen_lake_40 > 0 && mpDraws.mp10.pass.pieces.mtn_skijump_structure > 0 && mpDraws.mp11.pass.pieces.mtn_summit_station > 0,
