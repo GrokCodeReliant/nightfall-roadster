@@ -6,6 +6,7 @@
 //  - gap cut: world-space discard box for the road (BN-18 snapped deck) and the desert floor (the riverbed)
 import * as THREE from "three";
 import type { Pose } from "./city";
+import { PAINT_GLSL } from "./roadpaint";
 import { BRIDGE, MESA_CUT, type DesertMound } from "./highwaycourse";
 
 const hash = (n: number) => { const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
@@ -72,7 +73,7 @@ export function rockGeometry(): THREE.BufferGeometry {
     const k = 0.75 + 0.5 * hash(Math.round(x * 7) + Math.round(y * 13) * 3 + Math.round(z * 17) * 5);
     p.setXYZ(i, x * k * 1.2, Math.max(-0.25, y * 0.55 * k) + 0.2, z * k);
     const t = 0.55 + 0.45 * Math.max(0, y);
-    col.push(0.42 * t, 0.36 * t, 0.3 * t);
+    col.push(0.26 * t, 0.2 * t, 0.15 * t);
   }
   src.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   src.deleteAttribute("uv");
@@ -134,14 +135,16 @@ export function mesaBlockGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
     const s = sAt(k);
     if (Math.abs(s - M.s0) > 1.01 && Math.abs(s - M.s1) > 1.01) continue;
     const pr = prof(s);
+    // one simple U-shaped outline around the portal opening (a hole touching the outline would not triangulate)
     const shape = new THREE.Shape();
     shape.moveTo(-pr[0][0], pr[0][1]);
     for (let i = 1; i < pr.length; i++) shape.lineTo(-pr[i][0], pr[i][1]);
     for (let i = pr.length - 1; i >= 0; i--) shape.lineTo(pr[i][0], pr[i][1]);
+    shape.lineTo(M.openHalf, pr[0][1]);
+    shape.lineTo(M.openHalf, M.openTop);
+    shape.lineTo(-M.openHalf, M.openTop);
+    shape.lineTo(-M.openHalf, pr[0][1]);
     shape.closePath();
-    const hole = new THREE.Path();
-    hole.moveTo(-M.openHalf, -0.4); hole.lineTo(M.openHalf, -0.4); hole.lineTo(M.openHalf, M.openTop); hole.lineTo(-M.openHalf, M.openTop); hole.closePath();
-    shape.holes.push(hole);
     const sg = new THREE.ShapeGeometry(shape, 1).toNonIndexed();
     const sp = sg.getAttribute("position") as THREE.BufferAttribute;
     const p = at(k);
@@ -155,7 +158,7 @@ export function mesaBlockGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
   return finish(g);
 }
 
-const BANK_TOP = c3(0x6a5440), BANK_LO = c3(0x3e3024), BED = c3(0x5a4a3a);
+const BANK_TOP = c3(0x8a6c50), BANK_LO = c3(0x5a4432), BED = c3(0x7a6650);
 /** Dry-river banks for the samples of one chunk inside the bridge (both sides), plus the abutment walls at the bridge ends. */
 export function riverbankGeometry(at: (k: number) => Pose, ks: number[], sAt: (k: number) => number, ox: number, oz: number): THREE.BufferGeometry | null {
   if (ks.length < 2) return null;
@@ -168,8 +171,10 @@ export function riverbankGeometry(at: (k: number) => Pose, ks: number[], sAt: (k
       const a0 = P(pa, side * (B.half + ja), -0.08, ox, oz), b0 = P(pb, side * (B.half + jb), -0.08, ox, oz);
       const a1 = P(pa, side * (B.bedHalf + 1.5 + ja * 0.5), -6, ox, oz), b1 = P(pb, side * (B.bedHalf + 1.5 + jb * 0.5), -6, ox, oz);
       const a2 = P(pa, side * B.bedHalf, B.bedY - 0.05, ox, oz), b2 = P(pb, side * B.bedHalf, B.bedY - 0.05, ox, oz);
-      quad(g, a0, b0, b1, a1, BANK_TOP, BANK_TOP, BANK_LO, BANK_LO);
-      quad(g, a1, b1, b2, a2, BANK_LO, BANK_LO, BED, BED);
+      const ta = BANK_TOP.clone().multiplyScalar(0.85 + 0.3 * hash(sAt(ks[n - 1]) * 1.3 + side)), tb = BANK_TOP.clone().multiplyScalar(0.85 + 0.3 * hash(sAt(ks[n]) * 1.3 + side));
+      const la = BANK_LO.clone().multiplyScalar(0.8 + 0.4 * hash(sAt(ks[n - 1]) * 2.1 + side)), lb = BANK_LO.clone().multiplyScalar(0.8 + 0.4 * hash(sAt(ks[n]) * 2.1 + side));
+      quad(g, a0, b0, b1, a1, ta, tb, lb, la);
+      quad(g, a1, b1, b2, a2, la, lb, BED, BED);
     }
   }
   for (const k of [ks[0], ks[ks.length - 1]]) {
@@ -198,7 +203,7 @@ export function saltGeometry(at: (s: number) => Pose, sMid: number, lat: number,
   }
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const a = j * (N + 1) + i, b = a + 1, c = a + N + 1, d = c + 1;
-    idx.push(a, c, b, b, c, d);
+    idx.push(a, b, c, b, d, c);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
@@ -238,12 +243,15 @@ export function saltMaterial() {
       .replace("void main() {", `varying float vEdge;\nvarying vec3 vWp;\n${NOISE_GLSL}\nvoid main() {`)
       .replace("#include <color_fragment>", `#include <color_fragment>
   vec2 q = vWp.xz;
-  float tone = 0.78 + 0.3 * nfNoise(q * 0.045) + 0.12 * nfNoise(q * 0.21) - 0.1 * nfNoise(q * 0.9);
-  vec3 salt = vec3(0.60, 0.57, 0.52) * tone;
-  salt = mix(salt, vec3(0.52, 0.44, 0.36), smoothstep(0.55, 0.85, nfNoise(q * 0.06 + 7.0)) * 0.55);
-  float big = nfCrack(q * 0.11), small = nfCrack(q * 0.42);
-  float crack = max(1.0 - smoothstep(0.015, 0.06, big), (1.0 - smoothstep(0.01, 0.05, small)) * 0.65);
-  salt = mix(salt, salt * vec3(0.42, 0.38, 0.34), crack);
+  vec2 w = q + vec2(nfNoise(q * 0.09), nfNoise(q * 0.09 + 31.0)) * 4.0;
+  float tone = 0.80 + 0.26 * nfNoise(q * 0.035) + 0.12 * nfNoise(q * 0.21) - 0.10 * nfNoise(q * 0.9);
+  vec3 salt = vec3(0.235, 0.22, 0.2) * tone;
+  salt = mix(salt, vec3(0.23, 0.19, 0.15), smoothstep(0.45, 0.85, nfNoise(q * 0.05 + 7.0)) * 0.7);
+  salt = mix(salt, vec3(0.31, 0.295, 0.27), smoothstep(0.6, 0.9, nfNoise(q * 0.12 + 3.0)) * 0.3);
+  float big = nfCrack(w * 0.34), small = nfCrack(w * 0.95 + 5.0);
+  float dense = smoothstep(0.25, 0.75, nfNoise(q * 0.03 + 11.0));
+  float crack = max((1.0 - smoothstep(0.015, 0.06, big)) * 0.75, (1.0 - smoothstep(0.01, 0.05, small)) * 0.4 * dense);
+  salt = mix(salt, salt * vec3(0.62, 0.56, 0.5), crack);
   float a = clamp(vEdge * 1.5 - 0.25 + (nfNoise(q * 0.09) - 0.5) * 0.9, 0.0, 1.0);
   diffuseColor = vec4(salt, smoothstep(0.0, 1.0, a));`);
   };
@@ -253,33 +261,49 @@ export function saltMaterial() {
 }
 
 // ---------------------------------------------------------------- far mesas + horizon haze
-export const HAZE = { color: 0x3b3029, sky: 0x1a140c, radius: 640, fadeFrom: 560, fadeTo: 690 };
+export const HAZE = { color: 0x4a3b30, sky: 0x1a140c, radius: 640, proxy: 400, fadeFrom: 1500, fadeTo: 1900 };
+/** backdrop band for the mesa silhouettes, in degrees below the chase cam's eye line (the camera sees ~0.8 deg above
+ *  it on desktop): mesa base 5.2 deg down, flat tops 1.4 deg down, so the outline sits in the haze with sky haze above */
+export const MESA_BAND = { baseDeg: -5.5, topDeg: -0.9, h: 80 };
 let mesaMat: THREE.MeshBasicMaterial | null = null;
-/** Far mesas: unfogged silhouettes (dark rock, faint moonlit top) that dissolve into the horizon haze near the far plane. */
+/** Far mesas: unfogged silhouettes (dark rock, faint moonlit top) drawn as a backdrop. The pitched-down chase cam only
+ *  sees < 1 deg above its eye line and the floor stops ~130-200 m out, so a mesa at its true 0.5-1.4 km shows as a strip
+ *  cut by the frame top. Each mesa (aAnchor = its ground centre) is drawn as a backdrop card: projected to HAZE.proxy m
+ *  along its bearing (true angular width kept) and fitted into MESA_BAND, so its outline reads against the haze above;
+ *  it dissolves into the haze once its true distance passes ~1.5 km. */
 export function mesaSilhouetteMaterial() {
   if (mesaMat) return mesaMat;
   const m = new THREE.MeshBasicMaterial({ color: 0x120e0b, fog: false });
   m.name = "highway_mesa_silhouette";
+  const yBase = HAZE.proxy * Math.tan((MESA_BAND.baseDeg * Math.PI) / 180);
+  const ySpan = (HAZE.proxy * (Math.tan((MESA_BAND.topDeg * Math.PI) / 180) - Math.tan((MESA_BAND.baseDeg * Math.PI) / 180))) / MESA_BAND.h;
   m.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\n vWp = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      .replace("void main() {", "attribute vec2 aAnchor;\nvarying vec3 vWp;\nvarying float vTrueD;\nvoid main() {")
+      .replace("#include <project_vertex>", `vec4 nfW = modelMatrix * vec4( transformed, 1.0 );
+  vWp = nfW.xyz;
+  vec2 nfRel = aAnchor - cameraPosition.xz;
+  vTrueD = length( nfRel );
+  float nfK = ${HAZE.proxy.toFixed(1)} / max( vTrueD, 1.0 );
+  nfW.xz = cameraPosition.xz + ( nfW.xz - cameraPosition.xz ) * nfK;
+  nfW.y = cameraPosition.y + ${yBase.toFixed(3)} + ( nfW.y + 0.5 ) * ${ySpan.toFixed(4)};
+  vec4 mvPosition = viewMatrix * nfW;
+  gl_Position = projectionMatrix * mvPosition;`);
     const hz = c3(HAZE.color);
     sh.fragmentShader = sh.fragmentShader
-      .replace("void main() {", "varying vec3 vWp;\nvoid main() {")
+      .replace("void main() {", "varying vec3 vWp;\nvarying float vTrueD;\nvoid main() {")
       .replace("#include <color_fragment>", `#include <color_fragment>
   float top = smoothstep(30.0, 80.0, vWp.y);
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.13, 0.11, 0.10), top * 0.55);
-  float d = distance(vWp.xz, cameraPosition.xz);
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(${hz.r.toFixed(4)}, ${hz.g.toFixed(4)}, ${hz.b.toFixed(4)}), smoothstep(${HAZE.fadeFrom.toFixed(1)}, ${HAZE.fadeTo.toFixed(1)}, d));`);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.15, 0.12, 0.10), top * 0.6);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(${hz.r.toFixed(4)}, ${hz.g.toFixed(4)}, ${hz.b.toFixed(4)}), smoothstep(${HAZE.fadeFrom.toFixed(1)}, ${HAZE.fadeTo.toFixed(1)}, vTrueD));`);
   };
   m.customProgramCacheKey = () => "nf_highway_mesa";
   mesaMat = m;
   return m;
 }
-/** Horizon haze band: an open cylinder (camera-centred) of vertex-coloured RGBA, drawn first, no depth write, no fog. */
+/** Horizon haze band: an open cylinder (camera-centred), vertex colours pre-blended over the sky, drawn first, no depth write, no fog. */
 export function hazeBand(): THREE.Mesh {
-  const rings: [number, number, number][] = [[-40, 1, 1], [-1, 1, 1], [7, 0.85, 1], [24, 0.4, 1], [60, 0, 1]];
+  const rings: [number, number, number][] = [[-40, 1, 1], [0, 1, 1], [18, 0.9, 1], [45, 0.6, 1], [100, 0.25, 1], [190, 0, 1]];
   const N = 48, pos: number[] = [], col: number[] = [], idx: number[] = [];
   const hz = c3(HAZE.color), sk = c3(HAZE.sky);
   for (let j = 0; j < rings.length; j++) {
@@ -299,7 +323,9 @@ export function hazeBand(): THREE.Mesh {
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 4));
   geo.setIndex(idx);
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, depthTest: false, fog: false, side: THREE.DoubleSide });
+  // opaque pass, drawn first with no depth write (colours are pre-blended over the sky), so the mesas and every prop draw
+  // over it; a transparent band would be drawn after the opaque pass and paint over them
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, depthWrite: false, depthTest: false, fog: false, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = "highway_haze";
   mesh.renderOrder = -100;
@@ -309,15 +335,27 @@ export function hazeBand(): THREE.Mesh {
 
 // ---------------------------------------------------------------- Mesa Cut glow
 const glowMats = new WeakMap<THREE.Material, THREE.Material>();
-/** The shared tunnel emissive (white top trim / magenta base) as a dim warm sodium glow: Open Highway's tunnel only. */
+/** Mesa Cut shell (Open Highway only): the shared NC tunnel's magenta neon (base trim, paint) recoloured to a dim warm
+ *  sodium tone in both albedo and glow, and the white top trim glow damped, so no bright side trim shows. */
 export function tunnelGlowMat(m: THREE.Material) {
   let c = glowMats.get(m);
   if (!c) {
     const s = (m as THREE.MeshStandardMaterial).clone();
-    s.emissive = c3(0x6a4420);
-    s.emissiveIntensity = 1;
-    s.color.multiplyScalar(0.35);
+    const glow = /emissive/i.test(m.name);
     s.name = `${m.name}@mesacut`;
+    const prev = (m as THREE.MeshStandardMaterial).onBeforeCompile;
+    s.onBeforeCompile = (sh, r) => {
+      prev?.call(m, sh, r);
+      sh.vertexShader = sh.vertexShader
+        .replace("void main() {", "varying float vNfY;\nvoid main() {")
+        .replace("#include <project_vertex>", "#include <project_vertex>\n vNfY = ( modelMatrix * vec4( transformed, 1.0 ) ).y;");
+      // upper shell (crowns, header faces, roof: above the 13.5 m chase cam) reads as one dark rock ceiling, not a lit slab
+      sh.fragmentShader = sh.fragmentShader
+        .replace("void main() {", `${PAINT_GLSL}\nvarying float vNfY;\nvoid main() {`)
+        .replace("#include <map_fragment>", "#include <map_fragment>\n diffuseColor.rgb = nfPaint( diffuseColor.rgb, vec3( 0.16, 0.11, 0.07 ) );\n diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.075, 0.058, 0.045 ), smoothstep( 14.0, 18.0, vNfY ) );")
+        .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>\n totalEmissiveRadiance = nfPaint( totalEmissiveRadiance, vec3( 0.30, 0.16, 0.05 ) ) * ${glow ? "0.18" : "1.0"} * ( 1.0 - smoothstep( 14.0, 18.0, vNfY ) );`);
+    };
+    s.customProgramCacheKey = () => `nf_mesacut_${glow ? "glow" : "shell"}`;
     glowMats.set(m, s);
     c = s;
   }

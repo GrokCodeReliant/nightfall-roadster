@@ -127,7 +127,7 @@ export function buildHighwayChunk(group: THREE.Group, index: number, at: (k: num
     put(p, p.detail ? detail : parts);
   }
   for (const [m, l] of tun) {
-    const mm = /emissive/i.test(m.name) ? tunnelGlowMat(m) : m;
+    const mm = tunnelGlowMat(m);
     parts.set(mm, [...(parts.get(mm) ?? []), ...l]);
   }
   if (terra.length) parts.set(terrainMaterial(), terra);
@@ -165,10 +165,19 @@ export function highwayFarGroup(at: (s: number) => Pose | null): { group: THREE.
   const mesas: Parts = new Map();
   for (const [s, lat, ry] of HIGHWAY_FAR.mesas) {
     const p = at(s);
-    if (p) bakePiece(mesas, "desert_mesa_backdrop", placeMatrix(p, lat, -p.y - 0.5, 0, ry, 0, 0, m4));
+    if (!p || !bakePiece(mesas, "desert_mesa_backdrop", placeMatrix(p, lat, -p.y - 0.5, 0, ry, 0, 0, m4))) continue;
+    // every vertex carries its mesa's ground anchor: the silhouette shader slides the whole mesa in to HAZE.proxy m
+    const ax = p.x - p.rx * lat, az = p.z - p.rz * lat;
+    for (const list of mesas.values()) for (const g of list) {
+      if (g.getAttribute("aAnchor")) continue;
+      const n = g.getAttribute("position").count, a = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) { a[i * 2] = ax; a[i * 2 + 1] = az; }
+      g.setAttribute("aAnchor", new THREE.BufferAttribute(a, 2));
+    }
+    (group.userData.mesas ??= []).push([ax, 30, az]);
   }
   // openhighway-v2: the mesas sit outside the fog as silhouettes against the horizon haze (one draw)
-  for (const mesh of flushParts(mesas, group)) mesh.material = mesaSilhouetteMaterial();
+  for (const mesh of flushParts(mesas, group)) { mesh.material = mesaSilhouetteMaterial(); mesh.frustumCulled = false; mesh.renderOrder = -50; }
   const hubs: THREE.Matrix4[] = [];
   for (const [s, lat] of HIGHWAY_FAR.turbines) {
     const p = at(s);

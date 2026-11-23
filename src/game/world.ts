@@ -165,7 +165,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
-  highwayInfo: () => { patches: number; far: boolean; rotors: number };
+  highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[] };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
   startRollout: (sim: Sim) => boolean;
   skipRollout: () => void;
@@ -1084,7 +1084,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const gapCut = { box: { value: new THREE.Vector4(0, 0, 0, 1) }, half: { value: new THREE.Vector2(0, 0) } };
   const bedCut = { box: { value: new THREE.Vector4(0, 0, 0, 1) }, half: { value: new THREE.Vector2(0, 0) } };
   let hwFloorMat: THREE.MeshStandardMaterial | null = null;
-  const hwRoadMats = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  const hwRoadMats = new Map<string, THREE.MeshStandardMaterial>();
   const trucks: THREE.Group[] = [];
   const buildings = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -1192,6 +1192,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     // Open Highway's floor is its own clone (the riverbed is cut out of it); every other stage keeps seaMat
     sea.material = stage === "highway" && hwFloorMat ? hwFloorMat : seaMat;
+    // Open Highway: the floor is the lowest surface, drawn right after the haze band without writing depth, so the mesa
+    // backdrop (drawn next) shows over its fogged far reach and every prop / road piece still draws over both
+    if (hwFloorMat) hwFloorMat.depthWrite = false;
+    sea.renderOrder = stage === "highway" ? -90 : 0;
     if (haze) haze.visible = false;
     sea.position.y = seaY;
     buildings.visible = !scenic();
@@ -1464,7 +1468,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   /** Coast Road per frame: foam scroll, arch roof hidden while the chase cam is above it, lighthouse beam, wash telegraph. */
   // ---------------------------------------------------------------- Pine Woods: pine stands, bridge roof, fog hollow, trucks
   // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
-  const highwayStat = { patches: 0, far: false, rotors: 0 };
+  const highwayStat = { patches: 0, far: false, rotors: 0, mesas: [] as number[][], cam: [] as number[] };
   const scatterM = new THREE.Matrix4();
   const scatterS = new THREE.Matrix4();
   function highwayFrame(sim: Sim, cityLo: number, cityHi: number) {
@@ -1559,6 +1563,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       far.rotors.forEach((r, i) => (r.rotation.z = t * 0.35 + i * 0.7));
       highwayStat.far = far.group.visible;
       highwayStat.rotors = far.rotors.length;
+      highwayStat.mesas = far.group.userData.mesas ?? [];
+      highwayStat.cam = [camera.position.x, camera.position.y, camera.position.z, camera.fov, camera.far];
     }
   }
   const WOODS_AHEAD_DESKTOP = 4;
@@ -1775,16 +1781,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   // Open Highway: the kit road (and its yellow-centre paint) with the BN-18 gap cut out of the right deck. Own clones,
   // so the other stages' road programs are untouched.
   function highwayRoadMat(base: THREE.MeshStandardMaterial, paint: boolean) {
-    let m = hwRoadMats.get(base);
+    const key = `${base.uuid}:${paint ? "paint" : "road"}`;
+    let m = hwRoadMats.get(key);
     if (!m) {
-      m = cutMaterial(base, paint ? "highway_paint" : "highway_road", gapCut, paint ? (sh) => {
+      m = cutMaterial(base, paint ? `highway_paint_${base.name}` : `highway_road_${base.name}`, gapCut, paint ? (sh) => {
         sh.fragmentShader = sh.fragmentShader
           .replace("void main() {", `${PAINT_GLSL}\nvoid main() {`)
           .replace("#include <map_fragment>", "#include <map_fragment>\n diffuseColor.rgb = nfPaint( diffuseColor.rgb, NF_YELLOW );")
           .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n totalEmissiveRadiance = nfPaint( totalEmissiveRadiance, NF_AMBER );")
           .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n roughnessFactor = texture2D( map, vMapUv ).a;");
       } : undefined);
-      hwRoadMats.set(base, m);
+      hwRoadMats.set(key, m);
     }
     return m;
   }

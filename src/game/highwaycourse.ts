@@ -74,9 +74,9 @@ export function rightDeckSpans(): [number, number][] {
   }
   return out;
 }
-/** OH-5 Mesa Cut: the tunnel is raised (y x2.1: roof 15.75-17.85 m) so the 13.5 m chase cam rides UNDER a real roof, inside a
+/** OH-5 Mesa Cut: the tunnel is raised (y x2.6: roof 19.5-22.1 m) so the 13.5 m chase cam rides UNDER a real roof, inside a
  *  mesa block (flat top, sloped flanks, cliff faces with the portals). Camera unchanged. */
-export const MESA_CUT = { s0: 2500, s1: 2700, sy: 2.1, h: 27, topHalf: 36, baseHalf: 78, openHalf: 14.2, openTop: 17.85 };
+export const MESA_CUT = { s0: 2500, s1: 2700, sy: 2.6, h: 30, topHalf: 36, baseHalf: 78, openHalf: 14.2, openTop: 22.1 };
 
 let cache: HighwayPlace[] | null = null;
 export function highwayPlacements(): HighwayPlace[] {
