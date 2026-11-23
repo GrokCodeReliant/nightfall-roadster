@@ -151,6 +151,26 @@ function shoreMat(m: THREE.MeshStandardMaterial) {
  *  Night City keeps the shared original. */
 export const GLINT_ROUGH = 0.8;
 const matteMats = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+/** Coast inland cliff (pw-coast-polish): the land-side rock face sat almost black against the night sky (Sara, hosted
+ *  phone shot). A Coast-only clone of its material adds a soft dusk-lit self term (albedo x LAND_CLIFF_LIFT) so the rock
+ *  texture reads; the sea cliff, walls and every other stage keep the shared material. */
+export const LAND_CLIFF_LIFT = [0.42, 0.34, 0.3] as const;
+const landCliffMats = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+function landCliffMat(m: THREE.MeshStandardMaterial) {
+  let c = landCliffMats.get(m);
+  if (!c) {
+    c = m.clone();
+    c.name = `${m.name}@landcliff`;
+    const prev = m.onBeforeCompile;
+    c.onBeforeCompile = (sh, r) => {
+      prev?.call(m, sh, r);
+      sh.fragmentShader = sh.fragmentShader.replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>\n totalEmissiveRadiance += diffuseColor.rgb * vec3( ${LAND_CLIFF_LIFT.map((v) => v.toFixed(3)).join(", ")} );`);
+    };
+    c.customProgramCacheKey = () => `nf_coast_landcliff_${m.name}`;
+    landCliffMats.set(m, c);
+  }
+  return c;
+}
 function coastMatte(m: THREE.MeshStandardMaterial) {
   let c = matteMats.get(m);
   if (!c) {
@@ -268,6 +288,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
   if (!coastReady()) return out;
   fixSwatches();
   const parts: Parts = new Map();
+  const landCliff: Parts = new Map();
   const m4 = new THREE.Matrix4();
   const put = (name: string, p: Pose, lx: number, ly: number, lz: number, ry: number, keep?: (o: THREE.Object3D) => boolean, into = parts) => {
     if (bakePiece(into, name, placeMatrix(p, lx, ly, lz, ry, ox, oz, m4), keep)) out.placed.push(name);
@@ -341,7 +362,8 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
         if (k % 4 === 1) put("coast_seawall_lamp", p, -(half + 0.9), 0, 0, 0);
       }
     }
-    putB(CLIFF, midK, half + 5, ramp ? -mid.y : 0, Math.PI, false);
+    // inland cliff (pw-coast-polish): its own parts so it gets the Coast-only lifted rock material (landCliffMat)
+    putB(CLIFF, midK, half + 5, ramp ? -mid.y : 0, Math.PI, false, undefined, landCliff);
     // sea cliff: it sits under the sea lanes. Cliff v2 still has a 24.20 m cap ridge (lateral 9.2..13.0 after the
     // flip), so at -24.15 the ridge stood 0.05 m ABOVE the kit deck (deck top y 0) along the sea lane edge on every
     // cliff chunk (coast seam spot "cliff cap"). -24.45 keeps the whole cliff top >= 0.25 m under the deck.
@@ -446,6 +468,7 @@ export function buildCoastChunk(group: THREE.Group, index: number, at: (k: numbe
     parts.set(target, l);
     cut.set(target, (cut.get(target) ?? 0) + list.reduce((n, g) => n + g.getAttribute("position").count, 0));
   }
+  for (const mesh of flushParts(landCliff, group)) mesh.material = landCliffMat(mesh.material as THREE.MeshStandardMaterial);
   for (const mesh of flushParts(parts, group)) {
     const n = cut.get(mesh.material as THREE.Material);
     if ((mesh.material as THREE.Material).name === "kit_emissive") mesh.material = coastMatte(mesh.material as THREE.MeshStandardMaterial);

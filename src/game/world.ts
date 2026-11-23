@@ -1797,6 +1797,29 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     return m;
   }
+  // Pine Woods (pw-coast-polish): the kit road's warm brown grime / oil streak along the right lane read as a bright dirt
+  // patch under the woods moon (Sara, hosted phone shot). Pine Woods' own clone of the road surface: warm, dark texels
+  // (brown grime, not the saturated red studs or white lines) are pulled toward neutral asphalt, and the sheen is damped.
+  const woodsRoadMats = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  function woodsRoadMat(base: THREE.MeshStandardMaterial) {
+    let m = woodsRoadMats.get(base);
+    if (!m) {
+      m = base.clone();
+      m.name = `${base.name || "road"}@woods`;
+      m.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader
+          .replace("#include <map_fragment>", `#include <map_fragment>
+ { float nfW = diffuseColor.r - diffuseColor.b;
+   float nfL = dot( diffuseColor.rgb, vec3( 0.299, 0.587, 0.114 ) );
+   float nfK = smoothstep( 0.015, 0.09, nfW ) * ( 1.0 - smoothstep( 0.28, 0.45, nfW ) ) * ( 1.0 - smoothstep( 0.35, 0.6, nfL ) );
+   diffuseColor.rgb = mix( diffuseColor.rgb, vec3( nfL * 0.9 ) * vec3( 0.97, 0.99, 1.03 ), nfK * 0.85 ); }`)
+          .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\n roughnessFactor = max( texture2D( map, vMapUv ).a, 0.62 );");
+      };
+      m.customProgramCacheKey = () => "nf_woods_road";
+      woodsRoadMats.set(base, m);
+    }
+    return m;
+  }
   function applyRoadLook() {
     const on = stage === "coast";
     const yellow = stage === "coast" || stage === "woods" || stage === "highway";
@@ -1805,6 +1828,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const paint = yellow && mesh.name === "kitroad:lanepaint_straight_40" && base.isMeshStandardMaterial && !!base.map;
       if (stage === "highway" && mesh.name.startsWith("kitroad:") && base.isMeshStandardMaterial) {
         mesh.material = highwayRoadMat(base, paint);
+        return;
+      }
+      if (stage === "woods" && mesh.name === "kitroad:road_straight_40" && base.isMeshStandardMaterial && base.map) {
+        mesh.material = woodsRoadMat(base);
         return;
       }
       mesh.material = paint ? yellowPaintMat(base, on) : on && base.isMeshStandardMaterial && base.map ? coastRoadMat(base) : base;
