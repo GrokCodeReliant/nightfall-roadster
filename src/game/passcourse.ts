@@ -77,7 +77,7 @@ export function passPlacements(): PassPlace[] {
   rails(1700, 65, "valley"); // MP-5
   rails(1960, 125, "valley"); // MP-6
   rails(2460, 15, "valley"); // MP-7a
-  rails(2520, 38, -1); // MP-7 ramp: both sides at deck height (38 + 37)
+  rails(2519, 38, -1); // MP-7 ramp: both sides at deck height (38 + 37)
   rails(2520 + 2, 37, 1);
   rails(2670, 200, "valley"); // MP-8
   rails(3470, 125, 1); // MP-9: the lake edge (right)
@@ -86,7 +86,7 @@ export function passPlacements(): PassPlace[] {
   rails(4030, 50, 1);
   rails(4230, 68, -1); // MP-11: left
   // chevron boards every 8 m on the hairpin / switchback outer walls (outside of each bend = the valley side)
-  const chev = (a: number, n: number, side: number) => { for (let i = 0; i < n; i++) { const s = a + 4 + i * 8; add("mtn_chevron_board", s, side * (edgeAt(s) + 1.6), side > 0 ? -0.35 : 0.35, { side }); } };
+  const chev = (a: number, n: number, side: number) => { for (let i = 0; i < n; i++) { const s = a + 2 + i * 8; add("mtn_chevron_board", s, side * (edgeAt(s) + 1.6), side > 0 ? -0.35 : 0.35, { side }); } };
   chev(1000, 33, 1); // Eagle Bend R+90: outer = right
   chev(1700, 33, -1); // Kettle Turn R-90: outer = left
   chev(2670, 25, 1); // switchback 1 R+100

@@ -658,6 +658,79 @@ for (const prof of profiles) {
           creditsBefore = (await cardBank()).credits;
           await page.click("button:has-text('Title')");
           await page.waitForSelector(".nf-carpick");
+          // ---- Mountain Pass (LEVELS/06, week-i-pass): authored 4800 m race. Title blurb, start, MP-0 lodge / MP-2 shed (roof
+          // hidden inside) / MP-3 hairpin / MP-8 switchbacks / MP-9 lake / MP-10 Summit Leap / MP-11 station draws (procedural
+          // mountain scenery + streamed terrain tiles + peak backdrops), rockfall telegraph, finish -> results. Back to the port.
+          {
+            await page.click("[aria-label='Next stage']");
+            const mpStage = await page.textContent(".nf-stagepick .nf-carpick-name");
+            const mpLede = await page.evaluate(() => { const e = document.querySelector(".nf-menu .nf-lede"); return { mode: e?.getAttribute("data-mode"), text: (e?.textContent || "").trim() }; });
+            check(P, "Mountain Pass title shows the race blurb", mpStage === "Mountain Pass" && mpLede.mode === "race" && /^Race six rivals to the finish\./.test(mpLede.text), JSON.stringify({ mpStage, mpLede }));
+            await page.click(".nf-btn");
+            await page.waitForSelector(".nf-hud");
+            await page.evaluate(() => window.__nfSkipRollout());
+            await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+            const mpStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, authored: s.track.authored }; });
+            check(P, "Mountain Pass start: race armed at 4800 m on the authored course, 6 rivals, no waves, drives", mpStart.stage === "pass" && mpStart.armed && mpStart.dist === 4800 && mpStart.authored && mpStart.rivals === 6 && mpStart.wave === 0 && mpStart.phase === "playing" && mpStart.m > 10, JSON.stringify(mpStart));
+            const mpAt = async (raceS, lat) => ({ ...(await ohAt(raceS, lat)), pass: await page.evaluate(() => window.__nfPass()) });
+            const mpDraws = { mp0: await mpAt(150, 0), pre2: await mpAt(760, 0), mp2: await mpAt(900, 0), mp3: await mpAt(1130, -3), mp8: await mpAt(3000, 0), mp9: await mpAt(3600, 6), mp10: await mpAt(4090, 0), mp11: await mpAt(4680, 0) };
+            await page.screenshot({ path: `${SHOTS}/${P}-pass-mp3.png` });
+            for (const [k, d] of Object.entries(mpDraws)) console.log(`DRAW [${P}] pass ${k}: ${d.draws} draws, ${d.tris} tris, chunks ${d.pass.chunks}, tiles ${d.pass.tiles}`);
+            const mpWorst = Math.max(...Object.values(mpDraws).map((d) => d.draws));
+            const mpTris = Math.max(...Object.values(mpDraws).map((d) => d.tris));
+            check(P, `Mountain Pass scenery streams (procedural mountain pieces + terrain tiles + peaks), draws under the ceiling at MP-0 / MP-2 / MP-3 / MP-8 / MP-9 / MP-10 / MP-11 (${P === "phone" ? "≤160" : "tris ≤250k"})`,
+              Object.values(mpDraws).every((d) => d.stage === "pass" && d.cityChunks >= 3 && d.framed && d.draws > 15 && d.pass.pieces.mtn_props >= 3 && d.pass.tiles >= 4 && d.pass.peaks && d.hero.alive) && drawGate(P, mpWorst) && (P === "phone" || mpTris <= 250000),
+              JSON.stringify(Object.fromEntries(Object.entries(mpDraws).map(([k, d]) => [k, { draws: d.draws, tris: d.tris, chunks: d.pass.chunks, tiles: d.pass.tiles, pieces: d.pass.pieces, roofHidden: d.pass.roofHidden }]))));
+            check(P, "Mountain Pass pieces: lodge at MP-0, shed roof hidden inside / shown outside, chevrons + ice at Eagle Bend, frozen lake at MP-9, ski-jump structure at MP-10, summit station at MP-11",
+              mpDraws.mp0.pass.pieces.mtn_lodge > 0 && mpDraws.mp2.pass.roofHidden && mpDraws.mp2.pass.roofs > 0 && !mpDraws.pre2.pass.roofHidden && mpDraws.mp3.pass.pieces.mtn_chevron_board > 0 && mpDraws.mp3.pass.pieces.mtn_ice_decal > 0 &&
+              mpDraws.mp9.pass.pieces.mtn_frozen_lake_40 > 0 && mpDraws.mp10.pass.pieces.mtn_skijump_structure > 0 && mpDraws.mp11.pass.pieces.mtn_summit_station > 0,
+              JSON.stringify({ mp0: mpDraws.mp0.pass.pieces, mp2: mpDraws.mp2.pass.roofHidden, pre2: mpDraws.pre2.pass.roofHidden, mp3: mpDraws.mp3.pass.pieces, mp9: mpDraws.mp9.pass.pieces, mp10: mpDraws.mp10.pass.pieces, mp11: mpDraws.mp11.pass.pieces }));
+            // BN-19 rockfall: hold the hero at the RF1 mouth and step the race clock; a rock shows its shadow while falling, then lands (no shadow)
+            await mpAt(1360, 9);
+            const mpRock = { falling: 0, down: 0, shadowWhileFalling: true, shadowAfter: false };
+            await page.evaluate(() => { const h = window.__nf.cars[0]; window.__mpHold = { a: h.along, x: h.x, z: h.z }; });
+            for (let i = 0; i < 60; i++) {
+              const rs = await page.evaluate(() => new Promise((r) => {
+                const s = window.__nf, h = s.cars[0], k = window.__mpHold;
+                s.hitstop = 0; h.invuln = 1e9; h.speed = 0; h.x = k.x; h.z = k.z; h.along = k.a; h.lastAlong = k.a;
+                window.__nfAdvance(0.1, "idle"); s.hitstop = 1e9;
+                requestAnimationFrame(() => requestAnimationFrame(() => r(window.__nfPass().rocks)));
+              }));
+              for (const r of rs) {
+                if (r.state === "falling") { mpRock.falling++; if (!r.shadow) mpRock.shadowWhileFalling = false; }
+                if (r.state === "down") { mpRock.down++; if (r.shadow) mpRock.shadowAfter = true; }
+              }
+            }
+            await page.evaluate(() => { window.__nf.cars[0].invuln = 0; window.__nf.hitstop = 0; });
+            check(P, "Mountain Pass BN-19: rockfall shadow telegraph while a rock falls, landed rock drawn without it", mpRock.falling > 2 && mpRock.down > 2 && mpRock.shadowWhileFalling && !mpRock.shadowAfter, JSON.stringify(mpRock));
+            const mpFin = await page.evaluate(() => {
+              const s = window.__nf, h = s.cars[0];
+              h.alive = true; h.invuln = 0; if (s.up) s.up.shieldT = 0; h.hp = Math.max(h.hp, 1);
+              for (let g = 0; g < 20 && !s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first]; g++) {
+                const last = s.track.samples[s.track.samples.length - 40];
+                h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.speed = 36; h.invuln = 1e9;
+                window.__nfAdvance(0.02, ["KeyW"]);
+              }
+              h.invuln = 0;
+              const sm = s.track.samples[Math.round((s.race.originAlong + s.race.dist + 6) / 2) - s.track.first];
+              if (!sm) return { ok: false };
+              h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.speed = 30;
+              window.__nfAdvance(0.2, "idle");
+              return { ok: true, phase: s.phase, place: s.race.place, mode: s.result && s.result.mode };
+            });
+            const mpOver = await page.waitForSelector("text=Run it again", { timeout: 30000 }).then(() => true).catch(() => false);
+            const mpCard = await page.evaluate(() => {
+              const card = document.querySelector(".nf-overlay .nf-card");
+              const best = (card?.querySelector(".nf-best")?.textContent || "").trim();
+              const body = (card?.textContent || "").replace(best, "").replace(/\s+/g, " ").trim();
+              return { text: body, best, title: (card?.querySelector(".nf-title-sm")?.textContent || "").trim() };
+            });
+            check(P, "Mountain Pass finish -> results: place, Mountain Pass 4.8 km, no Wave text", mpOver && mpFin.ok && mpFin.mode === "race" && /^(1st|2nd|3rd|4th)$/.test(mpCard.title) && /Mountain Pass · 4\.8 km course/.test(mpCard.text) && !/wave/i.test(mpCard.text), JSON.stringify({ mpFin, mpCard }));
+            creditsBefore = (await cardBank()).credits;
+            await page.click("button:has-text('Title')");
+            await page.waitForSelector(".nf-carpick");
+            await page.click("[aria-label='Previous stage']");
+          }
           await page.click("[aria-label='Previous stage']");
         }
         await page.click("[aria-label='Previous stage']");

@@ -19,6 +19,10 @@ import { BRIDGE, DESERT_PATCH, DESERT_SCATTER, HIGHWAY_GAP, HIGHWAY_LOOK } from 
 import { cutMaterial, hazeBand, rockGeometry, rockMaterial } from "./highwayterrain";
 import { CRANE_BOOM_Y, buildPortChunk, craneCableGeometry, craneLoadGeometry, craneLoadPose, craneShadowGeometry, forkliftGeometry, loadPort, portPropsMaterial, portReady } from "./port";
 import { BOX, PORT_LOOK, PORT_SWING, SHED_HIDE } from "./portcourse";
+import { buildPassChunk, loadPass, passPropsMaterial, passReady, peakBackdropGeometry, rockGeometry as passRockGeometry, rockShadowGeometry } from "./mountain";
+import { PASS_LOOK, PASS_SHED_HIDE } from "./passcourse";
+import { passTerrainMaterial, passTerrainTile } from "./passterrain";
+import { rockDropY } from "./rockfall";
 import { cranePhase } from "./course";
 import { TRUCK } from "./trucks";
 
@@ -168,6 +172,7 @@ export type World = {
   rolloutSeek: (t: number) => void;
   stageInfo: () => { stage: string; cityChunks: number; gates: number };
   /** Pine Woods debug: pine stand counts (near / lod_far), bridge roof state, live trucks, fog density */
+  passInfo: () => { roofHidden: boolean; roofs: number; tiles: number; rocks: { id: string; state: string; y: number; shadow: boolean }[]; peaks: boolean; chunks: number; pieces: Record<string, number> };
   portInfo: () => { roofHidden: boolean; roofs: number; loads: { id: string; state: string; lat: number; bottom: number; shadow: number }[]; forklifts: number; chunks: number; pieces: Record<string, number> };
   highwayInfo: () => { patches: number; far: boolean; rotors: number; mesas: number[][]; cam: number[]; gapCut: boolean; bedCut: boolean; tunnel: { mat: string; map: boolean; pieces: string[] }[] };
   woodsInfo: () => { near: number; far: number; roofHidden: boolean; trucks: number; fog: number; patches: number; stands: number; truckPool: number; roofs: number };
@@ -1122,8 +1127,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   let stage: StageId = "city";
   let gateBoost = 0;
   /** Stages dressed by a GLB kit (Night City, Coast Road, Pine Woods). Every other id keeps the procedural skyline. */
-  const scenic = () => stage === "city" || stage === "coast" || stage === "woods" || stage === "highway" || stage === "port";
-  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : stage === "highway" ? highwayReady() : stage === "port" ? portReady() : cityReady());
+  const scenic = () => stage === "city" || stage === "coast" || stage === "woods" || stage === "highway" || stage === "port" || stage === "pass";
+  const sceneryReady = () => (stage === "coast" ? coastReady() : stage === "woods" ? woodsReady() : stage === "highway" ? highwayReady() : stage === "port" ? portReady() : stage === "pass" ? passReady() : cityReady());
   function releaseScenery(ch: Chunk) {
     ch.lamp = null;
     ch.roof = null;
@@ -1206,6 +1211,17 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       moon.intensity = PORT_LOOK.moon;
       fill.intensity = PORT_LOOK.fill;
     }
+    if (stage === "pass") {
+      // week-i-pass: snowy night. Cold blue hemi, a bright moon so the snow carries the scene; the shared floor plane drops far
+      // below the valley floor (the streamed terrain tiles are the ground). Pass only.
+      hemi.color.setHex(PASS_LOOK.hemiSky);
+      hemi.groundColor.setHex(PASS_LOOK.hemiGround);
+      hemi.intensity = PASS_LOOK.hemi;
+      moon.color.setHex(PASS_LOOK.moonColor);
+      moon.intensity = PASS_LOOK.moon;
+      fill.intensity = PASS_LOOK.fill;
+      seaY = -160;
+    }
     // Open Highway's floor is its own clone (the riverbed is cut out of it); every other stage keeps seaMat
     sea.material = stage === "highway" && hwFloorMat ? hwFloorMat : seaMat;
     // Open Highway: the floor is the lowest surface, drawn right after the haze band without writing depth, so the mesa
@@ -1227,7 +1243,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "woods") loadWoods();
     if (stage === "highway") loadHighway();
     if (stage === "port") loadPort();
+    if (stage === "pass") loadPass();
     for (const m of portMovers) m.count = 0;
+    clearPassWorld();
     if (desertPatchMesh) desertPatchMesh.count = 0;
     if (scrubMesh) scrubMesh.count = 0;
     if (rockMesh) rockMesh.count = 0;
@@ -1272,6 +1290,18 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const ramps = sim.track.pieces.filter((p) => p.kind === "ramp").map((p) => p.s);
       const cc = chunkCourse("port", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
       const out = buildPortChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
+      ch.roof = out.roof;
+      ch.city.position.set(o.x, 0, o.z);
+      ch.built = true;
+      return;
+    }
+    if (stage === "pass") {
+      releaseScenery(ch);
+      const at = (k: number) => sampleAt(sim.track, i0 + k);
+      // only the default-profile ramp (R1) carries the kit lip chevron; the Summit Leap is dressed by its ski-jump structure
+      const ramps = sim.track.pieces.filter((p) => p.kind === "ramp" && !p.prof).map((p) => p.s);
+      const cc = chunkCourse("pass", i0 * STEP, CHUNK, STEP, (k) => Math.abs(at(k).y) < 0.05, ramps);
+      const out = buildPassChunk(ch.city, ch.index, at, SEG, o.x, o.z, cc);
       ch.roof = out.roof;
       ch.city.position.set(o.x, 0, o.z);
       ch.built = true;
@@ -1452,6 +1482,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     if (stage === "woods") woodsFrame(sim, cityLo, cityHi);
     if (stage === "highway") highwayFrame(sim, cityLo, cityHi);
     if (stage === "port") portFrame(sim);
+    if (stage === "pass") passFrame(sim);
     if (scenic()) {
       const now = performance.now() / 1000;
       for (const ch of chunks) {
@@ -1573,6 +1604,104 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     forks.count = f;
     forks.instanceMatrix.needsUpdate = true;
     portStat.forklifts = f;
+  }
+
+  // ---------------------------------------------------------------- Mountain Pass: terrain tiles, shed roof, rockfall, peaks
+  const passStat = { roofHidden: false, rocks: [] as { id: string; state: string; y: number; shadow: boolean }[], peaks: false };
+  const passTiles = new Map<string, THREE.Mesh>();
+  const passMovers: THREE.InstancedMesh[] = [];
+  let passPeaks: THREE.Mesh | null = null;
+  const TILE = 192, TILE_RES = 6, TILE_REACH = 330;
+  function clearPassWorld() {
+    for (const m of passTiles.values()) { scene.remove(m); m.geometry.dispose(); }
+    passTiles.clear();
+    for (const m of passMovers) m.count = 0;
+    if (passPeaks) passPeaks.visible = false;
+  }
+  function ensurePassWorld() {
+    if (!passMovers.length) {
+      const shadowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+      shadowMat.name = "mtn_rock_shadow";
+      const rocks = new THREE.InstancedMesh(passRockGeometry(), passPropsMaterial(), 4);
+      const shadows = new THREE.InstancedMesh(rockShadowGeometry(), shadowMat, 4);
+      shadows.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(12), 3);
+      for (const [m, n] of [[rocks, "mtn_rocks"], [shadows, "mtn_rock_shadows"]] as const) { m.count = 0; m.frustumCulled = false; m.name = n; scene.add(m); passMovers.push(m); }
+    }
+    if (!passPeaks) {
+      const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide, depthWrite: false });
+      mat.name = "mtn_peaks";
+      passPeaks = new THREE.Mesh(peakBackdropGeometry(), mat);
+      passPeaks.name = "mtn_peak_backdrop";
+      passPeaks.frustumCulled = false;
+      passPeaks.renderOrder = -80;
+      scene.add(passPeaks);
+    }
+  }
+  function passFrame(sim: Sim) {
+    ensurePassWorld();
+    const hero = sim.cars[0];
+    const heroS = hero.along - sim.race.originAlong;
+    // avalanche shed roof hidden while the chase cam or the hero is under it (BN-7, roof-hiding only)
+    const camS = heroS - Math.hypot(camera.position.x - hero.x, camera.position.z - hero.z);
+    const under = sim.race.armed && heroS >= PASS_SHED_HIDE[0] && camS <= PASS_SHED_HIDE[1];
+    passStat.roofHidden = under;
+    for (const ch of chunks) if (ch.roof) ch.roof.visible = !under;
+    // peaks: silhouettes centred on the camera (no parallax, past the fog)
+    passPeaks!.visible = true;
+    passPeaks!.position.set(camera.position.x, 0, camera.position.z);
+    passStat.peaks = true;
+    // terrain tiles within reach of the camera (at most one new tile a frame), far ones released
+    const cx = camera.position.x, cz = camera.position.z;
+    let built = 0;
+    const want = new Set<string>();
+    const i0 = Math.floor((cx - TILE_REACH) / TILE), i1 = Math.floor((cx + TILE_REACH) / TILE);
+    const j0 = Math.floor((cz - TILE_REACH) / TILE), j1 = Math.floor((cz + TILE_REACH) / TILE);
+    const order: [number, number, number][] = [];
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const dx = Math.max(0, Math.abs(cx - (i + 0.5) * TILE) - TILE / 2), dz = Math.max(0, Math.abs(cz - (j + 0.5) * TILE) - TILE / 2);
+      const d = Math.hypot(dx, dz);
+      if (d > TILE_REACH) continue;
+      want.add(`${i},${j}`);
+      order.push([d, i, j]);
+    }
+    order.sort((a, b) => a[0] - b[0]);
+    for (const [, i, j] of order) {
+      const k = `${i},${j}`;
+      if (passTiles.has(k) || built >= (passTiles.size < 4 ? 4 : 1)) continue;
+      const m = new THREE.Mesh(passTerrainTile(i * TILE, j * TILE, TILE, TILE_RES), passTerrainMaterial());
+      m.name = "mtn_terrain";
+      m.userData.pieces = ["mtn_terrain"];
+      scene.add(m);
+      passTiles.set(k, m);
+      built++;
+    }
+    for (const [k, m] of passTiles) if (!want.has(k)) { scene.remove(m); m.geometry.dispose(); passTiles.delete(k); }
+    // BN-19 rockfall: the falling rock and its 1.0 s telegraph shadow (red, growing), then the landed rock for 6 s
+    const [rocks, shadows] = passMovers;
+    let n = 0;
+    passStat.rocks = [];
+    for (const r of sim.rocks.rocks) {
+      if (n >= 4) break;
+      const p = poseAt(sim.track, sim.race.originAlong + r.s);
+      const deck = deckY(sim.track, p, r.lat);
+      const x = p.x + p.rx * r.lat, z = p.z + p.rz * r.lat;
+      const falling = r.state === "falling";
+      const y = deck + 1.2 + (falling ? rockDropY(r, sim.time) : 0);
+      pq.setFromAxisAngle(pv.set(0.3, 1, 0.2).normalize(), r.s + (falling ? sim.time * 3 : 0));
+      ps.set(1, 1, 1);
+      pm.compose(pv.set(x, y, z), pq, ps);
+      rocks.setMatrixAt(n, pm);
+      const u = falling ? Math.min(1, Math.max(0, (sim.time - r.t0) / (r.tImpact - r.t0))) : 0;
+      ps.set(falling ? 0.5 + 0.5 * u : 0.0001, 1, falling ? 0.5 + 0.5 * u : 0.0001);
+      pq.identity();
+      pm.compose(pv.set(x, deck + 0.08, z), pq, ps);
+      shadows.setMatrixAt(n, pm);
+      shadows.setColorAt(n, pc.setRGB(0.25 + 0.5 * u, 0.04, 0.02));
+      passStat.rocks.push({ id: r.id, state: r.state, y: +(y - deck).toFixed(2), shadow: falling });
+      n++;
+    }
+    for (const m of passMovers) { m.count = n; m.instanceMatrix.needsUpdate = true; }
+    if (shadows.instanceColor) shadows.instanceColor.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- Open Highway: desert floor patches, far backdrop
@@ -1930,7 +2059,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   }
   function applyRoadLook() {
     const on = stage === "coast";
-    const yellow = stage === "coast" || stage === "woods" || stage === "highway" || stage === "port";
+    const yellow = stage === "coast" || stage === "woods" || stage === "highway" || stage === "port" || stage === "pass";
     const swap = (mesh: THREE.Mesh) => {
       const base = (mesh.userData.baseMat ??= mesh.material) as THREE.MeshStandardMaterial;
       const paint = yellow && mesh.name === "kitroad:lanepaint_straight_40" && base.isMeshStandardMaterial && !!base.map;
@@ -2706,6 +2835,16 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       applyStage();
     },
     stageInfo: () => ({ stage, cityChunks: chunks.filter((c) => c.built && c.city.children.length > 0).length, gates: chunks.filter((c) => c.built && c.lamp).length }),
+    passInfo: () => {
+      const pieces: Record<string, number> = {};
+      let n = 0;
+      for (const ch of chunks) {
+        if (!ch.built || ch.index < 0 || !ch.city.visible) continue;
+        n++;
+        ch.city.traverse((o) => { for (const p of (o.userData.pieces ?? []) as string[]) pieces[p] = (pieces[p] ?? 0) + 1; });
+      }
+      return { ...passStat, roofs: chunks.filter((c) => c.roof && c.index >= 0).length, tiles: passTiles.size, chunks: n, pieces };
+    },
     portInfo: () => {
       const pieces: Record<string, number> = {};
       let n = 0;

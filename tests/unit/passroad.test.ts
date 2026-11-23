@@ -245,3 +245,72 @@ test("§9.7 bot completes Mountain Pass with the six-rival field", async () => {
   assert.equal(sim.phase, "finished");
   assert.equal(rivals.length, 6);
 });
+
+test("locked ART LIST counts: every placement count matches §A", async () => {
+  const { passPlacements, PASS_COUNTS: C } = await import("../../src/game/passcourse.ts");
+  const all = passPlacements();
+  const n = (name: string, f: (p: (typeof all)[number]) => boolean = () => true) => all.filter((p) => p.name === name && f(p)).length;
+  assert.equal(n("mtn_chevron_board"), C.chevrons);
+  assert.equal(n("mtn_guardrail_snow_4m"), C.guardrail);
+  assert.equal(n("mtn_rock_wall_strip"), C.walls);
+  assert.equal(n("mtn_scree_strip"), C.scree);
+  assert.equal(n("barrier_jersey_4m"), C.jersey);
+  assert.equal(n("barrier_jersey_4m", (p) => p.s < 3000), 110);
+  assert.equal(n("coast_guardrail_end_4m"), C.ends);
+  assert.equal(n("sign_fork"), C.signFork);
+  assert.equal(n("mtn_ice_decal"), C.ice);
+  assert.equal(n("mtn_snow_shed_40"), C.shed);
+  assert.equal(n("mtn_snow_shed_portal"), C.portals);
+  assert.equal(n("mtn_frozen_lake_40"), C.lake);
+  assert.equal(n("mtn_flag"), C.flags);
+  assert.equal(n("mtn_snow_pine"), C.pines);
+  assert.equal(n("mtn_snow_pine", (p) => p.s < 300), 40);
+  assert.equal(n("mtn_fence_4m"), C.fence);
+  assert.equal(n("coast_crate"), C.crates);
+  assert.equal(n("mtn_lodge"), 1);
+  assert.equal(n("mtn_summit_station"), 1);
+  assert.equal(n("mtn_skijump_structure"), 1);
+  assert.equal(n("mtn_snow_kicker_6"), 1);
+  assert.equal(n("mtn_snowdrift_row_6"), 1);
+  // per-section guardrail / wall / chevron splits (§A)
+  const inS = (a: number, b: number) => (p: (typeof all)[number]) => p.s >= a && p.s < b;
+  assert.equal(n("mtn_guardrail_snow_4m", inS(300, 800)), 125);
+  assert.equal(n("mtn_guardrail_snow_4m", inS(2670, 3470)), 200);
+  assert.equal(n("mtn_guardrail_snow_4m", inS(4230, 4800)), 68);
+  assert.equal(n("mtn_rock_wall_strip", inS(2670, 3470)), 20);
+  assert.equal(n("mtn_chevron_board", inS(1000, 1260)), 33);
+  assert.equal(n("mtn_chevron_board", inS(2670, 3470)), 75);
+});
+
+test("§B piece budgets (tris)", async () => {
+  const { passPieceTris } = await import("../../src/game/mountain.ts");
+  const B: [string, number][] = [
+    ["mtn_rock_wall_strip", 80], ["mtn_scree_strip", 80], ["mtn_guardrail_snow_4m", 96], ["mtn_chevron_board", 40], ["mtn_snow_shed_40", 300],
+    ["mtn_snow_shed_portal", 300], ["mtn_snow_pine", 200], ["mtn_ice_decal", 20], ["mtn_snowdrift_row_6", 80], ["mtn_snow_kicker_6", 150],
+    ["mtn_frozen_lake_40", 8], ["mtn_skijump_structure", 1500], ["mtn_lodge", 800], ["mtn_summit_station", 900],
+  ];
+  for (const [name, max] of B) {
+    const t = passPieceTris(name);
+    assert.ok(t > 0 && t <= max, `${name} ${t} > ${max}`);
+  }
+  assert.ok(passPieceTris("mtn_ice_decal", { len: 60 }) <= 20);
+  const { rockGeometry, rockShadowGeometry, peakBackdropGeometry } = await import("../../src/game/mountain.ts");
+  assert.ok(rockGeometry().getAttribute("position").count / 3 <= 120);
+  assert.ok(rockShadowGeometry().getAttribute("position").count / 3 <= 8);
+  assert.ok(peakBackdropGeometry().getAttribute("position").count / 3 <= 4 * 200);
+});
+
+test("terrain: the corridor sits under the deck on every leg; uphill walls climb, valley sides drop", async () => {
+  const { passGroundY, PASS_FLOOR } = await import("../../src/game/passterrain.ts");
+  const track = buildCourseTrack(MOUNTAIN_PASS);
+  for (let s = 0; s <= 4800; s += 20) {
+    const p = poseAt(track, COURSE_ORIGIN + s);
+    for (const lat of [-10, 0, 10]) {
+      const y = passGroundY(p.x + p.rx * lat, p.z + p.rz * lat);
+      assert.ok(y <= PASS_FLOOR + 0.05 && y >= PASS_FLOOR - 1.2, `ground ${y.toFixed(2)} at s ${s} lat ${lat}`);
+    }
+  }
+  const p = poseAt(track, COURSE_ORIGIN + 600);
+  const up = passGroundY(p.x - p.rx * 40, p.z - p.rz * 40), down = passGroundY(p.x + p.rx * 40, p.z + p.rz * 40);
+  assert.ok(up > 10 && down < -10, `MP-1 uphill ${up.toFixed(1)} / valley ${down.toFixed(1)}`);
+});
