@@ -422,7 +422,7 @@ export function portOilMaterial() {
    // (stretched streaks, low-sat cool grey, stronger toward grazing so it reads at distance) + a brighter wet tide-line rim
    float nfSmear = 0.5 + 0.5 * sin( vNfW.x * 0.9 + vNfW.z * 0.23 + sin( vNfW.z * 0.31 ) * 1.6 );
    float nfSheen = 0.03 * pow( nfGraze, 3.0 ) * nfSmear * smoothstep( 0.2, 0.6, nfEdge );
-   totalEmissiveRadiance += vec3( 0.55, 0.6, 0.68 ) * ( 0.032 * nfRimWet + nfSheen ) + nfTint * 0.045 * pow( nfGraze, 2.0 ) * smoothstep( 0.1, 0.6, nfEdge ); }`);
+   totalEmissiveRadiance += vec3( 0.55, 0.6, 0.68 ) * ( 0.045 * nfRimWet + nfSheen ) + nfTint * 0.045 * pow( nfGraze, 2.0 ) * smoothstep( 0.1, 0.6, nfEdge ); }`);
     };
     m.customProgramCacheKey = () => "nf_port_oil_v3";
     oilMat = m;
