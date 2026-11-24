@@ -20,7 +20,75 @@ const EXPECT = {
 };
 const results = [];
 let failed = 0;
-const check = (p, n, ok, d = "") => { results.push({ p, n, ok, d }); if (!ok) failed++; console.log(`${ok ? "PASS" : "FAIL"} [${p}] ${n}${d ? " — " + d : ""}`); };
+// Per-check filter: SMOKE_ONLY=<id> or --only=<id>. A known id (see ISOLATED below, e.g. PW-5, MP-8) boots straight into that
+// stage and replays the same probe sequence up to that spot, so one flaky check reruns in about a minute. Any other value is a
+// case-insensitive substring of check names: the full flow still runs, but only matching checks are counted / reported.
+const ONLY = process.env.SMOKE_ONLY || (process.argv.find((a) => a.startsWith("--only=")) || "").slice(7);
+const onlyRe = ONLY ? { test: (n) => n.toLowerCase().includes(ONLY.toLowerCase()) } : null;
+let skipped = 0;
+const check = (p, n, ok, d = "") => {
+  if (onlyRe && !onlyRe.test(n)) { skipped++; return; }
+  results.push({ p, n, ok, d }); if (!ok) failed++; console.log(`${ok ? "PASS" : "FAIL"} [${p}] ${n}${d ? " — " + d : ""}`);
+};
+// Shared race-stage probe (Pine Woods / Open Highway / Mountain Pass, full and isolated runs): frozen-sim teleport to race s at
+// lateral offset lat (hopping ahead at hopLat while the track streams), real frames, then draws + stage info + framing.
+// extra: "woods" adds __nfWoods() and the covered-bridge pick, "hw" adds __nfHighway(), "pass" adds __nfHighway() + __nfPass().
+const probeAt = async (page, P, raceS, lat, hopLat, extra) => {
+  await page.evaluate(({ raceS, lat, hopLat }) => {
+    const s = window.__nf, h = s.cars[0];
+    const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
+    for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
+      const last = s.track.samples[s.track.samples.length - 40];
+      // invulnerable while hopping ahead (lane 0 crosses the fork medians); dropped again at the probe pose below
+      h.x = last.x + last.rx * hopLat; h.y = last.y; h.z = last.z + last.rz * hopLat; h.along = last.s; h.lastAlong = last.s; h.lane = hopLat; h.speed = 36; h.invuln = 1e9; h.hp = h.maxHp;
+      s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
+    }
+    const sm = s.track.samples[idx()];
+    h.x = sm.x + sm.rx * lat; h.y = sm.y; h.z = sm.z + sm.rz * lat; h.along = sm.s; h.lastAlong = sm.s; h.lane = lat; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
+    // invuln 0: an invulnerable hero blinks (hidden every other 90 ms), which would skew draws and the bridge pick
+    h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
+    s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+  }, { raceS, lat, hopLat });
+  await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
+  await page.waitForTimeout(P === "phone" ? 5000 : 3000);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  return page.evaluate((extra) => {
+    const h = window.__nf.cars[0];
+    const out = { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside,
+      hero: { alive: h.alive, hp: h.hp, lat: +h.lat.toFixed(2), s: +(h.along - window.__nf.race.originAlong).toFixed(1), phase: window.__nf.phase } };
+    if (extra === "woods") {
+      const ndc = window.__nfProjectXYZ(h.x, h.y + 0.8, h.z);
+      const first = window.__nfPick(ndc.x, ndc.y)[0] || null;
+      out.blocked = !!first && ((first.pieces || []).some((p) => /^woods_covered_bridge/.test(p)));
+      out.woods = window.__nfWoods();
+    }
+    if (extra === "hw" || extra === "pass") out.hw = window.__nfHighway();
+    if (extra === "pass") out.pass = window.__nfPass();
+    return out;
+  }, extra);
+};
+const pwSpotOk = (d) => d.stage === "woods" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.woods.stands === 4 && d.woods.near > 0;
+const pw5Ok = (pw0, pw5) => pw5.woods.roofHidden && pw5.woods.roofs >= 1 && pw5.framed && !pw5.blocked && !pw0.woods.roofHidden;
+const mpSpotOk = (k, d) => d.stage === "pass" && d.cityChunks >= (k === "mp11" ? 1 : 3) && d.framed && d.draws > 15 && d.pass.pieces.mtn_props >= (k === "mp11" ? 1 : 3) && d.pass.tiles >= 4 && d.pass.peaks && d.hero.alive;
+const PW_SPOTS = { pw0: 60, pw3: 870, pw5: 1800, pw6: 2080 };
+const MP_SPOTS = { mp0: [150, 0], pre2: [760, 0], mp2: [900, 0], mp3: [1130, -3], mp8: [3000, 0], mp9: [3600, 6], mp10: [4090, 0], mp11: [4680, 0] };
+const PW5_NAME = "Pine Woods PW-5 covered bridge: roof + crown hidden under it, hero framed and not behind the bridge";
+// isolated reruns: stage name on the picker, then the same probe sequence as the full run up to the target spot
+const ISOLATED = {
+  "PW-5": { stage: "Pine Woods", run: async (page, P) => {
+    const d = {};
+    for (const k of ["pw0", "pw3", "pw5"]) d[k] = await probeAt(page, P, PW_SPOTS[k], 0, 0, "woods");
+    return [[PW5_NAME + " [isolated]", pw5Ok(d.pw0, d.pw5) && pwSpotOk(d.pw5), JSON.stringify({ pw5: d.pw5.woods, blocked: d.pw5.blocked, framed: d.pw5.framed, hero: d.pw5.hero, draws: d.pw5.draws })]];
+  } },
+  "MP-8": { stage: "Mountain Pass", run: async (page, P) => {
+    const d = {};
+    for (const k of ["mp0", "pre2", "mp2", "mp3", "mp8"]) d[k] = await probeAt(page, P, MP_SPOTS[k][0], MP_SPOTS[k][1], -6, "pass");
+    const m = d.mp8;
+    return [["Mountain Pass scenery streams at MP-8 (framed, alive, pieces + tiles + peaks, draws gate, tris ≤250k desktop) [isolated]", mpSpotOk("mp8", m) && drawGate(P, m.draws) && (P === "phone" || m.tris <= 250000),
+      JSON.stringify({ draws: m.draws, tris: m.tris, framed: m.framed, alive: m.hero.alive, hero: m.hero, cityChunks: m.cityChunks, tiles: m.pass.tiles, pieces: m.pass.pieces })]];
+  } },
+};
+const iso = ONLY && ISOLATED[ONLY.toUpperCase()];
 // Week I compact menus: on phone, a menu screen fits with no scrolling or clipping and every button is
 // ≥ 44x44 CSS px, in portrait (390x844) and landscape (844x390). Root = last element matching rootSel.
 const menuFit = async (page, P, name, rootSel) => {
@@ -58,6 +126,17 @@ for (const prof of profiles) {
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto("file://" + BUILD + "?debug&enemylod=phone");
   await page.waitForSelector(".nf-btn");
+  if (iso) {
+    for (let i = 0; i < 9 && (await page.textContent(".nf-stagepick .nf-carpick-name")) !== iso.stage; i++) await page.click("[aria-label='Next stage']");
+    await page.click(".nf-btn");
+    await page.waitForSelector(".nf-hud");
+    await page.evaluate(() => window.__nfSkipRollout());
+    await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
+    await page.evaluate(() => window.__nfAdvance(2, ["KeyW"]));
+    for (const [n, ok, d] of await iso.run(page, P)) { results.push({ p: P, n, ok, d }); if (!ok) failed++; console.log(`${ok ? "PASS" : "FAIL"} [${P}] ${n} — ${d}`); }
+    await ctx.close();
+    continue;
+  }
   check(P, "boots to the title", true);
   // car pick: every car loads its GLB
   const seen = [];
@@ -428,41 +507,14 @@ for (const prof of profiles) {
       await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
       const pwStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, lives: s.lives, trucks: s.trucks.length }; });
       check(P, "Pine Woods start: race armed at 4400 m, 6 rivals, no waves, 6 logging trucks queued, drives", pwStart.stage === "woods" && pwStart.armed && pwStart.dist === 4400 && pwStart.rivals === 6 && pwStart.wave === 0 && pwStart.phase === "playing" && pwStart.m > 10 && pwStart.lives === 3 && pwStart.trucks === 6, JSON.stringify(pwStart));
-      const pwAt = async (raceS) => {
-        await page.evaluate((raceS) => {
-          const s = window.__nf, h = s.cars[0];
-          const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
-          for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
-            const last = s.track.samples[s.track.samples.length - 40];
-            // invulnerable while hopping ahead (lane 0 crosses the fork medians); dropped again at the probe pose below
-            h.x = last.x; h.y = last.y; h.z = last.z; h.along = last.s; h.lastAlong = last.s; h.lane = 0; h.speed = 36; h.invuln = 1e9; h.hp = h.maxHp;
-            s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
-          }
-          const sm = s.track.samples[idx()];
-          h.x = sm.x; h.y = sm.y; h.z = sm.z; h.along = sm.s; h.lastAlong = sm.s; h.lane = 0; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
-          // invuln 0: an invulnerable hero blinks (hidden every other 90 ms), which would skew draws and the bridge pick
-          h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
-          s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
-        }, raceS);
-        await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
-        await page.waitForTimeout(P === "phone" ? 5000 : 3000);
-        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-        return page.evaluate(() => {
-          const h = window.__nf.cars[0];
-          const ndc = window.__nfProjectXYZ(h.x, h.y + 0.8, h.z);
-          const first = window.__nfPick(ndc.x, ndc.y)[0] || null;
-          const blocked = !!first && ((first.pieces || []).some((p) => /^woods_covered_bridge/.test(p)));
-          return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, blocked, woods: window.__nfWoods(),
-            hero: { alive: h.alive, hp: h.hp, lat: +h.lat.toFixed(2), s: +(h.along - window.__nf.race.originAlong).toFixed(1), phase: window.__nf.phase } };
-        });
-      };
-      const pwDraws = { pw0: await pwAt(60), pw3: await pwAt(870), pw5: await pwAt(1800), pw6: await pwAt(2080) };
+      const pwAt = (raceS) => probeAt(page, P, raceS, 0, 0, "woods");
+      const pwDraws = {}; for (const [k, sAt] of Object.entries(PW_SPOTS)) pwDraws[k] = await pwAt(sAt);
       await page.screenshot({ path: `${SHOTS}/${P}-woods-pw6.png` });
       for (const [k, d] of Object.entries(pwDraws)) console.log(`DRAW [${P}] woods ${k}: ${d.draws} draws, ${d.tris} tris, pines ${d.woods.near}/${d.woods.far}, trucks ${d.woods.trucks}`);
       const pwWorst = Math.max(...Object.values(pwDraws).map((d) => d.draws));
-      check(P, `Pine Woods scenery streams, 4 pine stands, draws under the ceiling at PW-0 / PW-3 / PW-5 / PW-6 (${P === "phone" ? "≤160" : "logged"})`, Object.values(pwDraws).every((d) => d.stage === "woods" && d.cityChunks >= 4 && d.framed && d.draws > 20 && d.woods.stands === 4 && d.woods.near > 0) && drawGate(P, pwWorst), JSON.stringify(pwDraws));
+      check(P, `Pine Woods scenery streams, 4 pine stands, draws under the ceiling at PW-0 / PW-3 / PW-5 / PW-6 (${P === "phone" ? "≤160" : "logged"})`, Object.values(pwDraws).every(pwSpotOk) && drawGate(P, pwWorst), JSON.stringify(pwDraws));
       check(P, "Pine Woods BN-17: a logging truck spawns ahead at PW-3 and is drawn (pool of 3)", pwDraws.pw3.woods.truckPool === 3 && pwDraws.pw3.woods.trucks >= 1 && pwDraws.pw3.woods.trucksSim.some((t) => t.id === "LT1" && t.alive), JSON.stringify(pwDraws.pw3.woods));
-      check(P, "Pine Woods PW-5 covered bridge: roof + crown hidden under it, hero framed and not behind the bridge", pwDraws.pw5.woods.roofHidden && pwDraws.pw5.woods.roofs >= 1 && pwDraws.pw5.framed && !pwDraws.pw5.blocked && !pwDraws.pw0.woods.roofHidden, JSON.stringify({ pw5: pwDraws.pw5.woods, blocked: pwDraws.pw5.blocked }));
+      check(P, PW5_NAME, pw5Ok(pwDraws.pw0, pwDraws.pw5), JSON.stringify({ pw5: pwDraws.pw5.woods, blocked: pwDraws.pw5.blocked }));
       check(P, "Pine Woods PW-6 fog hollow thickens to 0.016 (PW-0 stays 0.012)", Math.abs(pwDraws.pw6.woods.fog - 0.016) < 1e-6 && Math.abs(pwDraws.pw0.woods.fog - 0.012) < 1e-6, JSON.stringify([pwDraws.pw0.woods.fog, pwDraws.pw6.woods.fog]));
       await page.evaluate(() => { window.__nf.hitstop = 0; });
       const pwFin = await page.evaluate(() => {
@@ -506,29 +558,7 @@ for (const prof of profiles) {
         await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
         const ohStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, lives: s.lives, authored: s.track.authored }; });
         check(P, "Open Highway start: race armed at 5200 m on the authored course, 6 rivals, no waves, drives", ohStart.stage === "highway" && ohStart.armed && ohStart.dist === 5200 && ohStart.authored && ohStart.rivals === 6 && ohStart.wave === 0 && ohStart.phase === "playing" && ohStart.m > 10 && ohStart.lives === 3, JSON.stringify(ohStart));
-        const ohAt = async (raceS, lat) => {
-          await page.evaluate(({ raceS, lat }) => {
-            const s = window.__nf, h = s.cars[0];
-            const idx = () => Math.round((s.race.originAlong + raceS) / 2) - s.track.first;
-            for (let g = 0; g < 20 && !s.track.samples[idx()]; g++) {
-              const last = s.track.samples[s.track.samples.length - 40];
-              h.x = last.x + last.rx * -6; h.y = last.y; h.z = last.z + last.rz * -6; h.along = last.s; h.lastAlong = last.s; h.lane = -6; h.speed = 36; h.invuln = 1e9; h.hp = h.maxHp;
-              s.hitstop = 0; window.__nfAdvance(0.02, ["KeyW"]);
-            }
-            const sm = s.track.samples[idx()];
-            h.x = sm.x + sm.rx * lat; h.y = sm.y; h.z = sm.z + sm.rz * lat; h.along = sm.s; h.lastAlong = sm.s; h.lane = lat; h.speed = 36; h.lat = 0; h.vy = 0; h.grounded = true;
-            h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
-            s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
-          }, { raceS, lat });
-          await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
-          await page.waitForTimeout(P === "phone" ? 5000 : 3000);
-          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-          return page.evaluate(() => {
-            const h = window.__nf.cars[0];
-            return { ...window.__nfDraws(), ...window.__nfStageInfo(), framed: window.__nfHeroOnScreen().inside, hw: window.__nfHighway(),
-              hero: { alive: h.alive, hp: h.hp, s: +(h.along - window.__nf.race.originAlong).toFixed(1), phase: window.__nf.phase } };
-          });
-        };
+        const ohAt = (raceS, lat) => probeAt(page, P, raceS, lat, -6, "hw");
         const ohDraws = { oh0: await ohAt(60, 3), oh3: await ohAt(1740, 3), oh4: await ohAt(2140, -6), oh5: await ohAt(2600, 3), oh9: await ohAt(4300, 3) };
         await page.screenshot({ path: `${SHOTS}/${P}-highway-oh9.png` });
         for (const [k, d] of Object.entries(ohDraws)) console.log(`DRAW [${P}] highway ${k}: ${d.draws} draws, ${d.tris} tris, patches ${d.hw.patches}, far ${d.hw.far}`);
@@ -673,14 +703,14 @@ for (const prof of profiles) {
             await page.waitForFunction(() => !window.__nfRollout().active && window.__nfCar().source === "glb", null, { timeout: 120000 });
             const mpStart = await page.evaluate(() => { const a = window.__nf.cars[0].along; window.__nfAdvance(2, ["KeyW"]); const s = window.__nf; return { m: s.cars[0].along - a, stage: s.stageId, armed: s.race.armed, dist: s.race.dist, rivals: s.cars.filter((c) => c.racer && c.alive).length, wave: s.wave, phase: s.phase, authored: s.track.authored }; });
             check(P, "Mountain Pass start: race armed at 4800 m on the authored course, 6 rivals, no waves, drives", mpStart.stage === "pass" && mpStart.armed && mpStart.dist === 4800 && mpStart.authored && mpStart.rivals === 6 && mpStart.wave === 0 && mpStart.phase === "playing" && mpStart.m > 10, JSON.stringify(mpStart));
-            const mpAt = async (raceS, lat) => ({ ...(await ohAt(raceS, lat)), pass: await page.evaluate(() => window.__nfPass()) });
-            const mpDraws = { mp0: await mpAt(150, 0), pre2: await mpAt(760, 0), mp2: await mpAt(900, 0), mp3: await mpAt(1130, -3), mp8: await mpAt(3000, 0), mp9: await mpAt(3600, 6), mp10: await mpAt(4090, 0), mp11: await mpAt(4680, 0) };
+            const mpAt = (raceS, lat) => probeAt(page, P, raceS, lat, -6, "pass");
+            const mpDraws = {}; for (const [k, [sAt, lat]] of Object.entries(MP_SPOTS)) mpDraws[k] = await mpAt(sAt, lat);
             await page.screenshot({ path: `${SHOTS}/${P}-pass-mp3.png` });
             for (const [k, d] of Object.entries(mpDraws)) console.log(`DRAW [${P}] pass ${k}: ${d.draws} draws, ${d.tris} tris, chunks ${d.pass.chunks}, tiles ${d.pass.tiles}`);
             const mpWorst = Math.max(...Object.values(mpDraws).map((d) => d.draws));
             const mpTris = Math.max(...Object.values(mpDraws).map((d) => d.tris));
             check(P, `Mountain Pass scenery streams (procedural mountain pieces + terrain tiles + peaks), draws under the ceiling at MP-0 / MP-2 / MP-3 / MP-8 / MP-9 / MP-10 / MP-11 (${P === "phone" ? "≤160" : "tris ≤250k"})`,
-              Object.entries(mpDraws).every(([k, d]) => d.stage === "pass" && d.cityChunks >= (k === "mp11" ? 1 : 3) && d.framed && d.draws > 15 && d.pass.pieces.mtn_props >= (k === "mp11" ? 1 : 3) && d.pass.tiles >= 4 && d.pass.peaks && d.hero.alive) && drawGate(P, mpWorst) && (P === "phone" || mpTris <= 250000),
+              Object.entries(mpDraws).every(([k, d]) => mpSpotOk(k, d)) && drawGate(P, mpWorst) && (P === "phone" || mpTris <= 250000),
               JSON.stringify(Object.fromEntries(Object.entries(mpDraws).map(([k, d]) => [k, { stage: d.stage, cityChunks: d.cityChunks, draws: d.draws, tris: d.tris, chunks: d.pass.chunks, tiles: d.pass.tiles, framed: d.framed, peaks: d.pass.peaks, alive: d.hero.alive, pieces: d.pass.pieces, roofHidden: d.pass.roofHidden }]))));
             check(P, "Mountain Pass pieces: lodge at MP-0, shed roof hidden inside / shown outside, chevrons + ice at Eagle Bend, frozen lake at MP-9, ski-jump structure at MP-10, summit station at MP-11",
               mpDraws.mp0.pass.pieces.mtn_lodge > 0 && mpDraws.mp2.pass.roofHidden && mpDraws.mp2.pass.roofs > 0 && !mpDraws.pre2.pass.roofHidden && mpDraws.mp3.pass.pieces.mtn_chevron_board > 0 && mpDraws.mp3.pass.pieces.mtn_ice_decal > 0 &&
@@ -844,7 +874,7 @@ for (const prof of profiles) {
   check(P, "0 console errors", errors.length === 0, errors.slice(0, 3).join(" || "));
   await ctx.close();
 }
-if (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ONLY)) {
+if (!iso && (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ONLY))) {
   const http = await import("node:http");
   const path = await import("node:path");
   const DIR = BUILD.replace(/[^/]+\.html$/, "nightfall-roadster");
@@ -887,5 +917,5 @@ if (!process.env.NF_ONLY || ["desktop", "folderonly"].includes(process.env.NF_ON
 }
 await browser.close();
 fs.writeFileSync(`${SHOTS}/smoke-results.json`, JSON.stringify(results, null, 2));
-console.log(`\n${results.length - failed}/${results.length} checks passed`);
+console.log(`\n${results.length - failed}/${results.length} checks passed${ONLY ? ` (SMOKE_ONLY=${ONLY}${iso ? ", isolated" : `, ${skipped} skipped`})` : ""}`);
 process.exit(failed ? 1 : 0);
