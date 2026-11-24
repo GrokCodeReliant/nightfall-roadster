@@ -113,15 +113,17 @@ function shedPortal(): Piece {
 /** snow surface tone (week-i-polish, playtest: the drift + kicker read as one flat white slab): wind-packed snow with
  *  sastrugi ripples (bands across the row), blue-grey shading toward the foot / in the hollows and a little dirty road
  *  spray at the base; per-vertex so it costs no texture. u = across (m), v = 0 foot .. 1 crest, r = ripple phase. */
-const SNOW_SHADE = C(0x7286a2), SNOW_DIRT = C(0x5d636c);
+const SNOW_SHADE = C(0x7286a2), SNOW_DIRT = C(0x5d636c), SNOW_AO = C(0x2e343d);
 function snowTone(u: number, v: number, r: number): RGB {
-  // kept in mid values (x0.62-0.86): the moon rig clips full-bright snow to one white, which is what read as a slab
-  const rip = 0.5 + 0.5 * Math.sin(r * 2.3 + Math.sin(u * 1.7) * 0.8);
-  let c = mix(SNOW_SHADE, SNOW_B, Math.min(1, 0.2 + 0.8 * v));
-  c = mix(c, SNOW, 0.55 * v * rip);
-  c = mix(c, SNOW_SHADE, 0.35 * (1 - rip) * (0.5 + 0.5 * hash(u * 3.7 + r)));
-  if (v < 0.2) c = mix(c, SNOW_DIRT, ((0.2 - v) / 0.2) * 0.6);
-  return mul(c, 0.62 + 0.24 * (0.5 * rip + 0.5 * hash(u * 5.1 + r * 1.3)));
+  // mid values (x0.42-0.72): the moon rig clips full-bright snow to one white. p2: sharper ripple bands (|sin|^0.6 split) and an
+  // ambient-occlusion / contact band over the lowest 30 % so the piece sits on the road instead of floating as a pale slab
+  const s0 = Math.sin(r * 2.3 + Math.sin(u * 1.7) * 0.8);
+  const rip = 0.5 + 0.5 * Math.sign(s0) * Math.abs(s0) ** 0.6;
+  let c = mix(SNOW_SHADE, SNOW_B, Math.min(1, 0.15 + 0.85 * v));
+  c = mix(c, SNOW, 0.5 * v * rip);
+  c = mix(c, SNOW_AO, 0.4 * (1 - rip) * (0.5 + 0.5 * hash(u * 3.7 + r)));
+  if (v < 0.3) c = mix(c, SNOW_AO, ((0.3 - v) / 0.3) * 0.7);
+  return mul(c, 0.42 + 0.3 * (0.65 * rip + 0.35 * hash(u * 5.1 + r * 1.3)));
 }
 function driftRow(): Piece {
   const g = new G();
@@ -140,7 +142,7 @@ function driftRow(): Piece {
   // end caps (fan from the foot centre): 4 tris each
   for (const i of [0, n]) {
     const base: V3 = [-3 + i * W, 0, 0.0];
-    for (let j = 0; j < prof.length - 2; j++) g.tri(base, V(i, j + 1), V(i, j + 2), SNOW_SHADE, mix(SNOW_B, SNOW_SHADE, 0.4), mix(SNOW_B, SNOW_SHADE, 0.4));
+    for (let j = 0; j < prof.length - 2; j++) g.tri(base, V(i, j + 1), V(i, j + 2), SNOW_AO, mul(SNOW_SHADE, 0.7), mul(SNOW_SHADE, 0.7));
   }
   return done(g);
 }
@@ -156,9 +158,16 @@ function snowKicker(): Piece {
     const t = (x: number, z: number) => { const v = (z + L) / (2 * L); let c = snowTone(x, 0.3 + 0.7 * v, z * 2.2); if (Math.abs(Math.abs(x) - 1.5) < 0.8) c = mul(mix(c, SNOW_DIRT, 0.35), 0.85); return c; };
     g.quad([x0, Y(z0), z0], [x1, Y(z0), z0], [x1, Y(z1), z1], [x0, Y(z1), z1], t(x0, z0), t(x1, z0), t(x1, z1), t(x0, z1));
   }
-  g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_SHADE, SNOW_B, SNOW_SHADE);
-  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], SNOW_SHADE, SNOW_SHADE, SNOW_B);
-  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], SNOW_SHADE, SNOW_B, SNOW_B, SNOW_SHADE);
+  // p2: shaded sides / back (x0.6) with AO at the foot, and a dark contact skirt on the road round the footprint (8 tris)
+  const SIDE = mul(SNOW_SHADE, 0.6);
+  g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_AO, SIDE, SNOW_AO);
+  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], SNOW_AO, SNOW_AO, SIDE);
+  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], SNOW_AO, SIDE, SIDE, SNOW_AO);
+  const k = 0.45, yk = 0.03, ROAD = C(0x1c1f24);
+  g.quad([w + k, yk, -L - k], [w, yk, -L], [w, yk, L], [w + k, yk, L + k], ROAD, SNOW_AO, SNOW_AO, ROAD);
+  g.quad([-w, yk, -L], [-w - k, yk, -L - k], [-w - k, yk, L + k], [-w, yk, L], SNOW_AO, ROAD, ROAD, SNOW_AO);
+  g.quad([w, yk, L], [-w, yk, L], [-w - k, yk, L + k], [w + k, yk, L + k], SNOW_AO, SNOW_AO, ROAD, ROAD);
+  g.quad([-w, yk, -L], [w, yk, -L], [w + k, yk, -L - k], [-w - k, yk, -L - k], SNOW_AO, SNOW_AO, ROAD, ROAD);
   for (let i = 0; i < 4; i++) { const z = -L + 0.8 + i * 1.2, y = Y(z) + 0.02; l.quad([w - 0.2, y, z], [-w + 0.2, y, z], [-w + 0.2, y + 0.06, z + 0.3], [w - 0.2, y + 0.06, z + 0.3], CHEV); }
   return done(g, l);
 }
