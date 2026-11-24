@@ -48,6 +48,10 @@ const probeAt = async (page, P, raceS, lat, hopLat, extra) => {
     // invuln 0: an invulnerable hero blinks (hidden every other 90 ms), which would skew draws and the bridge pick
     h.yaw = Math.atan2(-sm.tx, -sm.tz); h.invuln = 0; h.hp = h.maxHp; h.offT = 0; s.race.dnfT = 0;
     s.hitstop = 0; window.__nfAdvance(0.05, ["KeyW"]); s.hitstop = 1e9;
+    // snap the chase cam onto the frozen hero (debug hook; the game camera is unchanged). The follow lerp is per rendered frame
+    // with dt capped at 50 ms (k = 0.19/frame), so after a 500-900 m teleport on a slow swiftshader frame rate it was still flying
+    // in after the 3 s settle: hero off screen (framed false, "blocked" by the bridge at PW-5) and only 14-28 draws.
+    window.__nfSnapCam();
   }, { raceS, lat, hopLat });
   await page.waitForFunction(() => window.__nfHeroOnScreen().inside, null, { timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(P === "phone" ? 5000 : 3000);
