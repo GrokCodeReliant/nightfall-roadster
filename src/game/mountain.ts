@@ -113,7 +113,11 @@ function shedPortal(): Piece {
 /** snow surface tone (week-i-polish, playtest: the drift + kicker read as one flat white slab): wind-packed snow with
  *  sastrugi ripples (bands across the row), blue-grey shading toward the foot / in the hollows and a little dirty road
  *  spray at the base; per-vertex so it costs no texture. u = across (m), v = 0 foot .. 1 crest, r = ripple phase. */
-const SNOW_SHADE = C(0x7286a2), SNOW_DIRT = C(0x5d636c), SNOW_AO = C(0x2e343d);
+const SNOW_SHADE = C(0x7286a2), SNOW_DIRT = C(0x5d636c), SNOW_AO = C(0x22272e);
+// p3: drift + kicker snow sits about one step above the asphalt under the headlights instead of glowing (Sara p2 review)
+// p3b: 0.5 only took the face from 117 to 86 sRGB luma (road 36): vertex colours are linear, so going one step above the
+// road needs about 0.18. AO tones on the sides / caps / skirt scale with it so the feet stay darker than the face.
+const SNOW_DIM = 0.18, KAO = mul(SNOW_AO, 2 * SNOW_DIM);
 function snowTone(u: number, v: number, r: number): RGB {
   // mid values (x0.42-0.72): the moon rig clips full-bright snow to one white. p2: sharper ripple bands (|sin|^0.6 split) and an
   // ambient-occlusion / contact band over the lowest 30 % so the piece sits on the road instead of floating as a pale slab
@@ -123,7 +127,7 @@ function snowTone(u: number, v: number, r: number): RGB {
   c = mix(c, SNOW, 0.5 * v * rip);
   c = mix(c, SNOW_AO, 0.4 * (1 - rip) * (0.5 + 0.5 * hash(u * 3.7 + r)));
   if (v < 0.3) c = mix(c, SNOW_AO, ((0.3 - v) / 0.3) * 0.7);
-  return mul(c, 0.42 + 0.3 * (0.65 * rip + 0.35 * hash(u * 5.1 + r * 1.3)));
+  return mul(c, SNOW_DIM * (0.42 + 0.3 * (0.65 * rip + 0.35 * hash(u * 5.1 + r * 1.3))));
 }
 function driftRow(): Piece {
   const g = new G();
@@ -142,33 +146,45 @@ function driftRow(): Piece {
   // end caps (fan from the foot centre): 4 tris each
   for (const i of [0, n]) {
     const base: V3 = [-3 + i * W, 0, 0.0];
-    for (let j = 0; j < prof.length - 2; j++) g.tri(base, V(i, j + 1), V(i, j + 2), SNOW_AO, mul(SNOW_SHADE, 0.7), mul(SNOW_SHADE, 0.7));
+    for (let j = 0; j < prof.length - 2; j++) g.tri(base, V(i, j + 1), V(i, j + 2), KAO, mul(SNOW_SHADE, 0.7 * SNOW_DIM), mul(SNOW_SHADE, 0.7 * SNOW_DIM));
   }
   return done(g);
 }
 function snowKicker(): Piece {
   const g = new G(), l = new G();
   const w = 3.02, L = 2.65, h = 1.16;
-  // ramp face as a 4 x 6 grid with packed-snow tone, two darker tyre-packed lanes and blue-grey shading at the foot (48 tris)
-  const nx = 4, nz = 6;
+  // p3: packed-snow face, 8 x 7 grid (112 tris) on uneven columns: two tyre ruts at x +-1.5 (sunk 7 cm, dirty), low packed berms
+  // beside them, interior vertices jittered (x +-8 cm, lumps down to -5 cm) so the top no longer reads as a flat box. Edge columns and
+  // the foot / lip rows stay on the ramp plane so the sides, back and chevrons still meet it.
+  const xs = [w, 2.1, 1.5, 0.9, 0, -0.9, -1.5, -2.1, -w], nx = xs.length - 1, nz = 7;
   const Y = (z: number) => (h * (z + L)) / (2 * L);
-  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
-    const x0 = w - (2 * w * i) / nx, x1 = w - (2 * w * (i + 1)) / nx;
-    const z0 = -L + (2 * L * j) / nz, z1 = -L + (2 * L * (j + 1)) / nz;
-    const t = (x: number, z: number) => { const v = (z + L) / (2 * L); let c = snowTone(x, 0.3 + 0.7 * v, z * 2.2); if (Math.abs(Math.abs(x) - 1.5) < 0.8) c = mul(mix(c, SNOW_DIRT, 0.35), 0.85); return c; };
-    g.quad([x0, Y(z0), z0], [x1, Y(z0), z0], [x1, Y(z1), z1], [x0, Y(z1), z1], t(x0, z0), t(x1, z0), t(x1, z1), t(x0, z1));
-  }
+  const edge = (i: number, j: number) => i === 0 || i === nx || j === 0 || j === nz;
+  const rut = (i: number) => Math.abs(Math.abs(xs[i]) - 1.5) < 0.01, berm = (i: number) => i > 0 && i < nx && !rut(i) && xs[i] !== 0;
+  const KV = (i: number, j: number): V3 => {
+    const z = -L + (2 * L * j) / nz;
+    if (edge(i, j)) return [xs[i], Y(z), z];
+    const dy = rut(i) ? -0.07 : berm(i) ? 0.015 : -0.05 * hash(i * 4.3 + j * 7.7);
+    return [xs[i] + 0.16 * (hash(i * 9.1 + j * 2.3) - 0.5), Y(z) + dy, z + 0.12 * (hash(i * 3.9 + j * 5.3) - 0.5)];
+  };
+  const KC = (i: number, j: number): RGB => {
+    const v = j / nz; let c = snowTone(xs[i], 0.3 + 0.7 * v, -L * 2.2 + 4.4 * L * v);
+    if (rut(i)) c = mul(mix(c, SNOW_DIRT, 0.5), 0.75);
+    else if (berm(i)) c = mul(c, 1.1);
+    return mul(c, 0.85 + 0.3 * hash(i * 1.7 + j * 6.1));
+  };
+  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++)
+    g.quad(KV(i, j), KV(i + 1, j), KV(i + 1, j + 1), KV(i, j + 1), KC(i, j), KC(i + 1, j), KC(i + 1, j + 1), KC(i, j + 1));
   // p2: shaded sides / back (x0.6) with AO at the foot, and a dark contact skirt on the road round the footprint (8 tris)
-  const SIDE = mul(SNOW_SHADE, 0.6);
-  g.tri([w, 0, -L], [w, h, L], [w, 0, L], SNOW_AO, SIDE, SNOW_AO);
-  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], SNOW_AO, SNOW_AO, SIDE);
-  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], SNOW_AO, SIDE, SIDE, SNOW_AO);
+  const SIDE = mul(SNOW_SHADE, 0.6 * SNOW_DIM);
+  g.tri([w, 0, -L], [w, h, L], [w, 0, L], KAO, SIDE, KAO);
+  g.tri([-w, 0, -L], [-w, 0, L], [-w, h, L], KAO, KAO, SIDE);
+  g.quad([w, 0, L], [w, h, L], [-w, h, L], [-w, 0, L], KAO, SIDE, SIDE, KAO);
   const k = 0.45, yk = 0.03, ROAD = C(0x1c1f24);
-  g.quad([w + k, yk, -L - k], [w, yk, -L], [w, yk, L], [w + k, yk, L + k], ROAD, SNOW_AO, SNOW_AO, ROAD);
-  g.quad([-w, yk, -L], [-w - k, yk, -L - k], [-w - k, yk, L + k], [-w, yk, L], SNOW_AO, ROAD, ROAD, SNOW_AO);
-  g.quad([w, yk, L], [-w, yk, L], [-w - k, yk, L + k], [w + k, yk, L + k], SNOW_AO, SNOW_AO, ROAD, ROAD);
-  g.quad([-w, yk, -L], [w, yk, -L], [w + k, yk, -L - k], [-w - k, yk, -L - k], SNOW_AO, SNOW_AO, ROAD, ROAD);
-  for (let i = 0; i < 4; i++) { const z = -L + 0.8 + i * 1.2, y = Y(z) + 0.02; l.quad([w - 0.2, y, z], [-w + 0.2, y, z], [-w + 0.2, y + 0.06, z + 0.3], [w - 0.2, y + 0.06, z + 0.3], CHEV); }
+  g.quad([w + k, yk, -L - k], [w, yk, -L], [w, yk, L], [w + k, yk, L + k], ROAD, KAO, KAO, ROAD);
+  g.quad([-w, yk, -L], [-w - k, yk, -L - k], [-w - k, yk, L + k], [-w, yk, L], KAO, ROAD, ROAD, KAO);
+  g.quad([w, yk, L], [-w, yk, L], [-w - k, yk, L + k], [w + k, yk, L + k], KAO, KAO, ROAD, ROAD);
+  g.quad([-w, yk, -L], [w, yk, -L], [w + k, yk, -L - k], [-w - k, yk, -L - k], KAO, KAO, ROAD, ROAD);
+  for (let i = 0; i < 4; i++) { const z = -L + 0.8 + i * 1.2, y = Y(z) + 0.04; l.quad([w - 0.2, y, z], [-w + 0.2, y, z], [-w + 0.2, y + 0.06, z + 0.3], [w - 0.2, y + 0.06, z + 0.3], CHEV); }
   return done(g, l);
 }
 function lakeTile(seed: number): Piece {

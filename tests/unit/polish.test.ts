@@ -56,15 +56,19 @@ test("Industrial Port §2 crates: L1 at 1650 (Fork A quay) and L4 at 3300 (Fork 
   assert.deepEqual(c.map((p) => [p.s, -p.lx]), [[1650, -9], [3300, 9]]);
 });
 
-test("snowdrift row + K-B kicker: textured (many tones, not one flat white), within the tri budgets", async () => {
+// p3: the snow is now deliberately dark (about one step above the road under the headlights), so contrast is checked relative to
+// the mean (range >= the mean) and a ceiling keeps it from going back to a glowing white slab (linear vertex colours, max <= 0.2)
+test("snowdrift row + K-B kicker: textured (many tones, not one flat white), dark (no glow), within the tri budgets", async () => {
   const { passPieceColours, passPieceTris } = await import("../../src/game/mountain.ts");
   for (const [name, budget] of [["mtn_snowdrift_row_6", 80], ["mtn_snow_kicker_6", 150]] as const) {
     const c = passPieceColours(name);
     const tones = new Set<string>();
-    let lo = 1, hi = 0;
-    for (let i = 0; i < c.length; i += 3) { tones.add([c[i], c[i + 1], c[i + 2]].map((x) => x.toFixed(2)).join()); const l = (c[i] + c[i + 1] + c[i + 2]) / 3; lo = Math.min(lo, l); hi = Math.max(hi, l); }
+    let lo = 1, hi = 0, sum = 0;
+    for (let i = 0; i < c.length; i += 3) { tones.add([c[i], c[i + 1], c[i + 2]].map((x) => x.toFixed(3)).join()); const l = (c[i] + c[i + 1] + c[i + 2]) / 3; lo = Math.min(lo, l); hi = Math.max(hi, l); sum += l; }
+    const mean = sum / (c.length / 3);
     assert.ok(tones.size >= 20, `${name}: ${tones.size} tones`);
-    assert.ok(hi - lo >= 0.2, `${name}: tone range ${(hi - lo).toFixed(2)}`);
+    assert.ok(hi - lo >= mean, `${name}: tone range ${(hi - lo).toFixed(3)} vs mean ${mean.toFixed(3)}`);
+    assert.ok(hi <= 0.2, `${name}: brightest vertex ${hi.toFixed(3)} (glows)`);
     assert.ok(passPieceTris(name) <= budget, `${name} tris`);
   }
 });
